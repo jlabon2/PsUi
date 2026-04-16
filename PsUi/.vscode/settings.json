@@ -1,0 +1,48 @@
+{
+    // PowerShell Formatting - matches project style guide
+    "powershell.codeFormatting.preset": "Custom",
+    
+    // Bracing: 1TBS/K&R style - opening brace on same line
+    "powershell.codeFormatting.openBraceOnSameLine": true,
+    "powershell.codeFormatting.newLineAfterOpenBrace": true,
+    "powershell.codeFormatting.newLineAfterCloseBrace": true,
+    
+    // IMPORTANT: Allow single-line blocks to stay on one line
+    // This prevents the formatter from expanding short blocks like:
+    //   if ($x) { return }
+    //   foreach ($i in $list) { $i.Process() }
+    "powershell.codeFormatting.ignoreOneLineBlock": true,
+    
+    // Whitespace
+    "powershell.codeFormatting.whitespaceBeforeOpenBrace": true,
+    "powershell.codeFormatting.whitespaceBeforeOpenParen": true,
+    "powershell.codeFormatting.whitespaceAroundOperator": true,
+    "powershell.codeFormatting.whitespaceAfterSeparator": true,
+    "powershell.codeFormatting.whitespaceBetweenParameters": false,
+    "powershell.codeFormatting.whitespaceInsideBrace": true,
+    
+    // Pipelines
+    "powershell.codeFormatting.pipelineIndentationStyle": "IncreaseIndentationForFirstPipeline",
+    
+    // Alignment - enable for hashtables
+    "powershell.codeFormatting.alignPropertyValuePairs": true,
+    
+    // Case
+    "powershell.codeFormatting.autoCorrectAliases": true,
+    "powershell.codeFormatting.useCorrectCasing": true,
+    
+    // Trim trailing whitespace
+    "powershell.codeFormatting.trimWhitespaceAroundPipe": true,
+    
+    // Use PSScriptAnalyzer settings file
+    "powershell.scriptAnalysis.settingsPath": ".vscode/PSScriptAnalyzerSettings.psd1",
+    
+    // Editor settings for PowerShell files
+    "[powershell]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.formatOnSave": false,
+        "editor.formatOnPaste": false,
+        "files.trimTrailingWhitespace": true
+    }
+}

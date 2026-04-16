@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Multi-target: net472 for PS 5.1, net6.0-windows for PS 7+ -->
+    <TargetFrameworks>net472;net6.0-windows</TargetFrameworks>
+    <LangVersion>7.3</LangVersion>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>PsUi</RootNamespace>
+    <AssemblyName>PsUi</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    
+    <!-- Output to module's lib folder, organized by framework -->
+    <OutputPath>..\PsUi\lib\$(TargetFramework)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    
+    <!-- Copy WebView2 dependencies to output; PowerShell SDK is excluded via PrivateAssets -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    
+    <!-- Suppress warnings for older C# features and Windows-only APIs -->
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!-- .NET Framework 4.7.2 (PowerShell 5.1) -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <!-- Reference the actual PS 5.1 DLL from Windows PowerShell install -->
+    <Reference Include="System.Management.Automation">
+      <HintPath>$(SystemRoot)\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation\v4.0_3.0.0.0__31bf3856ad364e35\System.Management.Automation.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
+  <!-- .NET 6+ (PowerShell 7+) -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0-windows'">
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.2.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- WebView2 for embedded browser support (both frameworks) -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+</Project>

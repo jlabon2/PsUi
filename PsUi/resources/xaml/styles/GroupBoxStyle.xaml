@@ -1,0 +1,78 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    
+    <Style x:Key="ModernGroupBoxStyle" TargetType="GroupBox">
+        <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="12"/>
+        <Setter Property="Margin" Value="4,4,4,8"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="UseLayoutRounding" Value="True"/> 
+        
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GroupBox">
+                    <Grid>
+                        <Border x:Name="CardBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                SnapsToDevicePixels="True">
+                            
+                            <Border.Effect>
+                                <DropShadowEffect Color="Black" 
+                                                  Direction="270" 
+                                                  ShadowDepth="1" 
+                                                  BlurRadius="8" 
+                                                  Opacity="0.2"/>
+                            </Border.Effect>
+
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <Grid x:Name="HeaderArea" Grid.Row="0">
+                                    <Border BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="0,0,0,1"
+                                            Background="Transparent"
+                                            Opacity="0.5"/>
+                                            
+                                    <ContentPresenter ContentSource="Header"
+                                                      RecognizesAccessKey="True"
+                                                      Margin="12,6,12,6"
+                                                      VerticalAlignment="Center"
+                                                      TextElement.FontWeight="Bold"
+                                                      TextElement.FontSize="13">
+                                        <TextElement.Foreground>
+                                            <DynamicResource ResourceKey="ControlForegroundBrush"/>
+                                        </TextElement.Foreground>
+                                    </ContentPresenter>
+                                </Grid>
+                                
+                                <ContentPresenter Grid.Row="1"
+                                                  Margin="{TemplateBinding Padding}"
+                                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                    
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Header" Value="{x:Null}">
+                            <Setter TargetName="HeaderArea" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                        <Trigger Property="Header" Value="">
+                            <Setter TargetName="HeaderArea" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    
+</ResourceDictionary>

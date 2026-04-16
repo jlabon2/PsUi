@@ -1,0 +1,60 @@
+# Build outputs
+src/obj/
+src/bin/
+
+# Build artifacts that shouldn't be in lib/
+PsUi/lib/core/ref/
+PsUi/lib/core/runtimes/
+PsUi/lib/core/*.pdb
+PsUi/lib/core/*.deps.json
+PsUi/lib/desktop/*.pdb
+PsUi/lib/desktop/*.deps.json
+
+# Raw dotnet build output (Build-PsUi.ps1 renames these to core/ and desktop/)
+PsUi/lib/net472/
+PsUi/lib/net6.0-windows/
+
+# VS Code
+.vscode/
+
+# Visual Studio
+*.user
+*.suo
+*.cache
+.vs/
+
+# JetBrains Rider
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# PowerShell
+*.psess
+*.vspx
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Logs
+*.log
+
+# Test outputs
+TestResults/
+
+# Development test scripts
+Tests/PsUiTests/
+
+# Temp directory
+temp/
+
+# Scratch pad for dev testing
+scratch/
+# Keep copilot instructions local
+.github/copilot-instructions.md
+
+# Keep copilot instructions local
+.github/copilot-instructions.md
