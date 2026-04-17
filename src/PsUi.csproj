@@ -36,7 +36,7 @@
 
   <!-- .NET 6+ (PowerShell 7+) -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0-windows'">
-    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.2.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.2.24" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- WebView2 for embedded browser support (both frameworks) -->
