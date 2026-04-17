@@ -1,5 +1,6 @@
 # PsUi
 
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PsUi?label=PSGallery&color=blue)](https://www.powershellgallery.com/packages/PsUi)
 ![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 For building UIs in PowerShell without the misery.
@@ -322,6 +323,19 @@ $notes = 'Meeting notes go here...' | Out-TextEditor -TitleText 'Notes' -SpellCh
 PowerShell 7 is faster for script execution but has some quirks with COM objects. PowerShell 5.1 is more compatible with legacy code. The module detects which version you're running and loads the appropriate binaries.
 
 ## Installation
+
+```powershell
+# Install from the PowerShell Gallery (recommended)
+Install-Module -Name PsUi -Scope CurrentUser
+```
+
+Or install using `Install-PSResource` (PSResourceGet):
+
+```powershell
+Install-PSResource -Name PsUi
+```
+
+### Manual / Development Install
 
 ```powershell
 # Clone and import
