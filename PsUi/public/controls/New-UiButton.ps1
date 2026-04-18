@@ -133,6 +133,7 @@ function New-UiButton {
         [switch]$NoOutput,
         [switch]$NoInteractive,
         [switch]$HideEmptyOutput,
+        [switch]$ScrollToTop,
         [hashtable[]]$ResultActions,
         [switch]$SingleSelect,
         [string[]]$LinkedVariables,
@@ -342,6 +343,7 @@ function New-UiButton {
         NoOutput        = $NoOutput
         NoInteractive   = $NoInteractive
         HideEmptyOutput = $HideEmptyOutput
+        ScrollToTop     = $ScrollToTop
         ValidateScript  = $ValidateScript
         IsAccent        = $Accent.IsPresent
     }
@@ -583,6 +585,7 @@ function New-UiButton {
                             NoWait                    = $ctx.NoWait
                         }
                         if ($ctx.HideEmptyOutput) { $outParams['HideUntilContent'] = $true }
+                        if ($ctx.ScrollToTop) { $outParams['ScrollToTop'] = $true }
 
                         $outputWindow = Show-UiOutput @outParams
 

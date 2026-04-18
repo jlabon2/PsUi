@@ -12,7 +12,7 @@
 RootModule = '.\PsUi.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.0'
+ModuleVersion = '1.0.1'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -175,14 +175,11 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
-Version 1.0.0:
-- Three-layer architecture: C# backend, PowerShell DSL, session state management
-- Modern Fluent design with Light/Dark/HighContrast themes
-- Async button actions with automatic variable hydration
-- 60+ controls including DataGrid, DatePicker, Slider, List, Charts, WebView
-- Multi-monitor aware window centering
-- File/Folder picker dialogs, pinned dialogs, keyboard capture
-- Thread-safe control proxy for cross-thread UI access
+Version 1.0.1:
+- New-UiButton: -ScrollToTop switch for controlling post-completion scroll position
+- New-UiTool: Detect missing help files in PS 7+, offer online docs fallback
+- Show-UiFilterBuilder: Fix combobox vertical centering
+- CI: Add Pester test workflow
 '@
 
     } # End of PSData hashtable

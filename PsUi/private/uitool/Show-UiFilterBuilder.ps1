@@ -248,6 +248,7 @@ function Show-UiFilterBuilder {
     
     $presetsCombo = [System.Windows.Controls.ComboBox]::new()
     $presetsCombo.Height = 32
+    $presetsCombo.VerticalContentAlignment = 'Center'
     $presetsCombo.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
     Set-ComboBoxStyle -ComboBox $presetsCombo
     

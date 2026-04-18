@@ -611,7 +611,7 @@ function New-UiTool {
             # Stateless help script - reads command info from session
             $helpScript = { Show-UiToolHelp }
 
-            New-UiButton -Text "Help" -Icon "Help" -Action $helpScript
+            New-UiButton -Text "Help" -Icon "Help" -ScrollToTop -Action $helpScript
         }
 
         # Initial validation to set Run button state based on mandatory params

@@ -16,6 +16,10 @@ PsUi/lib/net6.0-windows/
 
 # VS Code
 .vscode/
+**/.vscode/settings.json
+
+# Reddit draft
+reddit-post.txt
 
 # Visual Studio
 *.user

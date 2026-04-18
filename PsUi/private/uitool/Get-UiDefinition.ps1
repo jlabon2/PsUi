@@ -531,6 +531,9 @@ function Get-UiDefinition {
         }
     }
 
+    # Grab online help URI from the command (available even without Update-Help)
+    $helpUri = if ($cmdInfo.HelpUri) { $cmdInfo.HelpUri } else { $null }
+
     # Build input helpers configuration
     $inputHelpers = @{
         FilePicker     = [System.Collections.Generic.List[string]]::new()
@@ -599,6 +602,7 @@ function Get-UiDefinition {
         CommandDefinition = $commandDefinition
         DisplayName       = $commandDisplayName
         Description       = $description
+        HelpUri           = $helpUri
         IsExternalScript  = $isExternalScript
 
         # Parameter set info
