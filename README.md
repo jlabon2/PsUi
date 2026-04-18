@@ -1,6 +1,10 @@
 # PsUi
 
 [![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PsUi?label=PSGallery&color=blue)](https://www.powershellgallery.com/packages/PsUi)
+![Downloads](https://img.shields.io/powershellgallery/dt/PsUi?color=green)
+![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)
+![Tests](https://img.shields.io/github/actions/workflow/status/jlabon2/PsUi/test.yml?label=tests)
+![Stars](https://img.shields.io/github/stars/jlabon2/PsUi)
 ![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 For building UIs in PowerShell without the misery.
