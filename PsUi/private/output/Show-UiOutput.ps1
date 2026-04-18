@@ -39,6 +39,9 @@ function Show-UiOutput {
         
         # Non-blocking mode - output window doesn't block parent
         [switch]$NoWait,
+
+        # Scroll console to top on completion instead of staying at bottom
+        [switch]$ScrollToTop,
         
         # Legacy parameter - ignored but kept for backward compatibility
         [switch]$Streaming
@@ -63,6 +66,7 @@ function Show-UiOutput {
         Capture                   = $Capture
         HideUntilContent          = $HideUntilContent
         NoWait                    = $NoWait
+        ScrollToTop               = $ScrollToTop
     }
     Show-StreamingOutput @streamingParams
 }
@@ -91,7 +95,8 @@ function Show-StreamingOutput {
         [System.Collections.IDictionary]$LinkedFunctionDefinitions,
         [string[]]$Capture,
         [switch]$HideUntilContent,
-        [switch]$NoWait
+        [switch]$NoWait,
+        [switch]$ScrollToTop
     )
 
     # Debug output goes to console if the parent window was created with -Debug
@@ -933,6 +938,7 @@ function Show-StreamingOutput {
         CapturedModules     = $capturedModules
         DefaultProgressUI   = $defaultProgressUI
         ParentWindow        = $ParentWindow
+        ScrollToTop         = $ScrollToTop
     }
     & $writeDebug "OnComplete context prepared, wiring events..."
 

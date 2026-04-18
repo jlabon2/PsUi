@@ -126,11 +126,9 @@ function Invoke-OnCompleteHandler {
             $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
         }
 
-        # Final scroll
-        if ($autoScrollCheckbox.IsChecked) {
-            $consoleTextBox.ScrollToEnd()
-        }
-
+        # Park the scroll where the caller asked for — top if requested, bottom if auto-scroll is on
+        if ($Context.ScrollToTop) {  $consoleTextBox.ScrollToHome() }
+        elseif ($autoScrollCheckbox -and $autoScrollCheckbox.IsChecked) { $consoleTextBox.ScrollToEnd() }
         # Hide loading spinner on completion regardless
         & $hideLoading
 
