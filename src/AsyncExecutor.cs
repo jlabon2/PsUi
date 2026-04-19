@@ -409,28 +409,41 @@ namespace PsUi
             
             if (variablesToDefine == null) return definedVarNames;
             
+            // Collect valid variables first
+            var validVars = new List<KeyValuePair<string, object>>();
             foreach (DictionaryEntry kvp in variablesToDefine)
             {
                 string varName = kvp.Key.ToString();
                 if (IsReservedVariable(varName)) continue;
                 
-                // Block sketchy variable names
                 if (!Constants.IsValidIdentifier(varName))
                 {
                     if (OnError != null) RaiseOnError(string.Format("Invalid variable name '{0}': must contain only letters, digits, underscore, or hyphen", varName));
                     continue;
                 }
                 
-                string injectionScript = ScriptBuilder.BuildVariableInjection(varName);
-                if (injectionScript != null)
+                validVars.Add(new KeyValuePair<string, object>(varName, kvp.Value));
+            }
+            
+            // Batch inject all variables in a single Invoke call
+            if (validVars.Count > 0)
+            {
+                var varNames = new List<string>(validVars.Count);
+                foreach (var kv in validVars) varNames.Add(kv.Key);
+                
+                string batchScript = ScriptBuilder.BuildBatchVariableInjection(varNames);
+                if (batchScript != null)
                 {
-                    ps.AddScript(injectionScript);
-                    ps.AddArgument(kvp.Value);
+                    ps.AddScript(batchScript);
+                    foreach (var kv in validVars) ps.AddArgument(kv.Value);
                     ps.Invoke();
                     ps.Commands.Clear();
-                    
-                    definedVarNames.Add(varName);
-                    definedVarValues[varName] = kvp.Value;
+                }
+                
+                foreach (var kv in validVars)
+                {
+                    definedVarNames.Add(kv.Key);
+                    definedVarValues[kv.Key] = kv.Value;
                 }
             }
             
