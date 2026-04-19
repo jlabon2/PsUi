@@ -39,6 +39,11 @@ function New-UiExpander {
         [string]$Variable,
 
         [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
+
+        [Parameter()]
         [hashtable]$WPFProperties
     )
 
@@ -151,5 +156,9 @@ function New-UiExpander {
 
     if ($WPFProperties) {
         Set-UiProperties -Control $container -Properties $WPFProperties
+    }
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $container -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
     }
 }

@@ -35,15 +35,27 @@ function ConvertTo-UiFileAction {
     # Escape single quotes in path for embedding in scriptblock
     $escapedPath = $resolvedPath.Replace("'", "''")
 
-    # Build argument string from hashtable values (used by bat/cmd/vbs/exe)
-    $argString = ''
-    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
-        $argValues = @($ArgumentList.Values | ForEach-Object { 
-            $val = $_.ToString()
-            if ($val -match '\s') { "`"$val`"" } else { $val }
-        })
+    # Build sanitized argument strings per target shell
+    # cmd.exe metacharacters that enable injection: & | < > ^ % !
+    # These must be escaped (^-prefixed) when passed to cmd.exe /c
+    $cmdArgString = ''
+    $psArgString  = ''
 
-        $argString = $argValues -join ' '
+    if ($ArgumentList -and $ArgumentList.Count -gt 0) {
+        $cmdArgValues = @($ArgumentList.Values | ForEach-Object {
+            $val = $_.ToString()
+            # Escape cmd metacharacters by prefixing with ^
+            $safe = $val -replace '([&|<>^%!])', '^$1'
+            if ($safe -match '\s') { "`"$safe`"" } else { $safe }
+        })
+        $cmdArgString = $cmdArgValues -join ' '
+
+        $psArgValues = @($ArgumentList.Values | ForEach-Object {
+            # Single-quote each value so PS treats it as a literal string
+            $val = $_.ToString().Replace("'", "''")
+            "'$val'"
+        })
+        $psArgString = $psArgValues -join ' '
     }
 
     # Build the scriptblock based on file type
@@ -64,17 +76,17 @@ function ConvertTo-UiFileAction {
         }
 
         { $_ -in '.bat', '.cmd' } {
-            if ($argString) { $Action = [scriptblock]::Create("cmd.exe /c `"$escapedPath`" $argString") }
+            if ($cmdArgString) { $Action = [scriptblock]::Create("cmd.exe /c `"$escapedPath`" $cmdArgString") }
             else { $Action = [scriptblock]::Create("cmd.exe /c `"$escapedPath`"") }
         }
 
         '.vbs' {
-            if ($argString) { $Action = [scriptblock]::Create("cscript.exe //nologo `"$escapedPath`" $argString") }
+            if ($cmdArgString) { $Action = [scriptblock]::Create("cscript.exe //nologo `"$escapedPath`" $cmdArgString") }
             else { $Action = [scriptblock]::Create("cscript.exe //nologo `"$escapedPath`"") }
         }
 
         '.exe' {
-            if ($argString) { $Action = [scriptblock]::Create("& '$escapedPath' $argString") }
+            if ($psArgString) { $Action = [scriptblock]::Create("& '$escapedPath' $psArgString") }
             else { $Action = [scriptblock]::Create("& '$escapedPath'") }
         }
     }

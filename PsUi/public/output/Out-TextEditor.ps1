@@ -43,6 +43,7 @@ function Out-TextEditor {
         [string[]]$InputObject,
 
         [string]$InitialText = '',
+        [Alias('Title')]
         [string]$TitleText = 'Text Editor',
         [ArgumentCompleter({ [PsUi.ThemeEngine]::GetAvailableThemes() })]
         [string]$Theme = 'Light',

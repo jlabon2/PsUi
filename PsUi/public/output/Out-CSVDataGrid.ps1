@@ -61,6 +61,7 @@ function Out-CSVDataGrid {
         [Alias('FullName')]
         [string[]]$CSVFiles,
 
+        [Alias('Title')]
         [string]$TitleText = 'CSV Editor',
 
         [switch]$IsFilterable,

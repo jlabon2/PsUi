@@ -123,13 +123,24 @@ namespace PsUi
                         }
                     }));
                     
-                    // Block until UI op finishes (with timeout)
-                    // 5-minute timeout handles cases like idle windows or actual deadlocks
-                    bool signaled = waitHandle.Wait(TimeSpan.FromMinutes(5));
+                    // Block until UI op finishes, but wake up quickly if cancelled/disposed.
+                    // Poll every 250ms so window close (which sets _disposed) unblocks within ~250ms
+                    // instead of hanging for the full 5-minute timeout.
+                    bool signaled = false;
+                    var deadline = DateTime.UtcNow.AddMinutes(5);
+                    while (!signaled && DateTime.UtcNow < deadline)
+                    {
+                        if (_disposed) break;
+                        var cts = _cts;
+                        if (cts != null && cts.IsCancellationRequested) break;
+                        signaled = waitHandle.Wait(250);
+                    }
 
                     if (!signaled)
                     {
-                        // Throw instead of returning default - callers need to know this wasnt a real null
+                        // Window was closed/cancelled, or genuine 5-min timeout
+                        if (_disposed)
+                            return default(T);
                         throw new UiDispatchTimeoutException();
                     }
                 }
