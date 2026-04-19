@@ -93,17 +93,14 @@ function Register-ScriptBlockCondition {
             }
             'TextBox' {
                 # Debounce text input to avoid compiling scriptblock on every keystroke
-                # Store evaluator reference in array to ensure proper closure capture
-                $evalRef = @{ Eval = $evaluator }
                 $sourceControl.Add_TextChanged({
-                    $debouncer.Debounce(150, { & $evalRef.Eval }.GetNewClosure())
+                    $debouncer.Debounce(150, $evaluator)
                 }.GetNewClosure())
             }
             'PasswordBox' {
                 # Debounce password input too
-                $evalRef = @{ Eval = $evaluator }
                 $sourceControl.Add_PasswordChanged({
-                    $debouncer.Debounce(150, { & $evalRef.Eval }.GetNewClosure())
+                    $debouncer.Debounce(150, $evaluator)
                 }.GetNewClosure())
             }
             'ComboBox' {

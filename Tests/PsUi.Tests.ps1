@@ -1337,8 +1337,8 @@ Describe 'Module Manifest' {
         $script:manifest = Test-ModuleManifest (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')
     }
 
-    It 'Version is 1.0.2' {
-        $script:manifest.Version.ToString() | Should -Be '1.0.2'
+    It 'Version is 1.0.3' {
+        $script:manifest.Version.ToString() | Should -Be '1.0.3'
     }
 
     It 'Author is Jacob Labonte' {

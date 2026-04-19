@@ -12,7 +12,7 @@
 RootModule = '.\PsUi.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.2'
+ModuleVersion = '1.0.3'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -175,6 +175,16 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+Version 1.0.3:
+- Fix -EnabledWhen dispatcher error on TextBox/PasswordBox controls (GitHub #3)
+- Fix tab content clipping when content overflows the window height
+- Auto-size windows now scroll properly when MaxHeight is reached
+
+Version 1.0.2:
+- Add -EnabledWhen to 6 controls (Button, Input, TextArea, Dropdown, Tab, Action)
+- New-UiTextArea: -ReadOnly switch
+- Batch variable injection for faster window startup
+
 Version 1.0.1:
 - New-UiButton: -ScrollToTop switch for controlling post-completion scroll position
 - New-UiTool: Detect missing help files in PS 7+, offer online docs fallback

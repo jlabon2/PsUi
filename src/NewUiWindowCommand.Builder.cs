@@ -203,8 +203,14 @@ namespace PsUi
                 
                 if (p.AutoSize)
                 {
-                    // Full auto-size (width and height) - no scroll, window sizes to content
-                    outerPanel.Children.Add(contentPanel);
+                    // Full auto-size - use ScrollViewer so content scrolls if MaxHeight clips the window
+                    var scrollViewer = new ScrollViewer
+                    {
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+                    };
+                    scrollViewer.Content = contentPanel;
+                    outerPanel.Children.Add(scrollViewer);
                 }
                 else if (p.AutoSizeHeight)
                 {
@@ -850,8 +856,20 @@ namespace PsUi
                     }), System.Windows.Threading.DispatcherPriority.Loaded);
                 }
                 
-                // Cap height for auto-size mode after layout is complete
-                if (p.AutoSizeHeight && window.ActualHeight > p.MaxHeight)
+                // Cap height for auto-size modes after layout is complete
+                if (p.AutoSize)
+                {
+                    // Switch from auto-size to manual so ScrollViewer constrains properly
+                    double finalWidth = window.ActualWidth;
+                    double finalHeight = window.ActualHeight;
+                    window.SizeToContent = SizeToContent.Manual;
+                    window.Width = finalWidth;
+                    window.Height = finalHeight;
+                    window.MaxWidth = double.PositiveInfinity;
+                    window.MaxHeight = double.PositiveInfinity;
+                    DebugLog("WINDOW", string.Format("AutoSize finalized: {0}x{1}", finalWidth, finalHeight));
+                }
+                else if (p.AutoSizeHeight && window.ActualHeight > p.MaxHeight)
                 {
                     // Switch from auto-size to fixed height so maximize works
                     window.SizeToContent = SizeToContent.Manual;

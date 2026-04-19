@@ -151,7 +151,35 @@ function New-UiTab {
         }
     }
 
-    $tabItem.Content = $contentPanel
+    # Wrap tab content in ScrollViewer so overflow is scrollable.
+    # In AutoSize mode the ScrollViewer reports its full content height (window grows),
+    # but if MaxHeight caps the window, the ScrollViewer constrains and scrolls.
+    $tabScrollViewer = [System.Windows.Controls.ScrollViewer]@{
+        VerticalScrollBarVisibility   = 'Auto'
+        HorizontalScrollBarVisibility = 'Disabled'
+        Focusable                     = $false
+    }
+    $tabScrollViewer.Content = $contentPanel
+
+    # When inner ScrollViewer has nothing to scroll (or is at the edge),
+    # bubble mouse wheel events to the outer ScrollViewer so it can scroll instead.
+    $tabScrollViewer.Add_PreviewMouseWheel({
+        param($sender, $e)
+        $atTop    = ($e.Delta -gt 0) -and ($sender.VerticalOffset -eq 0)
+        $atBottom = ($e.Delta -lt 0) -and ($sender.VerticalOffset -ge $sender.ScrollableHeight)
+        $noScroll = $sender.ScrollableHeight -eq 0
+
+        if ($atTop -or $atBottom -or $noScroll) {
+            $e.Handled = $true
+            $newArgs = [System.Windows.Input.MouseWheelEventArgs]::new(
+                $e.MouseDevice, $e.Timestamp, $e.Delta)
+            $newArgs.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
+            $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($sender)
+            if ($parent) { $parent.RaiseEvent($newArgs) }
+        }
+    })
+
+    $tabItem.Content = $tabScrollViewer
     $oldParent = $session.CurrentParent
     $session.CurrentParent = $contentPanel
     Write-Debug "Entering content block"
