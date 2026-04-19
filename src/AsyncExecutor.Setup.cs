@@ -7,18 +7,37 @@ namespace PsUi
     // Script setup: builds the init script that runs before user code in background runspaces
     public partial class AsyncExecutor
     {
-        // Builds the setup script: Write-Host override, Read-Host override, module imports, function defs
-        private string BuildSetupScript(IDictionary functionsToDefine, System.Collections.Generic.IEnumerable<string> modulesToLoad, bool debugEnabled = false)
+        // Cached static portion of setup script (host overrides + module functions).
+        // These don't change between button clicks, only debug flag and caller-specific
+        // functions/modules vary. Caching avoids rebuilding ~200KB of func definitions
+        // on every click (~40ms saved per invoc).
+        private static string _cachedStaticSetup;
+        private static readonly object _cacheLock = new object();
+
+        private static string GetCachedStaticSetup()
+        {
+            if (_cachedStaticSetup != null) return _cachedStaticSetup;
+            lock (_cacheLock)
+            {
+                if (_cachedStaticSetup != null) return _cachedStaticSetup;
+                _cachedStaticSetup = BuildStaticSetup();
+                return _cachedStaticSetup;
+            }
+        }
+
+        // Call when module is reloaded/reset to invalidate the cache
+        internal static void InvalidateSetupCache()
+        {
+            lock (_cacheLock) { _cachedStaticSetup = null; }
+        }
+
+        // Builds the static (unchanging) portion: host overrides + private/public function injection
+        private static string BuildStaticSetup()
         {
             var sb = new System.Text.StringBuilder();
 
             // Force UTF-8 encoding for proper character handling in output
             sb.AppendLine("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $global:OutputEncoding = [System.Text.Encoding]::UTF8");
-
-            if (debugEnabled)
-            {
-                sb.AppendLine("$DebugPreference = 'Continue'");
-            }
 
             // Override Write-Host with an alias so it takes precedence over the cmdlet.
             // This only lives in background runspaces - the user's interactive session is untouched.
@@ -52,6 +71,12 @@ function Global:__PsUi_WriteHost {
             $fg = if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $ForegroundColor } else { $null }
             $bg = if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $BackgroundColor } else { $null }
             $Global:AsyncExecutor.RaiseOnHost($message, $fg, $bg, [bool]$NoNewline)
+        }
+        else {
+            $params = @{ Object = $message; NoNewline = $NoNewline }
+            if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $params.ForegroundColor = $ForegroundColor }
+            if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $params.BackgroundColor = $BackgroundColor }
+            Microsoft.PowerShell.Utility\Write-Host @params
         }
     }
 }
@@ -131,39 +156,10 @@ function Global:Out-Host {
 }
 ");
 
-            // Import linked modules (escape single quotes in paths)
-            if (modulesToLoad != null)
-            {
-                foreach (string mod in modulesToLoad)
-                {
-                    if (!string.IsNullOrWhiteSpace(mod))
-                    {
-                        string escapedMod = mod.Replace("'", "''");
-                        sb.AppendFormat("Import-Module '{0}' -ErrorAction SilentlyContinue\n", escapedMod);
-                    }
-                }
-            }
-
-            // Define caller-provided functions (validated identifiers only)
-            if (functionsToDefine != null)
-            {
-                foreach (DictionaryEntry kvp in functionsToDefine)
-                {
-                    try
-                    {
-                        string name = kvp.Key.ToString();
-                        if (!Constants.IsValidIdentifier(name)) continue;
-
-                        string definition = kvp.Value.ToString();
-                        sb.AppendFormat("function Global:{0} {{ {1} }}\n", name, definition);
-                    }
-                    catch (Exception ex) { Debug.WriteLine("AsyncExecutor Function Definition Error: " + ex.Message); }
-                }
-            }
-
             // We inject ALL private functions (~110 of them) into every async runspace. Yeah it's
             // ~40ms overhead, but they have interdependencies (Get-ThemeColors -> Get-ContrastColor)
             // and selective injection would be fragile. Reliability wins over latency here.
+            // Now cached — only paid once per module load instead of every button click.
             
             // Inject private helper functions from ModuleContext
             var privateFuncs = ModuleContext.PrivateFunctions;
@@ -194,6 +190,53 @@ function Global:Out-Host {
                         sb.AppendFormat("function Global:{0} {{ {1} }}\n", name, definition);
                     }
                     catch (Exception ex) { Debug.WriteLine("AsyncExecutor Public Function Definition Error: " + ex.Message); }
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        // Builds the full setup script by combining cached static portion with per-call dynamic parts
+        private string BuildSetupScript(IDictionary functionsToDefine, System.Collections.Generic.IEnumerable<string> modulesToLoad, bool debugEnabled = false)
+        {
+            var sb = new System.Text.StringBuilder();
+
+            // Dynamic: debug preference
+            if (debugEnabled)
+            {
+                sb.AppendLine("$DebugPreference = 'Continue'");
+            }
+
+            // Static: host overrides + module function injection (cached)
+            sb.Append(GetCachedStaticSetup());
+
+            // Dynamic: import linked modules (escape single quotes in paths)
+            if (modulesToLoad != null)
+            {
+                foreach (string mod in modulesToLoad)
+                {
+                    if (!string.IsNullOrWhiteSpace(mod))
+                    {
+                        string escapedMod = mod.Replace("'", "''");
+                        sb.AppendFormat("Import-Module '{0}' -ErrorAction SilentlyContinue\n", escapedMod);
+                    }
+                }
+            }
+
+            // Dynamic: define caller-provided functions (validated identifiers only)
+            if (functionsToDefine != null)
+            {
+                foreach (DictionaryEntry kvp in functionsToDefine)
+                {
+                    try
+                    {
+                        string name = kvp.Key.ToString();
+                        if (!Constants.IsValidIdentifier(name)) continue;
+
+                        string definition = kvp.Value.ToString();
+                        sb.AppendFormat("function Global:{0} {{ {1} }}\n", name, definition);
+                    }
+                    catch (Exception ex) { Debug.WriteLine("AsyncExecutor Function Definition Error: " + ex.Message); }
                 }
             }
 
