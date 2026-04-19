@@ -37,6 +37,7 @@ function Out-Datagrid {
         [Parameter(ValueFromPipeline)]
         [object[]]$Data,
 
+        [Alias('Title')]
         [string]$TitleText = 'Data Grid',
 
         [switch]$IsFilterable,
