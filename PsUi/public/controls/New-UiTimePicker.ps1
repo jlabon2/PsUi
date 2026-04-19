@@ -44,6 +44,11 @@ function New-UiTimePicker {
         [switch]$FullWidth,
 
         [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
+
+        [Parameter()]
         [hashtable]$WPFProperties
     )
 
@@ -413,6 +418,10 @@ function New-UiTimePicker {
     }
 
     $session.AddControlSafe($Variable, $timePickerContainer)
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $pickerBorder -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
+    }
 
     # Register elements with ThemeEngine
     try {

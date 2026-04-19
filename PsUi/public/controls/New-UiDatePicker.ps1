@@ -30,6 +30,11 @@ function New-UiDatePicker {
         [datetime]$Default = [datetime]::Today,
 
         [switch]$FullWidth,
+
+        [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
         
         [Parameter()]
         [hashtable]$WPFProperties
@@ -81,4 +86,8 @@ function New-UiDatePicker {
 
     # Register control in all session registries
     Register-UiControlComplete -Name $Variable -Control $picker -InitialValue $picker.SelectedDate
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $picker -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
+    }
 }

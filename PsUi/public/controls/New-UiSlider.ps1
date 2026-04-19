@@ -77,6 +77,11 @@ function New-UiSlider {
         [int]$MaxWidth,
         
         [switch]$FullWidth,
+
+        [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
         
         [Parameter()]
         [hashtable]$WPFProperties
@@ -253,4 +258,8 @@ function New-UiSlider {
 
     # Register control in all session registries
     Register-UiControlComplete -Name $Variable -Control $slider -InitialValue $slider.Value
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $slider -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
+    }
 }

@@ -43,6 +43,11 @@ function New-UiRadioGroup {
         [switch]$FullWidth,
 
         [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
+
+        [Parameter()]
         [hashtable]$WPFProperties
     )
 
@@ -124,4 +129,8 @@ function New-UiRadioGroup {
 
     # Register control with session using AddControlSafe for thread-safe access
     $session.AddControlSafe($Variable, $radioPanel)
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $radioPanel -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
+    }
 }

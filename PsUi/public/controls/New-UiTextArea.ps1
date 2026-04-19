@@ -44,9 +44,16 @@ function New-UiTextArea {
 
         [switch]$Required,
 
+        [switch]$ReadOnly,
+
         [int]$MaxLength,
 
         [switch]$FullWidth,
+
+        [Parameter()]
+        [object]$EnabledWhen,
+
+        [switch]$ClearIfDisabled,
 
         [Parameter()]
         [hashtable]$WPFProperties
@@ -95,6 +102,10 @@ function New-UiTextArea {
 
     if ($MaxLength -gt 0) {
         $textArea.MaxLength = $MaxLength
+    }
+
+    if ($ReadOnly) {
+        $textArea.IsReadOnly = $true
     }
 
     Set-TextBoxStyle -TextBox $textArea
@@ -157,4 +168,8 @@ function New-UiTextArea {
 
     # Register control with session using AddControlSafe for thread-safe access
     $session.AddControlSafe($Variable, $textArea)
+
+    if ($EnabledWhen) {
+        Register-UiCondition -TargetControl $textArea -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
+    }
 }
