@@ -54,8 +54,13 @@ function New-UiTree {
         # Active Directory OUs - DN is reversed, comma-separated
         Get-ADOrganizationalUnit -Filter * | New-UiTree -Variable 'ous' -PathProperty 'DistinguishedName' -PathSeparator ',' -ReversePath
     .EXAMPLE
-        # Process tree - parent/child by ID
-        Get-Process | New-UiTree -Variable 'procs' -IdProperty 'Id' -ParentIdProperty 'Parent.Id' -DisplayProperty 'ProcessName'
+        # Org chart - parent/child by ID using a dotted property path on the parent reference
+        $employees = @(
+            [PSCustomObject]@{ EmployeeId = 1; Name = 'CEO';    Manager = $null }
+            [PSCustomObject]@{ EmployeeId = 2; Name = 'VP Eng'; Manager = [PSCustomObject]@{ EmployeeId = 1 } }
+            [PSCustomObject]@{ EmployeeId = 3; Name = 'Dev';    Manager = [PSCustomObject]@{ EmployeeId = 2 } }
+        )
+        $employees | New-UiTree -Variable 'org' -IdProperty 'EmployeeId' -ParentIdProperty 'Manager.EmployeeId' -DisplayProperty 'Name'
     .EXAMPLE
         # .NET namespaces
         [AppDomain]::CurrentDomain.GetAssemblies().GetTypes() | 
@@ -113,6 +118,19 @@ function New-UiTree {
         $parent    = $session.CurrentParent
         $treeStyle = [System.Windows.Application]::Current.TryFindResource('ModernTreeViewStyle')
 
+        # Resolve a possibly-dotted property path against an object.
+        # 'Parent.Id' on a Process returns $process.Parent.Id (not $process.'Parent.Id').
+        $getDotted = {
+            param($obj, [string]$pathExpr)
+            if ($null -eq $obj -or [string]::IsNullOrEmpty($pathExpr)) { return $null }
+            $current = $obj
+            foreach ($part in $pathExpr.Split('.')) {
+                if ($null -eq $current) { return $null }
+                $current = $current.$part
+            }
+            return $current
+        }
+
         # Create the tree control with base styling
         $tree = [System.Windows.Controls.TreeView]@{
             Height          = $Height
@@ -132,10 +150,11 @@ function New-UiTree {
             
             # First pass: create nodes for each item
             foreach ($item in $allItems) {
-                $id = $item.$IdProperty
+                $id = & $getDotted $item $IdProperty
                 if ($null -eq $id) { continue }
                 
-                $displayText = if ($item.PSObject.Properties[$DisplayProperty]) { $item.$DisplayProperty } else { $id.ToString() }
+                $displayText = & $getDotted $item $DisplayProperty
+                if ($null -eq $displayText) { $displayText = $id.ToString() }
                 
                 $node = [System.Windows.Controls.TreeViewItem]@{
                     Header = $displayText
@@ -151,7 +170,7 @@ function New-UiTree {
                 $entry    = $nodeMap[$id]
                 $item     = $entry.Item
                 $node     = $entry.Node
-                $parentId = $item.$ParentIdProperty
+                $parentId = & $getDotted $item $ParentIdProperty
                 
                 if ($parentId -and $nodeMap.ContainsKey($parentId)) {
                     [void]$nodeMap[$parentId].Node.Items.Add($node)
@@ -166,7 +185,7 @@ function New-UiTree {
             $nodeMap = @{}
             
             foreach ($item in $allItems | Sort-Object $PathProperty) {
-                $path = $item.$PathProperty
+                $path = & $getDotted $item $PathProperty
                 if (!$path) { continue }
                 
                 # Split path into segments and optionally reverse for DN-style paths
@@ -179,14 +198,24 @@ function New-UiTree {
                 for ($i = 0; $i -lt $segments.Count; $i++) {
                     $segment     = $segments[$i]
                     $currentPath = if ($currentPath) { "$currentPath$PathSeparator$segment" } else { $segment }
+                    $isOwnPath   = ($i -eq $segments.Count - 1)
                     
                     # Reuse existing node or create new one
                     if ($nodeMap.ContainsKey($currentPath)) {
                         $parentNode = $nodeMap[$currentPath]
+                        # Upsert: an item piped in later may match an existing intermediate's path.
+                        # Promote the synthesized Tag to the real source object.
+                        if ($isOwnPath) { $parentNode.Tag = $item }
                     }
                     else {
-                        $isLeaf  = ($i -eq $segments.Count - 1)
-                        $tagData = if ($isLeaf) { $item } else { $null }
+                        # Tag is the source item when this segment IS the item's own path,
+                        # otherwise a synthesized stand-in carrying the accumulated path so
+                        # consumers always have something actionable to read from .Tag.
+                        $tagData = if ($isOwnPath) {
+                            $item
+                        } else {
+                            [PSCustomObject]@{ Path = $currentPath; Synthesized = $true }
+                        }
                         
                         $node = [System.Windows.Controls.TreeViewItem]@{
                             Header = $segment
