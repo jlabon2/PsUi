@@ -2,7 +2,7 @@
 
 All changes to PsUi will be documented in this file.
 
-## [1.0.4] - Unreleased
+## [1.0.4] - 2026-04-30
 
 ### Fixed
 - **PsUi.psm1**: `Import-Module -Force` no longer wipes static state out from under live windows. `OnRemove` fires for `-Force` re-imports, and resetting state mid-execution broke the next click on every open window. Skips the reset when sessions are still alive.
