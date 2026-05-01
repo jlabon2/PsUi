@@ -155,24 +155,29 @@ foreach ($funcName in $asyncPublicFuncs) {
 # Store module path for async runspace Import-Module
 [PsUi.ModuleContext]::ModulePath = $PSScriptRoot
 
-# Register module unload handler to clean up RunspacePool
+# OnRemove also fires on Import-Module -Force, because of course it does.
+# Skip the static-state nuke if windows are still alive or we yank the rug out from under them.
 $MyInvocation.MyCommand.ScriptBlock.Module.OnRemove = {
-    # Shut down the runspace pool first (blocks until threads drain)
     try {
         [PsUi.RunspacePoolManager]::Shutdown()
         Write-Verbose "PsUi RunspacePool shutdown complete"
     }
     catch { Write-Debug "[PsUi] RunspacePool shutdown error: $_" }
 
-    # Reset ThemeEngine static state so re-import starts clean
+    # Live sessions = caller did Import-Module -Force, not a real teardown. Leave statics alone.
+    $activeSessions = 0
+    try { $activeSessions = [PsUi.SessionManager]::ActiveSessionCount } catch { }
+    if ($activeSessions -gt 0) {
+        Write-Debug "[PsUi] OnRemove: $activeSessions session(s) alive, skipping reset"
+        return
+    }
+
     try { [PsUi.ThemeEngine]::Reset() }
     catch { Write-Debug "[PsUi] ThemeEngine reset error: $_" }
 
-    # Dispose all active sessions
     try { [PsUi.SessionManager]::Reset() }
     catch { Write-Debug "[PsUi] SessionManager cleanup error: $_" }
 
-    # Clear module-level statics
     try {
         [PsUi.ModuleContext]::IsInitialized = $false
         [PsUi.ModuleContext]::PrivateFunctions = $null

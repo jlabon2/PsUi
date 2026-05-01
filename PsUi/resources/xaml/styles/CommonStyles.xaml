@@ -300,6 +300,9 @@
     </Style>
 
     <!-- Modern TreeView style -->
+    <!-- Note: virtualization is NOT enabled. The current New-UiTree builder adds pre-built
+         TreeViewItems directly to .Items, which defeats VirtualizingPanel.IsVirtualizing.
+         A future refactor to ItemsSource + HierarchicalDataTemplate could re-enable it. -->
     <Style x:Key="ModernTreeViewStyle" TargetType="TreeView">
         <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
@@ -307,8 +310,6 @@
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
-        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
-        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TreeView">
