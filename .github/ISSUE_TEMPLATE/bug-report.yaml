@@ -1,0 +1,56 @@
+name: Bug Report
+description: Create a report to help us improve
+title: "[Bug]: "
+labels: ["type: bug", "status: needs-triage"]
+body:
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Go to '...'
+        2. Click on '....'
+        3. Scroll down to '....'
+        4. See error
+  - type: textarea
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+  - type: upload
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain your problem.
+    validations:
+      accept: .png, .jpg, .jpeg, .gif, .svg, .webp
+  - type: input
+    attributes:
+      label: Operating System
+      description: The operating system the bug occurs on.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: PowerShell Version
+      description: |
+        The version of PowerShell that the bug occurs on.
+        ```powershell
+        $PSVersionTable.PSVersion.ToString()
+        ```
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: PsUi Version
+      description: |
+        The version of PsUi that the bug occurs on.
+        ```powershell
+        (Get-PSResource -Name PsUi).Version.ToString()
+        ```
+    validations:
+      required: true
