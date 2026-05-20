@@ -2,6 +2,22 @@
 
 All changes to PsUi will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **New-UiProgress**: New progress bar control with severity tints (Info, Success, Warning, Error), optional label, and percentage/value display. Supports `-Indeterminate` for marquee mode, custom min/max ranges, and format strings for the value text.
+- **Set-UiProgress**: Update value, increment, label, severity, or indeterminate mode on a live progress bar from a background runspace. No-op short-circuit when no params are bound so tight loops don't thrash the dispatcher.
+- **Tests**: 14 new Pester tests covering New-UiProgress and Set-UiProgress - indeterminate, clamping, severity metadata, label/value blocks, Tag guard, no-op behavior, and missing-control handling.
+
+### Fixed
+- **ConvertTo-UiBrush**: Brush cache was null on first call from a freshly hydrated runspace (the `if (!$script:_brushCache)` guard never ran). Now lazy-initialized so Set-UiProgress from button actions doesn't throw.
+- **Set-ProgressBarStyle**: Severity tints now survive theme switches. Bars use SetResourceReference instead of frozen brushes, and ThemeEngine inspects Tag.BrushTag to rebind Foreground on theme change.
+- **Set-ProgressBarStyle**: Indeterminate bars register with ThemeEngine so the marquee accent tracks theme switches.
+- **New-UiProgress**: `-WPFProperties Tag` is now rejected with a warning instead of silently overwriting the metadata hashtable that makes label/severity/value bookkeeping work.
+- **New-UiButton**: Same Tag guard - custom Tag through -WPFProperties no longer disarms the click handler.
+- **Set-UiProgress**: `-Severity` binding no longer requires the meta hashtable to be present. Works on bars created without our Tag (third-party or future variants).
+- **Set-UiProgress**: `-Indeterminate` switched from `[Nullable[bool]]` to `[bool]` with PSBoundParameters detection. Nullable bool was binding `$false from captured variables oddly.
+
 ## [1.0.4] - 2026-04-30
 
 ### Fixed

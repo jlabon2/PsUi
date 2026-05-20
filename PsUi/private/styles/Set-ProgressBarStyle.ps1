@@ -9,18 +9,29 @@ function Set-ProgressBarStyle {
         [System.Windows.Controls.ProgressBar]$ProgressBar
     )
 
-    # Skip custom template for indeterminate mode - WPF native animation is better
+    # Indeterminate skips the custom template - WPF's native marquee is fine and
+    # honestly nicer than anything we'd be able to come up with. Use DynamicResource so theme
+    # switches still repaint, and honor a severity brush via Tag.
     if ($ProgressBar.IsIndeterminate) {
-        $colors = Get-ThemeColors
-        if ($colors) {
-            $ProgressBar.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFrom($colors.Accent)
-            $ProgressBar.Background = [System.Windows.Media.BrushConverter]::new().ConvertFrom($colors.ControlBg)
+  
+        $fgKey = 'AccentBrush'
+        if ($ProgressBar.Tag -is [hashtable] -and $ProgressBar.Tag.BrushTag) {
+            $fgKey = [string]$ProgressBar.Tag.BrushTag
         }
+
+        $ProgressBar.SetResourceReference(
+            [System.Windows.Controls.Control]::ForegroundProperty, $fgKey)
+        
+            # BorderBrush mirrors what ThemeEngine.ApplyTheme does on switches - keep them in lockstep.
+        $ProgressBar.SetResourceReference(
+            [System.Windows.Controls.Control]::BackgroundProperty, 'BorderBrush')
         $ProgressBar.Height = 6
+        try { [PsUi.ThemeEngine]::RegisterElement($ProgressBar) }
+        catch { Write-Verbose "Failed to register indeterminate ProgressBar: $_" }
         return
     }
 
-    # Apply modern style template for determinate mode
+    # Determinate: apply the modern template
     $styleApplied = $false
     try {
         if ($null -ne [System.Windows.Application]::Current) {
@@ -31,17 +42,16 @@ function Set-ProgressBarStyle {
             }
         }
     }
-    catch {
-        Write-Verbose "Failed to apply ModernProgressBarStyle: $_"
+    catch {  Write-Verbose "Failed to apply ModernProgressBarStyle: $_"
     }
 
     if (!$styleApplied) {
         Write-Warning "XAML style 'ModernProgressBarStyle' not found. Ensure ThemeEngine.LoadStyles() was called."
     }
-    
+
     $ProgressBar.Height = 6
 
-    # Register with ThemeEngine so progress bars update on theme switch
+    # Register so theme switches refresh us via the Tag-aware ProgressBar branch
     try { [PsUi.ThemeEngine]::RegisterElement($ProgressBar) }
     catch { Write-Verbose "Failed to register ProgressBar with ThemeEngine: $_" }
 }

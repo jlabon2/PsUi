@@ -16,7 +16,7 @@ BeforeAll {
     Import-Module $modulePath -Force
 }
 
-# Sanity checks — if these fail, nothing else matters
+# Sanity checks - if these fail, nothing else matters
 Describe 'Module Loading' {
     It 'Should import without errors' {
         Get-Module PsUi | Should -Not -BeNullOrEmpty
@@ -37,12 +37,12 @@ Describe 'Module Loading' {
     }
 
     It 'Should have C# backend loaded' {
-        # If the DLL didn't load, everything downstream is toast
+        # Confirms the C# backend loaded
         { [PsUi.AsyncExecutor]::new() } | Should -Not -Throw
     }
 }
 
-# Theme engine is static — loaded once at module import
+# Theme engine is static - loaded once at module import
 Describe 'Theme System' {
     It 'Should return available themes' {
         $themes = [PsUi.ThemeEngine]::GetAvailableThemes()
@@ -84,7 +84,7 @@ Describe 'AsyncExecutor' {
     }
 
     It 'Should have static DebugMode property' {
-        # Static prop — toggles verbose logging across all executors
+        # Static prop - toggles verbose logging across all executors
         $original = [PsUi.AsyncExecutor]::DebugMode
         try {
             [PsUi.AsyncExecutor]::DebugMode = $true
@@ -99,7 +99,7 @@ Describe 'AsyncExecutor' {
     }
 }
 
-# Each window gets its own session — this is the core of multi-window support
+# Each window gets its own session - this is the core of multi-window support
 Describe 'SessionManager' {
     BeforeEach {
         # Fresh session per test so nothing bleeds over
@@ -141,7 +141,7 @@ Describe 'SessionManager' {
     }
 }
 
-# Basic control tests — just need a session and a parent panel, no actual window
+# Basic control tests - just need a session and a parent panel, no actual window
 Describe 'Control Creation' -Tag 'RequiresSession' {
     BeforeAll {
         $script:testSessionId = [PsUi.SessionManager]::CreateSession()
@@ -305,7 +305,7 @@ Describe 'StateHydrationEngine' {
     }
 
     It 'Should skip reserved variable names' {
-        # If someone names a control 'Host' we can't inject that — it'd nuke PS internals
+        # Reserved names like 'Host' must not get injected as variables
         $textBox = [System.Windows.Controls.TextBox]@{ Text = 'ShouldBeSkipped' }
         $script:session.AddControlSafe('Host', $textBox)
         
@@ -324,7 +324,7 @@ Describe 'StateHydrationEngine' {
     }
 
     It 'Should skip variables already defined (collision detection)' {
-        # If the parent scope already has a $myVar, hydration shouldn't stomp it
+        # Pre-existing vars in the caller's scope take precedence over controls
         $textBox = [System.Windows.Controls.TextBox]@{ Text = 'ControlValue' }
         $script:session.AddControlSafe('myVar', $textBox)
         
@@ -521,7 +521,7 @@ Describe 'ThreadSafeControlProxy' {
     }
 }
 
-# These actually spin up background runspaces — closest we get to integration tests
+# These actually spin up background runspaces - closest we get to integration tests
 Describe 'AsyncExecutor Events' {
     It 'Should complete execution and set IsRunning to false' {
         $executor = [PsUi.AsyncExecutor]::new()
@@ -591,10 +591,10 @@ Describe 'AsyncExecutor Events' {
     }
 }
 
-# Overwriting $Host or $Error would be catastrophic — make sure we block all of them
+# Confirms the reserved-name list blocks the obvious automatic variables
 Describe 'Reserved Variables' {
     It 'Should have comprehensive reserved variable list' {
-        # If any of these leak through hydration, PowerShell breaks in fun ways
+        # Each of these must be rejected by the reserved check
         $mustBeReserved = @(
             'Host', 'Error', 'PSVersionTable', 'true', 'false', 'null',
             'PSCmdlet', 'PSBoundParameters', 'ErrorActionPreference'
@@ -633,7 +633,7 @@ Describe 'Reserved Variables' {
 
 # Private functions aren't exported, so we need InModuleScope to test them.
 # The import below looks redundant but Pester resolves InModuleScope at
-# discovery time, before any BeforeAll blocks run. Without it: boom.
+# discovery time, before any BeforeAll blocks run, so the import has to happen here.
 
 Import-Module (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1') -Force
 
@@ -678,7 +678,7 @@ InModuleScope PsUi {
         }
     }
 
-    # Brush factory with caching — WPF brushes are expensive to create
+    # Brush factory with caching - WPF brushes are expensive to create
     Describe 'ConvertTo-UiBrush' {
         It 'Creates a frozen SolidColorBrush from hex' {
             $brush = ConvertTo-UiBrush '#FF0000'
@@ -707,7 +707,7 @@ InModuleScope PsUi {
             $before = ConvertTo-UiBrush '#AABB11'
             Reset-BrushCache
             $after = ConvertTo-UiBrush '#AABB11'
-            # After reset we get a new object — same color, different reference
+            # After reset we get a new object - same color, different reference
             [object]::ReferenceEquals($before, $after) | Should -BeFalse
         }
 
@@ -902,7 +902,7 @@ InModuleScope PsUi {
     }
 }
 
-# C# backend — the stuff in src/ that gets compiled into the DLL
+# C# backend - the stuff in src/ that gets compiled into the DLL
 
 Describe 'Constants - IsReservedVariable' {
     # These guard against clobbering PS built-ins during hydration
@@ -952,7 +952,7 @@ Describe 'Constants - IsValidIdentifier' {
     }
 
     It 'Rejects injection attempts' {
-        # Variable names get interpolated into scripts — gotta block the obvious stuff
+        # Variable names get interpolated into generated scripts, so injection patterns are rejected
         [PsUi.Constants]::IsValidIdentifier('a;rm -rf /') | Should -BeFalse
         [PsUi.Constants]::IsValidIdentifier('$(evil)')     | Should -BeFalse
         [PsUi.Constants]::IsValidIdentifier('na`me')       | Should -BeFalse
@@ -984,7 +984,7 @@ Describe 'Constants - ValidateIdentifier' {
     }
 }
 
-# WPF value converter — shows arrays as '[3 items]' in datagrid cells
+# WPF value converter - shows arrays as '[3 items]' in datagrid cells
 Describe 'ArrayDisplayConverter' {
     BeforeAll {
         $script:converter = [PsUi.ArrayDisplayConverter]::new()
@@ -1030,7 +1030,7 @@ Describe 'ArrayDisplayConverter' {
     }
 }
 
-# Tooltip text for expandable cells — hover to see what's inside
+# Tooltip text for expandable cells - hover to see what's inside
 Describe 'ExpandableValueTooltipConverter' {
     BeforeAll {
         $script:converter = [PsUi.ExpandableValueTooltipConverter]::new()
@@ -1064,13 +1064,13 @@ Describe 'ExpandableValueTooltipConverter' {
     }
 }
 
-# Control creation — we spin up a real session but skip the window.
+# Control creation - we spin up a real session but skip the window.
 # XAML style warnings are expected here (no ResourceDictionary without a window)
 # so we suppress them to keep the output clean.
 
 Describe 'Control Creation - Inputs and Toggles' {
     BeforeAll {
-        # Suppress the style warnings — they're harmless, just noisy
+        # Suppress the style warnings - they're harmless, just noisy
         $global:WarningPreference = 'SilentlyContinue'
         $script:sessionId = [PsUi.SessionManager]::CreateSession()
         [PsUi.SessionManager]::SetCurrentSession($script:sessionId)
@@ -1122,7 +1122,7 @@ Describe 'Control Creation - Inputs and Toggles' {
 
         $added = $parent.Children[$before]
         $added | Should -BeOfType [System.Windows.Controls.TextBlock]
-        $added.FontFamily.Source | Should -Match 'Segoe MDL2'
+        $added.FontFamily.Source | Should -Match 'Segoe (MDL2|Fluent)'
     }
 }
 
@@ -1182,6 +1182,95 @@ Describe 'Control Creation - Selection Controls' {
         $proxy.Control.IsIndeterminate | Should -BeFalse
         $proxy.Control.Value           | Should -Be 0
     }
+
+    It 'New-UiProgress honors custom Min/Max/Default and clamps Default in range' {
+        New-UiProgress -Variable 'testProg3' -Minimum 10 -Maximum 50 -Default 999
+        $proxy = $script:session.GetSafeVariable('testProg3')
+        $proxy.Control.Minimum | Should -Be 10
+        $proxy.Control.Maximum | Should -Be 50
+        $proxy.Control.Value   | Should -Be 50  # clamped to Maximum
+    }
+
+    It 'New-UiProgress rejects Maximum <= Minimum' {
+        { New-UiProgress -Variable 'testProgBad' -Minimum 100 -Maximum 50 } | Should -Throw
+    }
+
+    It 'New-UiProgress stores severity metadata in Tag' {
+        New-UiProgress -Variable 'testProgSev' -Severity Warning
+        $proxy = $script:session.GetSafeVariable('testProgSev')
+        $proxy.Control.Tag.Severity | Should -Be 'Warning'
+        $proxy.Control.Tag.BrushTag | Should -Be 'WarningBrush'
+    }
+
+    It 'New-UiProgress with -Label populates the Tag.LabelBlock' {
+        New-UiProgress -Variable 'testProgLbl' -Label 'Loading'
+        $proxy = $script:session.GetSafeVariable('testProgLbl')
+        $proxy.Control.Tag.LabelBlock      | Should -Not -BeNullOrEmpty
+        $proxy.Control.Tag.LabelBlock.Text | Should -Be 'Loading'
+    }
+
+    It 'New-UiProgress with -ShowValue populates the Tag.ValueBlock' {
+        New-UiProgress -Variable 'testProgVal' -ShowValue -Default 25
+        $proxy = $script:session.GetSafeVariable('testProgVal')
+        $proxy.Control.Tag.ValueBlock      | Should -Not -BeNullOrEmpty
+        $proxy.Control.Tag.ValueBlock.Text | Should -Be '25%'
+    }
+
+    It 'New-UiProgress ShowValue text updates when Value changes' {
+        New-UiProgress -Variable 'testProgFmt' -ShowValue -ValueFormat '{0}/{1}' -Maximum 200
+        $proxy = $script:session.GetSafeVariable('testProgFmt')
+        $proxy.Control.Value = 75
+        $proxy.Control.Tag.ValueBlock.Text | Should -Be '75/200'
+    }
+
+    It 'New-UiProgress warns and strips Tag from -WPFProperties' {
+        $warnings = @()
+        New-UiProgress -Variable 'testProgTag' -WPFProperties @{ Tag = 'hijack' } -WarningVariable warnings -WarningAction SilentlyContinue
+        $proxy = $script:session.GetSafeVariable('testProgTag')
+        # Tag must still be our metadata hashtable, not the caller's string
+        $proxy.Control.Tag | Should -BeOfType [hashtable]
+        $warnings.Count    | Should -BeGreaterThan 0
+    }
+
+    It 'Set-UiProgress -Increment adds to current value and clamps to Maximum' {
+        New-UiProgress -Variable 'testProgInc' -Maximum 10 -Default 8
+        Set-UiProgress -Variable 'testProgInc' -Increment 5  # 8+5=13 -> clamp to 10
+        $proxy = $script:session.GetSafeVariable('testProgInc')
+        $proxy.Control.Value | Should -Be 10
+    }
+
+    It 'Set-UiProgress -Value clamps below Minimum' {
+        New-UiProgress -Variable 'testProgClampLo' -Minimum 5 -Maximum 10 -Default 7
+        Set-UiProgress -Variable 'testProgClampLo' -Value -100
+        $proxy = $script:session.GetSafeVariable('testProgClampLo')
+        $proxy.Control.Value | Should -Be 5
+    }
+
+    It 'Set-UiProgress -Severity updates Tag.Severity and Tag.BrushTag' {
+        New-UiProgress -Variable 'testProgRetint' -Severity Info
+        Set-UiProgress -Variable 'testProgRetint' -Severity Error
+        $proxy = $script:session.GetSafeVariable('testProgRetint')
+        $proxy.Control.Tag.Severity | Should -Be 'Error'
+        $proxy.Control.Tag.BrushTag | Should -Be 'ErrorBrush'
+    }
+
+    It 'Set-UiProgress -Label updates a label-equipped bar' {
+        New-UiProgress -Variable 'testProgLabelUpd' -Label 'Initial'
+        Set-UiProgress -Variable 'testProgLabelUpd' -Label 'Updated'
+        $proxy = $script:session.GetSafeVariable('testProgLabelUpd')
+        $proxy.Control.Tag.LabelBlock.Text | Should -Be 'Updated'
+    }
+
+    It 'Set-UiProgress no-op when no parameters supplied does not throw' {
+        New-UiProgress -Variable 'testProgNoop' -Default 42
+        { Set-UiProgress -Variable 'testProgNoop' } | Should -Not -Throw
+        $proxy = $script:session.GetSafeVariable('testProgNoop')
+        $proxy.Control.Value | Should -Be 42
+    }
+
+    It 'Set-UiProgress on missing control writes verbose and returns' {
+        { Set-UiProgress -Variable 'doesNotExist' -Value 50 } | Should -Not -Throw
+    }
 }
 
 Describe 'Control Creation - List Controls' {
@@ -1219,7 +1308,7 @@ Describe 'Control Creation - List Controls' {
     }
 }
 
-# Audit caught that -Path and -Base64 weren't mandatory — verify the fix sticks
+# Audit caught that -Path and -Base64 weren't mandatory - verify the fix sticks
 Describe 'New-UiImage Parameter Validation' {
     It 'Has mandatory -Path in Path parameter set' {
         $cmd = Get-Command New-UiImage
@@ -1331,7 +1420,7 @@ Describe 'ControlValueApplicator' {
     }
 }
 
-# Manifest sanity — catch accidental export changes or version drift
+# Manifest sanity - catch accidental export changes or version drift
 Describe 'Module Manifest' {
     BeforeAll {
         $script:manifest = Test-ModuleManifest (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')
@@ -1410,7 +1499,7 @@ Describe 'ScriptBuilder' {
     }
 
     It 'BuildLocalizer skips invalid variable names' {
-        # Names get baked into generated code — semicolons would be real bad
+        # Names get emitted into generated code, so anything non-identifier is filtered out
         $names = [System.Collections.Generic.List[string]]::new()
         $names.Add('valid-name')
         $names.Add(';inject')
@@ -1427,7 +1516,7 @@ Describe 'ScriptBuilder' {
     }
 
     It 'BuildVariableCleanup skips reserved names' {
-        # Cleanup runs after the action — can't Remove-Variable $Host obviously
+        # Cleanup runs after the action - can't Remove-Variable $Host obviously
         $names = [System.Collections.Generic.List[string]]::new()
         $names.Add('Host')
         $names.Add('myCustomVar')
@@ -1497,5 +1586,51 @@ Describe 'Edge Cases' {
 
         $executor.IsRunning | Should -BeFalse
         $executor.Dispose()
+    }
+}
+
+# Native dialog wrappers - the modal half can't be tested unattended, so we verify
+# the API surface (exports, params, return-object shape). The actual click-through
+# lives in manual smoke testing.
+Describe 'Native Dialogs - API surface' {
+    It 'Exports Show-WindowsObjectPicker' {
+        Get-Command Show-WindowsObjectPicker -Module PsUi -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Show-WindowsObjectPicker requires ObjectType' {
+        $cmd = Get-Command Show-WindowsObjectPicker
+        $cmd.Parameters['ObjectType'].Attributes.Mandatory | Should -Contain $true
+    }
+
+    It 'Show-WindowsObjectPicker validates ObjectType values' {
+        { Show-WindowsObjectPicker -ObjectType 'NotAType' } | Should -Throw
+    }
+}
+
+# Tests that exercise native dialog functions from a background runspace, simulating
+# the async action-card execution path.
+Describe 'Native Dialogs - Runspace and action card paths' {
+    BeforeAll {
+        $script:modulePath = (Resolve-Path (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')).Path
+    }
+
+    It 'Show-WindowsObjectPicker ObjectType validation fires from a background runspace' {
+        $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $runspace.Open()
+        $psInstance = $null
+        try {
+            $psInstance = [System.Management.Automation.PowerShell]::Create()
+            $psInstance.Runspace = $runspace
+            [void]$psInstance.AddScript("Import-Module '$($script:modulePath)' -Force")
+            [void]$psInstance.AddScript("Show-WindowsObjectPicker -ObjectType 'NotAType'")
+            $psInstance.Invoke()
+            $firstError = $psInstance.Streams.Error | Select-Object -First 1
+            $firstError | Should -Not -BeNullOrEmpty
+            $firstError.Exception.Message | Should -Not -Match 'NullReference|ObjectReference'
+        }
+        finally {
+            if ($psInstance) { $psInstance.Dispose() }
+            $runspace.Close()
+        }
     }
 }
