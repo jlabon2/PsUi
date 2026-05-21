@@ -1154,6 +1154,17 @@ Describe 'Control Creation - Selection Controls' {
         $proxy.SelectedItem | Should -Be 'West'
     }
 
+    It 'New-UiDropdown with -OnChange fires on selection change' {
+        $script:onChangeValue = $null
+        New-UiDropdown -Variable 'testOnChange' -Label 'Pick' -Items @('A', 'B', 'C') -OnChange {
+            param($val)
+            $script:onChangeValue = $val
+        }
+        $proxy = $script:session.GetSafeVariable('testOnChange')
+        $proxy.SelectedItem = 'B'
+        $script:onChangeValue | Should -Be 'B'
+    }
+
     It 'New-UiSlider creates a slider with correct range' {
         New-UiSlider -Variable 'testVolume' -Label 'Volume' -Minimum 0 -Maximum 100 -Default 75
 

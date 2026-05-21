@@ -21,6 +21,9 @@ function New-UiDropdown {
         Truthy values: CheckBox=checked, TextBox=non-empty, ComboBox=has selection.
     .PARAMETER ClearIfDisabled
         When used with -EnabledWhen, resets the dropdown selection when it becomes disabled.
+    .PARAMETER OnChange
+        ScriptBlock to execute when the selection changes. Receives the new
+        selection value as the first parameter.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
@@ -28,6 +31,11 @@ function New-UiDropdown {
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         New-UiDropdown -Label "Color" -Variable "color" -Items @('Red','Green','Blue') -WPFProperties @{ ToolTip = "Pick a color" }
+    .EXAMPLE
+        New-UiDropdown -Label "Environment" -Variable "env" -Items @('Dev','Staging','Prod') -OnChange {
+            param($selected)
+            Write-Host "Switched to: $selected"
+        }
     #>
     [CmdletBinding()]
     param(
@@ -49,7 +57,9 @@ function New-UiDropdown {
 
         [Parameter()]
         [switch]$ClearIfDisabled,
-        
+
+        [scriptblock]$OnChange,
+
         [Parameter()]
         [hashtable]$WPFProperties
     )
@@ -110,6 +120,22 @@ function New-UiDropdown {
 
         # Register control in all session registries
         Register-UiControlComplete -Name $Variable -Control $combo -InitialValue $combo.SelectedItem
+
+        # Wire up OnChange callback - store in Tag so the event handler can access it
+        if ($OnChange) {
+            if (!$combo.Tag -or $combo.Tag -isnot [hashtable]) { $combo.Tag = @{} }
+            $combo.Tag['OnChange'] = $OnChange
+
+            $combo.Add_SelectionChanged({
+                param($sender, $e)
+                $tag = $sender.Tag
+                if (!$tag -or !$tag.OnChange) { return }
+
+                $selectedValue = $sender.SelectedItem
+                try { & $tag.OnChange $selectedValue } 
+                catch { Write-Warning "OnChange callback error: $_" }
+            })
+        }
 
         # Wire up conditional enabling if specified
         if ($EnabledWhen) {
