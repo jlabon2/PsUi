@@ -128,6 +128,7 @@ FunctionsToExport = @(
     'Show-UiGlyphBrowser'
     'Show-UiInputDialog'
     'Show-UiMessageDialog'
+    'Show-UiOuPicker'
     'Show-UiPromptDialog'
     'Show-UiSaveDialog'
     'Show-WindowsObjectPicker'

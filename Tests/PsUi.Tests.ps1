@@ -1593,8 +1593,22 @@ Describe 'Edge Cases' {
 # the API surface (exports, params, return-object shape). The actual click-through
 # lives in manual smoke testing.
 Describe 'Native Dialogs - API surface' {
+    It 'Exports Show-UiOuPicker' {
+        Get-Command Show-UiOuPicker -Module PsUi -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+    }
+
     It 'Exports Show-WindowsObjectPicker' {
         Get-Command Show-WindowsObjectPicker -Module PsUi -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Show-UiOuPicker has expected parameters' {
+        $cmd = Get-Command Show-UiOuPicker
+        $cmd.Parameters.Keys | Should -Contain 'Title'
+        $cmd.Parameters.Keys | Should -Contain 'Root'
+        $cmd.Parameters.Keys | Should -Contain 'Server'
+        $cmd.Parameters.Keys | Should -Contain 'IncludeEntireDirectory'
+        $cmd.Parameters.Keys | Should -Contain 'IncludeHidden'
+        $cmd.Parameters.Keys | Should -Contain 'ParentWindow'
     }
 
     It 'Show-WindowsObjectPicker requires ObjectType' {
@@ -1612,6 +1626,13 @@ Describe 'Native Dialogs - API surface' {
 Describe 'Native Dialogs - Runspace and action card paths' {
     BeforeAll {
         $script:modulePath = (Resolve-Path (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')).Path
+    }
+
+    It 'Show-UiOuPicker throws a descriptive error when not domain-joined' -Skip:(
+        # Skip on domain-joined machines - the function would succeed there
+        (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).PartOfDomain -eq $true
+    ) {
+        { Show-UiOuPicker } | Should -Throw -ExpectedMessage '*domain*'
     }
 
     It 'Show-WindowsObjectPicker ObjectType validation fires from a background runspace' {
