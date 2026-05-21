@@ -5,9 +5,11 @@
 function Initialize-UITheme {
     [CmdletBinding()]
     param(
-        [string]$Theme = 'Light'
+        [string]$Theme = 'Auto'
     )
-    
+
+    if ($Theme -eq 'Auto') {  $Theme = Get-SystemThemePreference }
+
     try {
         Set-ActiveTheme -Theme $Theme
     }

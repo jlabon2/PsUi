@@ -9,6 +9,7 @@ All changes to PsUi will be documented in this file.
 - **Set-UiProgress**: Update value, increment, label, severity, or indeterminate mode on a live progress bar from a background runspace. No-op short-circuit when no params are bound so tight loops don't thrash the dispatcher.
 - **Tests**: 14 new Pester tests covering New-UiProgress and Set-UiProgress - indeterminate, clamping, severity metadata, label/value blocks, Tag guard, no-op behavior, and missing-control handling.
 - **Show-UiOuPicker**: New function wrapping DsBrowseForContainerW - the same native OU picker ADUC and GPMC use. Returns a PSCustomObject with Name, DistinguishedName, and AdsPath. Supports alternate credentials, custom root DN, hidden containers, and targeting a specific domain controller. Works from both UI and background runspace threads. It's pretty horrendous, though - it lazy-loads containers, so will always show a (+) icon even when a container or an OU is empty. It's more of a placeholder than anything and inevitably will be replaced alongside the native dialog objectpicker with modern replacements.
+- **New-UiWindow**: `-Theme Auto` (now the default) detects the system's light/dark preference from the registry and applies the matching theme at window creation. Falls back to Light if the registry key is missing or unreadable.
 
 ### Fixed
 - **ConvertTo-UiBrush**: Brush cache was null on first call from a freshly hydrated runspace (the `if (!$script:_brushCache)` guard never ran). Now lazy-initialized so Set-UiProgress from button actions doesn't throw.

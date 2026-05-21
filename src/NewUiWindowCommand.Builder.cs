@@ -152,21 +152,34 @@ namespace PsUi
                     }
                 }
                 
+                Hashtable colors = null;
                 if (customColors == null)
                 {
+                    // Resolve Auto to the system's actual light/dark preference
+                    string resolvedTheme = p.Theme;
+                    if (string.Equals(p.Theme, "Auto", StringComparison.OrdinalIgnoreCase))
+                    {
+                        resolvedTheme = DetectSystemTheme();
+                        DebugLog("THEME", "Auto resolved to: " + resolvedTheme);
+                    }
+
                     try
                     {
-                        ThemeEngine.ApplyThemeFromFile(p.Theme);
+                        ThemeEngine.ApplyThemeFromFile(resolvedTheme);
                     }
                     catch (Exception themeEx)
                     {
                         DebugLog("THEME", "XAML theme load failed, using fallback: " + themeEx.Message);
-                        ThemeEngine.SetTheme(p.Theme);
+                        ThemeEngine.SetTheme(resolvedTheme);
                     }
-                }
 
-                // Initialize theme via PowerShell helper (or use custom colors if already loaded)
-                Hashtable colors = customColors ?? InitializeTheme(p.Theme, windowRunspace);
+                    // Initialize theme via PowerShell helper
+                    colors = InitializeTheme(resolvedTheme, windowRunspace);
+                }
+                else
+                {
+                    colors = customColors;
+                }
 
                 // Build and configure the window with custom chrome
                 window = BuildWindow(p, colors);
@@ -1299,6 +1312,26 @@ namespace PsUi
         }
 
         // Accepts #RGB, #RRGGBB, or #AARRGGBB
+        // Detects the system's light/dark mode from the registry.
+        // Returns "Dark" or "Light". Falls back to Light on any failure.
+        private static string DetectSystemTheme()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    if (key != null)
+                    {
+                        object value = key.GetValue("AppsUseLightTheme");
+                        if (value is int && (int)value == 0) { return "Dark"; }
+                    }
+                }
+            }
+            catch { }
+            return "Light";
+        }
+
         private static bool IsValidHexColor(string value)
         {
             if (string.IsNullOrEmpty(value)) return false;

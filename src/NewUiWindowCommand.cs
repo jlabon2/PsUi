@@ -42,7 +42,7 @@ namespace PsUi
         public int MaxHeight { get; set; } = 900;
 
         [Parameter]
-        public string Theme { get; set; } = "Light";
+        public string Theme { get; set; } = "Auto";
 
         [Parameter]
         public string ThemePath { get; set; }
