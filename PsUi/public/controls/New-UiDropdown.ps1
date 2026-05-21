@@ -91,9 +91,12 @@ function New-UiDropdown {
         }
         Set-ComboBoxStyle -ComboBox $combo
 
-        foreach ($item in $Items) {
-            [void]$combo.Items.Add($item)
-        }
+        # Use AsyncObservableCollection + ItemsSource so Add-UiListItem/Remove-UiListItem
+        # work at runtime from background threads (same pattern as New-UiList).
+        $collection = [PsUi.AsyncObservableCollection[object]]::new()
+        foreach ($item in $Items) { [void]$collection.Add($item) }
+        $combo.ItemsSource = $collection
+        $session.RegisterListCollection($Variable, $collection)
 
         if ($Default -and $Items -contains $Default) {
             $combo.SelectedItem = $Default

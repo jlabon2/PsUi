@@ -1165,6 +1165,29 @@ Describe 'Control Creation - Selection Controls' {
         $script:onChangeValue | Should -Be 'B'
     }
 
+    It 'New-UiDropdown uses ObservableCollection (supports Add-UiListItem)' {
+        New-UiDropdown -Variable 'testDyn' -Label 'Dynamic' -Items @('X', 'Y')
+        Add-UiListItem -Variable 'testDyn' -Item 'Z'
+        $items = Get-UiListItems -Variable 'testDyn'
+        $items | Should -Contain 'Z'
+        $items.Count | Should -Be 3
+    }
+
+    It 'New-UiDropdown supports Remove-UiListItem' {
+        New-UiDropdown -Variable 'testRemove' -Label 'Remove' -Items @('A', 'B', 'C')
+        Remove-UiListItem -Variable 'testRemove' -Item 'B'
+        $items = Get-UiListItems -Variable 'testRemove'
+        $items | Should -Not -Contain 'B'
+        $items.Count | Should -Be 2
+    }
+
+    It 'New-UiDropdown supports Clear-UiList' {
+        New-UiDropdown -Variable 'testClear' -Label 'Clear' -Items @('A', 'B', 'C')
+        Clear-UiList -Variable 'testClear'
+        $items = Get-UiListItems -Variable 'testClear'
+        $items.Count | Should -Be 0
+    }
+
     It 'New-UiSlider creates a slider with correct range' {
         New-UiSlider -Variable 'testVolume' -Label 'Volume' -Minimum 0 -Maximum 100 -Default 75
 
