@@ -135,8 +135,9 @@ namespace PsUi
                         customThemeName = Path.GetFileNameWithoutExtension(p.ThemePath);
                         
                         // Determine base theme type from custom colors or default to Light
+                        string typeValue = customColors["Type"] as string;
                         string baseTheme = customColors.ContainsKey("Type") 
-                            ? customColors["Type"] as string ?? "Light" 
+                            ? typeValue ?? "Light"
                             : "Light";
                         DebugLog("THEME", "Loaded custom theme '" + customThemeName + "' from JSON, base type: " + baseTheme);
                         

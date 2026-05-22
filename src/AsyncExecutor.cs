@@ -345,7 +345,8 @@ namespace PsUi
                     ExecuteSetupPhase(ps, functionsToDefine, modulesToLoad, debugEnabled);
                     
                     // Inject user-defined variables from LinkedVariables
-                    definedVarNames = InjectUserVariables(ps, variablesToDefine, out var definedVarValues);
+                    Dictionary<string, object> definedVarValues;
+                    definedVarNames = InjectUserVariables(ps, variablesToDefine, out definedVarValues);
                     
                     // Hydrate UI control values as PowerShell variables
                     hydratedValues = StateHydrationEngine.HydrateViaScript(ps, definedVarNames);

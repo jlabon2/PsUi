@@ -1,10 +1,13 @@
 using System;
+#if !NET452
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+#endif
 
 namespace PsUi
 {
+#if !NET452
     // Helper for WebView2 initialization, runtime detection, and event routing.
     public static class WebViewHelper
     {
@@ -59,7 +62,7 @@ namespace PsUi
             var dataFolder = userDataFolder;
             if (string.IsNullOrEmpty(dataFolder))
             {
-                // Include PID + random suffix to prevent predictable path attacks
+                // PID + random suffix prevents predictable path attacks
                 dataFolder = System.IO.Path.Combine(
                     System.IO.Path.GetTempPath(), 
                     "PsUi_WebView2_" + System.Diagnostics.Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -152,4 +155,16 @@ namespace PsUi
             });
         }
     }
+#else
+    // WebView2 is not available on .NET 4.5.2 (WinPE). Stubbed out.
+    public static class WebViewHelper
+    {
+        public static bool IsRuntimeAvailable { get { return false; } }
+        public static string RuntimeVersion { get { return null; } }
+        public static string GetMissingRuntimeMessage()
+        {
+            return "WebView2 is not supported on this runtime (.NET 4.5.2 / WinPE).";
+        }
+    }
+#endif
 }

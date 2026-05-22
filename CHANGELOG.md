@@ -12,6 +12,12 @@ All changes to PsUi will be documented in this file.
 - **New-UiWindow**: `-Theme Auto` (now the default) detects the system's light/dark preference from the registry and applies the matching theme at window creation. Falls back to Light if the registry key is missing or unreadable.
 - **New-UiDropdown**: `-OnChange` parameter fires a scriptblock when the selection changes. Receives the new value as a parameter, same pattern as New-UiDropdownButton.
 - **New-UiDropdown**: Items are now managed via `AsyncObservableCollection` + `ItemsSource`. Existing list helper functions (`Add-UiListItem`, `Remove-UiListItem`, `Clear-UiList`, `Get-UiListItems`) work on dropdowns, including from background threads.
+- **net452 target**: Added .NET 4.5.2 build target for WinPE and older Windows environments. WebView2 is excluded on this target (not supported). Build script now verifies all three output DLLs (desktop, core, net452). C# backend changes are compatibility-only — no functional difference:
+  - `csproj`: Conditional `LangVersion` (6 for net452, 7.3 otherwise), `NET452` define constant, WebView2 excluded via `<PackageReference>` condition, net452 uses GAC references matching the net472 ItemGroup.
+  - `WebViewHelper.cs`: Wrapped in `#if !NET452` — full implementation for net472/net6.0-windows, stub class (returns false/null/error message) for net452.
+  - `KeyCaptureDialog.cs`: `FormattedText` constructor differs between .NET 4.5.2 and 4.7.2 (pixelsPerDip parameter added in 4.6). Conditional `#if NET452` selects the 6-parameter overload.
+  - `AsyncExecutor.cs`, `SessionManager.cs`: `out var` → explicit declaration (C# 7 syntax, unsupported under LangVersion 6).
+
 ### Fixed
 - **ConvertTo-UiBrush**: Brush cache was null on first call from a freshly hydrated runspace (the `if (!$script:_brushCache)` guard never ran). Now lazy-initialized so Set-UiProgress from button actions doesn't throw.
 - **Set-ProgressBarStyle**: Severity tints now survive theme switches. Bars use SetResourceReference instead of frozen brushes, and ThemeEngine inspects Tag.BrushTag to rebind Foreground on theme change.

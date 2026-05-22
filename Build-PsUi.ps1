@@ -139,3 +139,12 @@ if (Test-Path $coreDll) {
 else {
     Write-Host "  [MISSING] core (PS 7+)" -ForegroundColor Red
 }
+
+$net452Dll = Join-Path $modulePath 'lib\net452\PsUi.dll'
+if (Test-Path $net452Dll) {
+    $size = (Get-Item $net452Dll).Length / 1KB
+    Write-Host "  [OK] net452 (WinPE): $([math]::Round($size, 1)) KB" -ForegroundColor Green
+}
+else {
+    Write-Host "  [MISSING] net452 (WinPE)" -ForegroundColor Red
+}

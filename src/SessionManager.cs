@@ -19,8 +19,9 @@ namespace PsUi
         {
             get
             {
+                SessionContext session;
                 if (_currentSessionId.HasValue &&
-                    _sessions.TryGetValue(_currentSessionId.Value, out SessionContext session))
+                    _sessions.TryGetValue(_currentSessionId.Value, out session))
                 {
                     return session;
                 }
