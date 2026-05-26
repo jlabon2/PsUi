@@ -103,6 +103,10 @@ namespace PsUi
         // Throttle delay in ms - slows down script execution to let UI breathe
         public int HostThrottleMs { get; set; }
         
+        // Suppress progress events during setup phase (module imports emit Write-Progress
+        // records that leak through the host and trigger OnProgress handlers prematurely)
+        private volatile bool _suppressProgress = true;
+
         // Volatile ensures cross-thread visibility without a full lock
         private volatile bool _isRunning;
         public bool IsRunning
@@ -278,6 +282,7 @@ namespace PsUi
             
             // Reset disposed flag so a previously-cancelled executor can be reused
             _disposed = false;
+            _suppressProgress = true;
             
             // Reset input session state so ReadKey calls work (cleared on window close)
             KeyCaptureDialog.BeginInputSession();
@@ -364,6 +369,9 @@ namespace PsUi
                         hydratedValues != null ? hydratedValues.Keys : null, 
                         _capturedSessionId);
                     
+                    // Setup complete - allow progress events from user script
+                    _suppressProgress = false;
+
                     // Execute the user's script
                     ExecuteUserScript(ps, wrappedScript, parameters);
                 }
@@ -576,6 +584,7 @@ namespace PsUi
         private void ExecuteCleanupPhase(PowerShell ps, string originalPwd, Dictionary<string, object> hydratedValues, IDictionary variablesToDefine)
         {
             IsRunning = false;
+            _suppressProgress = true;
             
             // Clear thread-local executor reference
             AsyncExecutor.CurrentExecutor = null;
@@ -822,6 +831,9 @@ namespace PsUi
                         }
                     };
                     
+                    // Setup complete - allow progress events from user script
+                    _suppressProgress = false;
+
                     if (DebugMode) System.Console.WriteLine("Invoke() starting, QueueMode={0}", UsePipelineQueueMode);
                     foreach (PSObject result in ps.Invoke())
                     {
@@ -861,6 +873,7 @@ namespace PsUi
                 finally
                 {
                     IsRunning = false;
+                    _suppressProgress = true;
                     
                     // Push modified values back to their controls
                     if (rs != null && hydratedValues != null && hydratedValues.Count > 0)

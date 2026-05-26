@@ -10,7 +10,9 @@
         <Setter Property="FontFamily" Value="Segoe UI"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-        <Setter Property="Padding" Value="8,4,8,4"/>
+        <Setter Property="UseLayoutRounding" Value="True"/>
+        <Setter Property="Padding" Value="7,3,7,3"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
@@ -19,14 +21,14 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="4"
-                                SnapsToDevicePixels="True">
+                                CornerRadius="3"
+                                Padding="1">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="20"/>
                                 </Grid.ColumnDefinitions>
-                                
+
                                 <ContentPresenter x:Name="contentPresenter"
                                                   Grid.Column="0"
                                                   Content="{TemplateBinding SelectionBoxItem}"
@@ -35,36 +37,41 @@
                                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                                   Margin="{TemplateBinding Padding}"
-                                                  IsHitTestVisible="False"
-                                                  SnapsToDevicePixels="True"/>
-                                
-                            <ToggleButton x:Name="toggleButton"
-                                        Grid.Column="0"
-                                        Grid.ColumnSpan="2"
-                                        Background="Transparent"
-                                        BorderBrush="Transparent"
-                                        BorderThickness="0"
-                                        IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
-                                        Focusable="False"
-                                        ClickMode="Press">
-                                <ToggleButton.Template>
-                                    <ControlTemplate TargetType="ToggleButton">
-                                        <Border Background="Transparent"/>
-                                    </ControlTemplate>
-                                </ToggleButton.Template>
-                            </ToggleButton>
-                                
+                                                  IsHitTestVisible="False"/>
+
                                 <Path x:Name="arrow"
                                       Grid.Column="1"
                                       Data="M 0 0 L 4 4 L 8 0 Z"
                                       Fill="{TemplateBinding Foreground}"
                                       HorizontalAlignment="Center"
                                       VerticalAlignment="Center"
-                                      Margin="0,0,8,0"
+                                      Margin="0,0,4,0"
                                       IsHitTestVisible="False"/>
                             </Grid>
                         </Border>
-                        
+
+                        <ToggleButton x:Name="toggleButton"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Focusable="False"
+                                      ClickMode="Press">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+
+                        <!-- Hover/focus highlight. Rendered AFTER the ToggleButton
+                             so WPF composites it on top; ZIndex as extra guarantee. -->
+                        <Rectangle x:Name="focusRect"
+                                   Panel.ZIndex="10"
+                                   RadiusX="3" RadiusY="3"
+                                   StrokeThickness="1"
+                                   Stroke="Transparent"
+                                   IsHitTestVisible="False"/>
+
                         <Popup x:Name="PART_Popup"
                                AllowsTransparency="True"
                                Placement="Bottom"
@@ -74,7 +81,7 @@
                                     Background="{DynamicResource ControlBackgroundBrush}"
                                     BorderBrush="{DynamicResource BorderBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="4"
+                                    CornerRadius="3"
                                     MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}">
                                 <ScrollViewer x:Name="DropDownScrollViewer">
@@ -84,13 +91,13 @@
                             </Border>
                         </Popup>
                     </Grid>
-                    
+
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            <Setter TargetName="focusRect" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                         <Trigger Property="IsFocused" Value="True">
-                            <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            <Setter TargetName="focusRect" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource DisabledForegroundBrush}"/>

@@ -79,12 +79,7 @@ function New-UiProgress {
     $progress.Margin          = [System.Windows.Thickness]::new(4, 4, 4, 8)
 
     # ThemeEngine reads Tag.BrushTag and rebinds Foreground on theme switches.
-    $brushKey = switch ($Severity) {
-        'Success' { 'SuccessBrush' }
-        'Warning' { 'WarningBrush' }
-        'Error'   { 'ErrorBrush' }
-        default   { 'AccentBrush' }
-    }
+    $brushKey = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault
 
     # Tag goes on early so the first ApplyTheme pass picks up the right brush.
     # ValueBlock/LabelBlock get filled in below if the wrapper is built.

@@ -56,6 +56,14 @@ Describe 'Theme System' {
     }
 }
 
+# Status bar progress clamping uses Max/Min instead of Clamp (PS 5.1 compat)
+Describe 'PS 5.1 Compatibility' {
+    It '[Math]::Max and [Math]::Min should be available for clamping' {
+        [Math]::Max(0, -5) | Should -Be 0
+        [Math]::Min(100, 150) | Should -Be 100
+    }
+}
+
 # Icons come from CharList.json (Segoe MDL2 Assets unicode mappings)
 Describe 'Icon System' {
     It 'Should have icons loaded in ModuleContext' {
@@ -1451,6 +1459,409 @@ Describe 'ControlValueApplicator' {
 
     It 'Does not throw on null control' {
         { [PsUi.ControlValueApplicator]::ApplyValue($null, 'value') } | Should -Not -Throw
+    }
+}
+
+# StatusBar - freeform content bar docked to parent container
+Describe 'New-UiStatusBar' {
+    It 'Is exported from the module' {
+        Get-Command New-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Content parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['Content'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Content'].ParameterType | Should -Be ([scriptblock])
+        $cmd.Parameters['Content'].Attributes.Mandatory | Should -Not -Contain $true
+    }
+
+    It 'Has -DefaultText parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['DefaultText'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['DefaultText'].ParameterType | Should -Be ([string])
+    }
+
+    It 'Has optional -Variable parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has -Location parameter with Top/Bottom' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['Location'] | Should -Not -BeNullOrEmpty
+        $validateSet = $cmd.Parameters['Location'].Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        $validateSet.ValidValues | Should -Contain 'Top'
+        $validateSet.ValidValues | Should -Contain 'Bottom'
+    }
+
+    It 'Has -WPFProperties parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['WPFProperties'] | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has -AutoProgress switch parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['AutoProgress'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['AutoProgress'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -AutoCancel switch parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['AutoCancel'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['AutoCancel'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -Inline switch parameter' {
+        $cmd = Get-Command New-UiStatusBar -Module PsUi
+        $cmd.Parameters['Inline'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Inline'].ParameterType | Should -Be ([switch])
+    }
+}
+
+Describe 'New-UiStatusBar Intercept Parameters' {
+    BeforeAll {
+        $script:cmd = Get-Command New-UiStatusBar -Module PsUi
+    }
+
+    It 'Has -Intercept switch parameter' {
+        $script:cmd.Parameters['Intercept'] | Should -Not -BeNullOrEmpty
+        $script:cmd.Parameters['Intercept'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -CaptureHost switch parameter' {
+        $script:cmd.Parameters['CaptureHost'] | Should -Not -BeNullOrEmpty
+        $script:cmd.Parameters['CaptureHost'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -NoOutputOnly switch parameter' {
+        $script:cmd.Parameters['NoOutputOnly'] | Should -Not -BeNullOrEmpty
+        $script:cmd.Parameters['NoOutputOnly'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -Persist switch parameter' {
+        $script:cmd.Parameters['Persist'] | Should -Not -BeNullOrEmpty
+        $script:cmd.Parameters['Persist'].ParameterType | Should -Be ([switch])
+    }
+
+    It 'Has -MaxMessages int parameter with default 100' {
+        $script:cmd.Parameters['MaxMessages'] | Should -Not -BeNullOrEmpty
+        $script:cmd.Parameters['MaxMessages'].ParameterType | Should -Be ([int])
+    }
+
+    It '-MaxMessages has ValidateRange 1-10000' {
+        $rangeAttr = $script:cmd.Parameters['MaxMessages'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ValidateRangeAttribute] }
+        $rangeAttr | Should -Not -BeNullOrEmpty
+        $rangeAttr.MinRange | Should -Be 1
+        $rangeAttr.MaxRange | Should -Be 10000
+    }
+
+    It 'New-StatusBarBadge private helper exists' {
+        Test-Path (Join-Path $PSScriptRoot '..\PsUi\private\Controls\New-StatusBarBadge.ps1') | Should -BeTrue
+    }
+
+    It 'New-StatusBarMessagePopup private helper exists' {
+        Test-Path (Join-Path $PSScriptRoot '..\PsUi\private\Controls\New-StatusBarMessagePopup.ps1') | Should -BeTrue
+    }
+}
+
+Describe 'Write-Status' {
+    It 'Is exported from the module' {
+        Get-Command Write-Status -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has mandatory positional -Message parameter' {
+        $cmd = Get-Command Write-Status -Module PsUi
+        $cmd.Parameters['Message'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Message'].ParameterType | Should -Be ([string])
+        $cmd.Parameters['Message'].Attributes.Mandatory | Should -Contain $true
+    }
+
+    It 'Has -Severity parameter with ValidateSet' {
+        $cmd = Get-Command Write-Status -Module PsUi
+        $cmd.Parameters['Severity'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Severity'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } |
+            Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has -Timeout and -Bar parameters' {
+        $cmd = Get-Command Write-Status -Module PsUi
+        $cmd.Parameters['Timeout'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Bar']     | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Set-UiStatusBar' {
+    It 'Is exported from the module' {
+        Get-Command Set-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Text parameter' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Text'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Text'].ParameterType | Should -Be ([string])
+    }
+
+    It 'Has optional -Progress parameter' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Progress'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Progress'].ParameterType | Should -Be ([int])
+    }
+
+    It 'Has optional -Increment parameter' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Increment'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Increment'].ParameterType | Should -Be ([int])
+    }
+
+    It 'Has -Severity parameter with ValidateSet' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Severity'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Severity'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } |
+            Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Indeterminate parameter' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Indeterminate'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Indeterminate'].ParameterType | Should -Be ([bool])
+    }
+
+    It 'Has optional -Variable parameter' {
+        $cmd = Get-Command Set-UiStatusBar -Module PsUi
+        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Clear-UiStatus' {
+    It 'Is exported from the module' {
+        Get-Command Clear-UiStatus -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Variable parameter' {
+        $cmd = Get-Command Clear-UiStatus -Module PsUi
+        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Variable'].Attributes.Mandatory | Should -Not -Contain $true
+    }
+}
+
+Describe 'Hide-UiStatusBar' {
+    It 'Is exported from the module' {
+        Get-Command Hide-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Variable parameter' {
+        $cmd = Get-Command Hide-UiStatusBar -Module PsUi
+        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Variable'].ParameterType | Should -Be ([string])
+    }
+}
+
+Describe 'Show-UiStatusBar' {
+    It 'Is exported from the module' {
+        Get-Command Show-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Has optional -Variable parameter' {
+        $cmd = Get-Command Show-UiStatusBar -Module PsUi
+        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
+        $cmd.Parameters['Variable'].ParameterType | Should -Be ([string])
+    }
+}
+
+# Status bar clamping uses manual if-checks, not [Math]::Clamp (PS 5.1 compat)
+Describe 'Status Bar Clamping (PS 5.1 Safe)' {
+    It 'Set-UiStatusBar source does not use [Math]::Clamp' {
+        $src = Get-Content (Join-Path $PSScriptRoot '..\PsUi\public\controls\Set-UiStatusBar.ps1') -Raw
+        $src | Should -Not -Match '\[Math\]::Clamp'
+    }
+
+    It 'Add-StatusBarAutoWiring source does not use [Math]::Clamp' {
+        $src = Get-Content (Join-Path $PSScriptRoot '..\PsUi\private\Controls\Add-StatusBarAutoWiring.ps1') -Raw
+        $src | Should -Not -Match '\[Math\]::Clamp'
+    }
+}
+
+InModuleScope PsUi {
+
+    Describe 'Status Bar Behavioral Tests' {
+
+        Describe 'New-StatusBarBadge creates proper structure' {
+            BeforeAll {
+                $script:warnBadge = New-StatusBarBadge -Severity Warning
+                $script:errBadge  = New-StatusBarBadge -Severity Error
+            }
+
+            It 'Returns a hashtable with Badge, CountText, GlyphText, BrushKey' {
+                $script:warnBadge.Keys | Should -Contain 'Badge'
+                $script:warnBadge.Keys | Should -Contain 'CountText'
+                $script:warnBadge.Keys | Should -Contain 'GlyphText'
+                $script:warnBadge.Keys | Should -Contain 'BrushKey'
+            }
+
+            It 'Badge is a Border' {
+                $script:warnBadge.Badge | Should -BeOfType [System.Windows.Controls.Border]
+            }
+
+            It 'CountText and GlyphText are TextBlocks' {
+                $script:warnBadge.CountText | Should -BeOfType [System.Windows.Controls.TextBlock]
+                $script:warnBadge.GlyphText | Should -BeOfType [System.Windows.Controls.TextBlock]
+            }
+
+            It 'Warning/Error badges start visible but dimmed' {
+                $script:warnBadge.Badge.Visibility | Should -Be ([System.Windows.Visibility]::Visible)
+                $script:warnBadge.Badge.Opacity | Should -Be 0.35
+            }
+
+            It 'CountText starts at 0' {
+                $script:warnBadge.CountText.Text | Should -Be '0'
+            }
+
+            It 'Warning badge uses WarningBrush' {
+                $script:warnBadge.BrushKey | Should -Be 'WarningBrush'
+            }
+
+            It 'Error badge uses ErrorBrush' {
+                $script:errBadge.BrushKey | Should -Be 'ErrorBrush'
+            }
+
+            It 'GlyphText uses Segoe MDL2 Assets' {
+                $script:warnBadge.GlyphText.FontFamily.Source | Should -Be 'Segoe MDL2 Assets'
+            }
+
+            It 'Pill Tag carries IsBadgePill flag' {
+                $script:warnBadge.Badge.Tag.IsBadgePill | Should -BeTrue
+            }
+        }
+
+        Describe 'New-StatusBarMessagePopup creates proper structure' {
+            BeforeAll {
+                $script:badge   = New-StatusBarBadge -Severity Warning
+                $script:msgList = [System.Collections.Generic.List[hashtable]]::new()
+                $script:bar     = [System.Windows.Controls.Border]::new()
+                $popupSplat = @{
+                    Severity        = 'Warning'
+                    PlacementTarget = $script:badge.Badge
+                    BadgeInfo       = $script:badge
+                    MessageList     = $script:msgList
+                    Bar             = $script:bar
+                }
+                $script:popup = New-StatusBarMessagePopup @popupSplat
+            }
+
+            It 'Returns Popup, MessagePanel, HeaderText, ClearButton' {
+                $script:popup.Keys | Should -Contain 'Popup'
+                $script:popup.Keys | Should -Contain 'MessagePanel'
+                $script:popup.Keys | Should -Contain 'HeaderText'
+                $script:popup.Keys | Should -Contain 'ClearButton'
+            }
+
+            It 'Popup is a Popup control' {
+                $script:popup.Popup | Should -BeOfType [System.Windows.Controls.Primitives.Popup]
+            }
+
+            It 'MessagePanel is a StackPanel' {
+                $script:popup.MessagePanel | Should -BeOfType [System.Windows.Controls.StackPanel]
+            }
+
+            It 'HeaderText shows initial zero count' {
+                $script:popup.HeaderText.Text | Should -Be '0 Warnings'
+            }
+        }
+
+        Describe 'Popup Clear button resets badge and messages' {
+            BeforeAll {
+                $script:badge   = New-StatusBarBadge -Severity Warning
+                $script:msgList = [System.Collections.Generic.List[hashtable]]::new()
+                $script:bar     = [System.Windows.Controls.Border]::new()
+                $popupSplat = @{
+                    Severity        = 'Warning'
+                    PlacementTarget = $script:badge.Badge
+                    BadgeInfo       = $script:badge
+                    MessageList     = $script:msgList
+                    Bar             = $script:bar
+                }
+                $script:popup = New-StatusBarMessagePopup @popupSplat
+
+                # Simulate accumulated state
+                $script:badge.CountText.Text   = '5'
+                $script:badge.Badge.Visibility = [System.Windows.Visibility]::Visible
+                $script:badge.Badge.ToolTip    = '5 Warnings'
+                $script:msgList.Add(@{ Time = [DateTime]::Now; Message = 'test' })
+                [void]$script:popup.MessagePanel.Children.Add(
+                    [System.Windows.Controls.TextBlock]@{ Text = 'test' })
+
+                # Fire the Clear button click
+                $routedArgs = [System.Windows.RoutedEventArgs]::new(
+                    [System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)
+                $script:popup.ClearButton.RaiseEvent($routedArgs)
+            }
+
+            It 'Resets CountText to 0' {
+                $script:badge.CountText.Text | Should -Be '0'
+            }
+
+            It 'Dims the badge pill back to inactive' {
+                $script:badge.Badge.Visibility | Should -Be ([System.Windows.Visibility]::Visible)
+                $script:badge.Badge.Opacity | Should -Be 0.35
+            }
+
+            It 'Clears the message list' {
+                $script:msgList.Count | Should -Be 0
+            }
+
+            It 'Clears the popup message panel' {
+                $script:popup.MessagePanel.Children.Count | Should -Be 0
+            }
+        }
+
+        Describe 'Get-SeverityBrushKey mapping' {
+            It 'Warning returns WarningBrush' {
+                Get-SeverityBrushKey -Severity Warning | Should -Be 'WarningBrush'
+            }
+
+            It 'Error returns ErrorBrush' {
+                Get-SeverityBrushKey -Severity Error | Should -Be 'ErrorBrush'
+            }
+
+            It 'Success returns SuccessBrush' {
+                Get-SeverityBrushKey -Severity Success | Should -Be 'SuccessBrush'
+            }
+
+            It 'Info with -UseAccentDefault returns AccentBrush' {
+                Get-SeverityBrushKey -Severity Info -UseAccentDefault | Should -Be 'AccentBrush'
+            }
+
+            It 'Info without flag returns HeaderBackgroundBrush' {
+                Get-SeverityBrushKey -Severity Info | Should -Be 'HeaderBackgroundBrush'
+            }
+        }
+    }
+}
+
+Describe 'AsyncExecutor Progress Suppression' {
+    It 'AsyncExecutor has _suppressProgress field' {
+        $executor = [PsUi.AsyncExecutor]::new()
+        $field = $executor.GetType().GetField('_suppressProgress',
+            [System.Reflection.BindingFlags]'NonPublic,Instance')
+        $field | Should -Not -BeNullOrEmpty
+        $field.FieldType | Should -Be ([bool])
+    }
+}
+
+Describe 'ThemeEngine IsStatusBar Awareness' {
+    It 'BindElementToResources method exists on ThemeEngine' {
+        $method = [PsUi.ThemeEngine].GetMethod('BindElementToResources',
+            [System.Reflection.BindingFlags]'NonPublic,Static')
+        $method | Should -Not -BeNullOrEmpty
+    }
+
+    It 'RegisterElement accepts a Border with IsStatusBar Tag' {
+        $border = [System.Windows.Controls.Border]::new()
+        $border.Tag = @{ IsStatusBar = $true }
+        { [PsUi.ThemeEngine]::RegisterElement($border) } | Should -Not -Throw
     }
 }
 

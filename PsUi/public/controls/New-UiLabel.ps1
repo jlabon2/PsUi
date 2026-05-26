@@ -38,10 +38,11 @@ function New-UiLabel {
     $parent  = $session.CurrentParent
 
     $block = [System.Windows.Controls.TextBlock]@{
-        Text         = $Text
-        TextWrapping = 'Wrap'
-        FontFamily   = [System.Windows.Media.FontFamily]::new('Segoe UI Variable, Segoe UI')
-        Margin       = [System.Windows.Thickness]::new(4, 2, 4, 6)
+        Text              = $Text
+        TextWrapping      = 'Wrap'
+        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe UI Variable, Segoe UI')
+        Margin            = [System.Windows.Thickness]::new(4, 2, 4, 6)
+        VerticalAlignment = 'Center'
     }
 
     # Apply style-specific formatting and colors

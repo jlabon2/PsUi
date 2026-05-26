@@ -167,8 +167,10 @@ namespace PsUi
                 return attachedValue;
             }
 
-            // Final fallback - return the control itself rather than null
-            return control;
+            // Unknown control type - no extractable value. Must return null, NOT the
+            // control itself. Returning a live WPF object crosses runspace boundaries
+            // and causes deadlocks when STA pool threads try to marshal it.
+            return null;
         }
 
         private static object[] ExtractMultiSelectListBox(ListBox listBox)
@@ -278,7 +280,6 @@ namespace PsUi
         private static Hashtable ExtractTreeViewSnapshot(TreeView treeView)
         {
             var snapshot = new Hashtable();
-            snapshot["Control"] = treeView;
             snapshot["SelectedItem"] = treeView.SelectedItem;
             snapshot["SelectedValue"] = treeView.SelectedValue;
             
@@ -297,7 +298,6 @@ namespace PsUi
         private static Hashtable ExtractDataGridSnapshot(DataGrid dataGrid)
         {
             var snapshot = new Hashtable();
-            snapshot["Control"] = dataGrid;
             snapshot["SelectedItem"] = dataGrid.SelectedItem;
             snapshot["SelectedIndex"] = dataGrid.SelectedIndex;
             
@@ -317,7 +317,6 @@ namespace PsUi
         private static Hashtable ExtractListViewSnapshot(ListView listView)
         {
             var snapshot = new Hashtable();
-            snapshot["Control"] = listView;
             snapshot["SelectedItem"] = listView.SelectedItem;
             snapshot["SelectedIndex"] = listView.SelectedIndex;
             

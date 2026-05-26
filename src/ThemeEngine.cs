@@ -507,15 +507,22 @@ namespace PsUi
             else if (element is TextBlock)
             {
                 TextBlock textBlock = (TextBlock)element;
-                
+
                 // Tag can be a plain string ("AccentBrush") or a hashtable with a BrushTag key
                 string brushKey = textBlock.Tag as string;
                 if (brushKey == null)
                 {
                     Hashtable tagTable = textBlock.Tag as Hashtable;
-                    if (tagTable != null && tagTable.ContainsKey("BrushTag"))
+                    if (tagTable != null)
                     {
-                        brushKey = tagTable["BrushTag"] as string;
+                        // Badge text inside intercept pills - foreground is managed by
+                        // Update-StatusBarTheme via Get-ContrastColor, not resource binding
+                        if (tagTable.ContainsKey("IsBadgeText")) return;
+
+                        if (tagTable.ContainsKey("BrushTag"))
+                        {
+                            brushKey = tagTable["BrushTag"] as string;
+                        }
                     }
                 }
                 
@@ -582,11 +589,30 @@ namespace PsUi
                 
                 if (border.Background != null && border.Background != Brushes.Transparent)
                 {
-                    // Check if this is a card header (set by New-UiCard)
                     string brushKey = "ControlBackgroundBrush";
                     var tag = border.Tag as System.Collections.IDictionary;
                     if (tag != null)
                     {
+                        // Badge pills own their background via the severity brush key
+                        if (tag.Contains("IsBadgePill"))
+                        {
+                            string badgeBrush = tag.Contains("BrushKey") ? tag["BrushKey"] as string : null;
+                            if (badgeBrush != null)
+                            {
+                                border.ClearValue(Border.BackgroundProperty);
+                                border.SetResourceReference(Border.BackgroundProperty, badgeBrush);
+                            }
+                            return;
+                        }
+
+                        // Status bars own their background via the severity system
+                        if (tag.Contains("IsStatusBar"))
+                        {
+                            border.SetResourceReference(Border.BackgroundProperty, "HeaderBackgroundBrush");
+                            border.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
+                            return;
+                        }
+
                         // Check for CardHeader type
                         object typeObj = tag.Contains("Type") ? tag["Type"] : null;
                         bool isCardHeader = typeObj != null && typeObj.ToString() == "CardHeader";

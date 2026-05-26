@@ -43,12 +43,12 @@ function Set-UiProgress {
     )
 
     $session = Get-UiSession
-    if (-not $session) {
+    if (!$session) {
         Write-Verbose "Set-UiProgress: no active session for '$Variable' - update dropped."
         return
     }
     $progress = $session.Variables[$Variable]
-    if (-not $progress) {
+    if (!$progress) {
         Write-Verbose "Set-UiProgress: control '$Variable' not found in session - update dropped."
         return
     }
@@ -60,7 +60,7 @@ function Set-UiProgress {
     $hasIndeterm  = $PSBoundParameters.ContainsKey('Indeterminate')
 
     # Nothing to do? Don't bother the dispatcher about it.
-    if (-not ($hasValue -or $hasIncrement -or $hasLabel -or $hasSeverity -or $hasIndeterm)) {
+    if (!($hasValue -or $hasIncrement -or $hasLabel -or $hasSeverity -or $hasIndeterm)) {
         return
     }
 
@@ -80,12 +80,8 @@ function Set-UiProgress {
         }
 
         if ($hasSeverity) {
-            $brushKey = switch ($Severity) {
-                'Success' { 'SuccessBrush' }
-                'Warning' { 'WarningBrush' }
-                'Error'   { 'ErrorBrush' }
-                default   { 'AccentBrush' }
-            }
+            # Map severity to brush key for theme-aware tinting
+            $brushKey = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault
 
             # Clear local value so the resource binding wins
             $progress.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)

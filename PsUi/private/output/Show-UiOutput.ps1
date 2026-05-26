@@ -182,9 +182,16 @@ function Show-StreamingOutput {
     # Exceptions are logged for debugging but marked as handled to avoid app termination
     $window.Dispatcher.add_UnhandledException({
         param($sender, $eventArgs)
-        # Log to console — Write-Debug is invisible unless $DebugPreference is set
-        [Console]::WriteLine("[PsUi] Dispatcher exception: $($eventArgs.Exception.Message)")
-        [Console]::WriteLine("[PsUi] Stack: $($eventArgs.Exception.StackTrace)")
+        # Log to console - Write-Debug is invisible unless $DebugPreference is set
+        $ex = $eventArgs.Exception
+        [Console]::WriteLine("[PsUi] Dispatcher exception: $($ex.Message)")
+        if ($ex.InnerException) {
+            [Console]::WriteLine("[PsUi] Inner exception: $($ex.InnerException.Message)")
+            [Console]::WriteLine("[PsUi] Inner stack: $($ex.InnerException.StackTrace)")
+        }
+        else {
+            [Console]::WriteLine("[PsUi] Stack: $($ex.StackTrace)")
+        }
         $eventArgs.Handled = $true
     }.GetNewClosure())
 
@@ -194,22 +201,29 @@ function Show-StreamingOutput {
         param($sender, $eventArgs)
         if ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape) {
             if ($executorRef -and $executorRef.IsRunning) {
-                # Unpin temporarily so the confirm dialog doesn't open behind us
+                # Unpin temporarily so the confirm dialog doesn't open behind us.
+                # Deferred via DispatcherTimer so WPF processes the Topmost change
+                # before the modal dialog grabs focus (Start-Sleep would freeze the UI).
                 $wasPinned = $window.Topmost
-                if ($wasPinned) {
-                    $window.Topmost = $false
-                    Start-Sleep -Milliseconds 500
-                }
+                if ($wasPinned) { $window.Topmost = $false }
 
-                $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
-                if ($wasPinned) { $window.Topmost = $true }
+                $capturedWindow   = $window
+                $capturedExec     = $executorRef
+                $capturedWasPin   = $wasPinned
+                $unpinTimer          = [System.Windows.Threading.DispatcherTimer]::new()
+                $unpinTimer.Interval = [TimeSpan]::FromMilliseconds(50)
+                $unpinTimer.Add_Tick({
+                    $this.Stop()
+                    $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
+                    if ($capturedWasPin) { $capturedWindow.Topmost = $true }
 
-                # Re-check after dialog - task may have finished while waiting
-                if ($confirm -and $executorRef.IsRunning) {
-                    # Close any open ReadKey dialog before cancelling
-                    [PsUi.KeyCaptureDialog]::CloseCurrentDialog()
-                    $executorRef.Cancel()
-                }
+                    if ($confirm -and $capturedExec.IsRunning) {
+                        [PsUi.KeyCaptureDialog]::CloseCurrentDialog()
+                        $capturedExec.Cancel()
+                    }
+                }.GetNewClosure())
+                $unpinTimer.Start()
+
                 $eventArgs.Handled = $true
             }
         }
@@ -513,7 +527,8 @@ function Show-StreamingOutput {
 
         # Drain pipeline objects (batched to prevent UI saturation)
         $pipelineItems = $Executor.DrainPipelineQueue(100)
-        if ($null -ne $pipelineItems -and $pipelineItems.Count -gt 0) {
+        $hadPipeline   = $null -ne $pipelineItems -and $pipelineItems.Count -gt 0
+        if ($hadPipeline) {
             foreach ($item in $pipelineItems) {
                 if ($null -eq $item) { continue }
 
@@ -550,7 +565,14 @@ function Show-StreamingOutput {
 
         # Drain host output (console text)
         $records = $Executor.DrainHostQueue(100)
-        if ($null -eq $records -or $records.Count -eq 0) { return }
+        $hadHost = $null -ne $records -and $records.Count -gt 0
+
+        # Stop polling once the executor is finished and both queues are empty
+        if (!$hadPipeline -and !$hadHost -and $state.ExecutorDone) {
+            $state.HostQueueTimer.Stop()
+            return
+        }
+        if (!$hadHost) { return }
 
         # Reveal window if in HideUntilContent mode
         if ($HideUntilContent) { & $revealWindow }
@@ -957,13 +979,15 @@ function Show-StreamingOutput {
 
     $Executor.add_OnComplete({
         & $writeDebug "OnComplete handler fired"
+        $state.ExecutorDone = $true
         Invoke-OnCompleteHandler -Context $onCompleteContext
     }.GetNewClosure())
 
     # Handle cancellation with visual feedback
     $Executor.add_OnCancelled({
         & $writeDebug "OnCancelled handler fired"
-        
+        $state.ExecutorDone = $true
+
         # Stop spinner and show cancelled state
         $statusSpinner.Visibility = 'Collapsed'
         $statusWarning.Visibility = 'Visible'
@@ -990,22 +1014,17 @@ function Show-StreamingOutput {
         # If a task is running, ask for confirmation before closing
         # Keep ReadKey dialog open during confirmation so user can still cancel via Escape
         if ($Executor.IsRunning) {
-            # Drop topmost before showing the confirm dialog
+            # Drop topmost so the confirm dialog isn't hidden behind the window
             $wasPinned = $window.Topmost
-            if ($wasPinned) {
-                $window.Topmost = $false
-                Start-Sleep -Milliseconds 500
-            }
+            if ($wasPinned) { $window.Topmost = $false }
 
             $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "A task is still running. Cancel and close?"
             if (!$confirm) {
                 if ($wasPinned) { $window.Topmost = $true }
                 $eventArgs.Cancel = $true
-                # Bring the ReadKey dialog back to front (it may have been hidden behind confirm dialog)
                 [PsUi.KeyCaptureDialog]::BringToFront()
                 return
             }
-            # Task may have finished while dialog was open
         }
         
         # User confirmed (or no task running) - now cancel the input session

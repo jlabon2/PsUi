@@ -13,6 +13,10 @@ function ConvertTo-UiBrush {
         [string]$Color
     )
 
+    # The module-scope initialization above doesn't run when this
+    # function is injected into background runspaces as Global:ConvertTo-UiBrush
+    if (!$script:_brushCache) { $script:_brushCache = @{} }
+
     $cached = $script:_brushCache[$Color]
     if ($cached) { return $cached }
 

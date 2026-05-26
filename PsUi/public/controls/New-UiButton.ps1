@@ -365,7 +365,7 @@ function New-UiButton {
         $btn = $this
 
         $originalContent = $btn.Content
-        
+
         # Capture current button size before swapping content to spinner
         $originalMinWidth  = $btn.MinWidth
         $originalMinHeight = $btn.MinHeight
@@ -391,7 +391,7 @@ function New-UiButton {
         }
 
         $themeColors = Get-ThemeColors
-        
+
         # Use contrasting spinner color for accent buttons
         $isAccentButton = $btn.Tag -is [System.Collections.IDictionary] -and $btn.Tag['IsAccent']
         $spinnerColor = if ($isAccentButton) { $themeColors.AccentHeaderFg } else { $themeColors.Accent }
@@ -422,20 +422,24 @@ function New-UiButton {
             }
             elseif ($ctx.IsCSharpLoaded) {
                 $executor = [PsUi.AsyncExecutor]::new()
-                
+
                 # Store executor in session for Stop-UiAsync cancellation
                 $execSession = [PsUi.SessionManager]::Current
                 if ($execSession) { $execSession.ActiveExecutor = $executor }
-                
+
                 # Set the UI dispatcher for proper thread marshaling (critical for NoOutput mode)
                 $executor.UiDispatcher = $btn.Dispatcher
+
+                # Route the full running lifecycle (start, progress, errors, warnings,
+                # cancellation, completion) to any -AutoProgress / -AutoCancel status bar
+                if ($execSession) { Add-StatusBarAutoWiring -Executor $executor -Session $execSession -ActionName $ctx.Text }
 
                 $currentThemeColors = Get-ThemeColors
                 $varsWithTheme = if ($ctx.CapturedVars) { $ctx.CapturedVars.Clone() } else { @{} }
                 if ($currentThemeColors) {
                     $varsWithTheme['__WPFThemeColors'] = $currentThemeColors
                 }
-                
+
                 # Inject credentials from session.Variables at CLICK TIME (not capture time)
                 $clickSession = [PsUi.SessionManager]::Current
                 if ($clickSession) {

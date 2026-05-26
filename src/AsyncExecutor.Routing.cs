@@ -311,7 +311,7 @@ namespace PsUi
         // Progress with throttling - always fires for completion, otherwise throttled
         internal void RaiseOnProgress(ProgressRecord record)
         {
-            if (OnProgress == null) return;
+            if (OnProgress == null || _suppressProgress) return;
 
             lock (_progressLock)
             {

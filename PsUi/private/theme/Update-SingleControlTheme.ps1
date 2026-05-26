@@ -132,120 +132,135 @@ function Update-SingleControlTheme {
         Set-DatePickerStyle -DatePicker $Control
     }
     elseif ($Control -is [System.Windows.Controls.TextBlock]) {
-        # Inline TextBlock theme update logic (was Update-TextBlockTheme)
-        switch ($Control.Tag) {
-            'AccentBrush'               { $Control.Foreground = ConvertTo-UiBrush $Colors.Accent }
-            'AccentHeaderForegroundBrush' { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
-            'ControlFgBrush'            { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
-            'SecondaryTextBrush'        { $Control.Foreground = ConvertTo-UiBrush $Colors.SecondaryText }
-            'SuccessBrush'              { $Control.Foreground = ConvertTo-UiBrush $Colors.Success }
-            'ErrorBrush'                { $Control.Foreground = ConvertTo-UiBrush $Colors.Error }
-            'AccentText'                { $Control.Foreground = ConvertTo-UiBrush $Colors.Accent }
-            'AccentButtonIcon'          { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
-            'AccentButtonText'          { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
-            'ThemeButtonIcon'           { $Control.Foreground = ConvertTo-UiBrush $Colors.HeaderForeground }
-            'HeaderText'                { $Control.Foreground = ConvertTo-UiBrush $Colors.HeaderForeground }
-            { $_ -in @('TimePickerLabel', 'TimePickerText', 'TimePickerArrowIcon', 'TimePickerColon') } {
+        # Null-tag fast path, the switch below has scriptblock conditions that die on $null input 
+        # when invoked from a dispatched scriptblock
+        $tag = $Control.Tag
+        if ($null -eq $tag) {
+            if ($Control.FontFamily.Source -ne 'Segoe MDL2 Assets') {
                 $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
             }
-            { $_ -in @('CardHeaderIcon', 'CardHeaderText') } {
-                # Card header text/icon - look at parent for accent info
-                $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($Control)
-                while ($parent -and !($parent.Tag -is [System.Collections.IDictionary])) {
-                    $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($parent)
+        }
+        else {
+            switch ($tag) {
+                'AccentBrush'                 { $Control.Foreground = ConvertTo-UiBrush $Colors.Accent }
+                'AccentHeaderForegroundBrush' { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
+                'ControlFgBrush'              { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                'SecondaryTextBrush'          { $Control.Foreground = ConvertTo-UiBrush $Colors.SecondaryText }
+                'SuccessBrush'                { $Control.Foreground = ConvertTo-UiBrush $Colors.Success }
+                'ErrorBrush'                  { $Control.Foreground = ConvertTo-UiBrush $Colors.Error }
+                'AccentText'                  { $Control.Foreground = ConvertTo-UiBrush $Colors.Accent }
+                'AccentButtonIcon'            { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
+                'AccentButtonText'            { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
+                'ThemeButtonIcon'             { $Control.Foreground = ConvertTo-UiBrush $Colors.HeaderForeground }
+                'HeaderText'                  { $Control.Foreground = ConvertTo-UiBrush $Colors.HeaderForeground }
+                'TimePickerLabel'             { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                'TimePickerText'              { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                'TimePickerArrowIcon'         { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                'TimePickerColon'             { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                { $_ -eq 'CardHeaderIcon' -or $_ -eq 'CardHeaderText' } {
+                    # Card header text/icon - look at parent for accent info
+                    $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($Control)
+                    while ($parent -and !($parent.Tag -is [System.Collections.IDictionary])) {
+                        $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($parent)
+                    }
+                    if ($parent -and $parent.Tag -is [System.Collections.IDictionary] -and $parent.Tag['IsAccent']) {
+                        $bgColor = if ($parent.Tag['CustomColor']) { $parent.Tag['CustomColor'] } else { $Colors.Accent }
+                        $Control.Foreground = ConvertTo-UiBrush (Get-ContrastColor -HexColor $bgColor)
+                    }
+                    else {
+                        $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
+                    }
                 }
-                if ($parent -and $parent.Tag -is [System.Collections.IDictionary] -and $parent.Tag['IsAccent']) {
-                    $bgColor = if ($parent.Tag['CustomColor']) { $parent.Tag['CustomColor'] } else { $Colors.Accent }
-                    $Control.Foreground = ConvertTo-UiBrush (Get-ContrastColor -HexColor $bgColor)
-                }
-                else {
-                    $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
-                }
-            }
-            default {
-                # Regular text (not an icon font)
-                if ($Control.FontFamily.Source -ne 'Segoe MDL2 Assets') {
-                    $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
+                default {
+                    # Regular text (not an icon font)
+                    if ($Control.FontFamily.Source -ne 'Segoe MDL2 Assets') {
+                        $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
+                    }
                 }
             }
         }
     }
     elseif ($Control -is [System.Windows.Controls.Border]) {
-        # Inline Border theme update logic (was Update-BorderTheme)
-        switch ($Control.Tag) {
-            'HeaderBorder' {
-                $Control.Background = ConvertTo-UiBrush $Colors.HeaderBackground
+        # Same null-Tag bypass as the TextBlock branch - the switch below has
+        # scriptblock conditions that deadlock on $null when invoked from a
+        # dispatched scriptblock (see TextBlock branch comment).
+        $tag = $Control.Tag
+        if ($null -ne $tag) {
+            # Inline Border theme update logic (was Update-BorderTheme)
+            switch ($tag) {
+                'HeaderBorder' {
+                    $Control.Background = ConvertTo-UiBrush $Colors.HeaderBackground
+                }
+                { $_ -is [hashtable] -and $_.IsStatusBar } {
+                    Update-StatusBarTheme -Bar $Control -Colors $Colors
+                }
+                'PopupBorder' {
+                    $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
+                    $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+                }
+                'CardBorder' {
+                    $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
+                    $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+                }
+                'CardSeparator' {
+                    $Control.Background = ConvertTo-UiBrush $Colors.Border
+                }
+                'ConsoleGutter' {
+                    $Control.Background  = ConvertTo-UiBrush $Colors.WindowBg
+                    $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+                }
+                { $_ -in @('TimePickerBorder', 'TimePickerArrowBorder', 'TimePickerPopupBorder') } {
+                    $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
+                    $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+                }
+                'TimePickerSeparator' {
+                    $Control.Background = ConvertTo-UiBrush $Colors.Border
+                }
+                'Separator_Solid' {
+                    $Control.Background = ConvertTo-UiBrush $Colors.Border
+                }
+                'Separator_Fade' {
+                    # Recreate fade gradient with new border color
+                    $borderColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Border)
+                    $transparentBorder = [System.Windows.Media.Color]::FromArgb(0, $borderColor.R, $borderColor.G, $borderColor.B)
+                    $gradient          = [System.Windows.Media.LinearGradientBrush]::new()
+                    $gradient.StartPoint = [System.Windows.Point]::new(0, 0.5)
+                    $gradient.EndPoint   = [System.Windows.Point]::new(1, 0.5)
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentBorder, 0))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($borderColor, 0.1))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($borderColor, 0.9))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentBorder, 1))
+                    $Control.Background = $gradient
+                }
+                'Separator_Accent' {
+                    # Recreate accent fade gradient
+                    $accentColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Accent)
+                    $transparentAccent = [System.Windows.Media.Color]::FromArgb(0, $accentColor.R, $accentColor.G, $accentColor.B)
+                    $gradient          = [System.Windows.Media.LinearGradientBrush]::new()
+                    $gradient.StartPoint = [System.Windows.Point]::new(0, 0.5)
+                    $gradient.EndPoint   = [System.Windows.Point]::new(1, 0.5)
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentAccent, 0))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($accentColor, 0.15))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($accentColor, 0.85))
+                    [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentAccent, 1))
+                    $Control.Background = $gradient
+                }
             }
-            'StatusBar' {
-                $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-                $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-            'PopupBorder' {
-                $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-                $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-            'CardBorder' {
-                $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-                $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-            'CardSeparator' {
-                $Control.Background = ConvertTo-UiBrush $Colors.Border
-            }
-            'ConsoleGutter' {
-                $Control.Background  = ConvertTo-UiBrush $Colors.WindowBg
-                $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-            { $_ -in @('TimePickerBorder', 'TimePickerArrowBorder', 'TimePickerPopupBorder') } {
-                $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-                $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-            'TimePickerSeparator' {
-                $Control.Background = ConvertTo-UiBrush $Colors.Border
-            }
-            'Separator_Solid' {
-                $Control.Background = ConvertTo-UiBrush $Colors.Border
-            }
-            'Separator_Fade' {
-                # Recreate fade gradient with new border color
-                $borderColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Border)
-                $transparentBorder = [System.Windows.Media.Color]::FromArgb(0, $borderColor.R, $borderColor.G, $borderColor.B)
-                $gradient          = [System.Windows.Media.LinearGradientBrush]::new()
-                $gradient.StartPoint = [System.Windows.Point]::new(0, 0.5)
-                $gradient.EndPoint   = [System.Windows.Point]::new(1, 0.5)
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentBorder, 0))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($borderColor, 0.1))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($borderColor, 0.9))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentBorder, 1))
-                $Control.Background = $gradient
-            }
-            'Separator_Accent' {
-                # Recreate accent fade gradient
-                $accentColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Accent)
-                $transparentAccent = [System.Windows.Media.Color]::FromArgb(0, $accentColor.R, $accentColor.G, $accentColor.B)
-                $gradient          = [System.Windows.Media.LinearGradientBrush]::new()
-                $gradient.StartPoint = [System.Windows.Point]::new(0, 0.5)
-                $gradient.EndPoint   = [System.Windows.Point]::new(1, 0.5)
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentAccent, 0))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($accentColor, 0.15))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($accentColor, 0.85))
-                [void]$gradient.GradientStops.Add([System.Windows.Media.GradientStop]::new($transparentAccent, 1))
-                $Control.Background = $gradient
-            }
-        }
 
-        # Hashtable tags (card headers with accent/custom colors)
-        if ($Control.Tag -is [System.Collections.IDictionary]) {
-            $tagType = $Control.Tag['Type']
-            if ($tagType -eq 'CardHeader') {
-                if ($Control.Tag['CustomColor']) {
-                    $Control.Background = ConvertTo-UiBrush $Control.Tag['CustomColor']
-                }
-                elseif ($Control.Tag['IsAccent']) {
-                    $Control.Background = ConvertTo-UiBrush $Colors.Accent
-                }
-                else {
-                    $headerBgColor = if ($Colors.GroupBoxBg) { $Colors.GroupBoxBg } else { $Colors.WindowBg }
-                    $Control.Background = ConvertTo-UiBrush $headerBgColor
+            # Hashtable tags (card headers with accent/custom colors)
+            if ($tag -is [System.Collections.IDictionary]) {
+                $tagType = $tag['Type']
+                if ($tagType -eq 'CardHeader') {
+                    if ($tag['CustomColor']) {
+                        $Control.Background = ConvertTo-UiBrush $tag['CustomColor']
+                    }
+                    elseif ($tag['IsAccent']) {
+                        $Control.Background = ConvertTo-UiBrush $Colors.Accent
+                    }
+                    else {
+                        $headerBgColor = if ($Colors.GroupBoxBg) { $Colors.GroupBoxBg } else { $Colors.WindowBg }
+                        $Control.Background = ConvertTo-UiBrush $headerBgColor
+                    }
                 }
             }
         }

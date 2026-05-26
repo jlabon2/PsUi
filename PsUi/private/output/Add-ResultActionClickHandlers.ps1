@@ -17,8 +17,6 @@ function Add-ResultActionClickHandlers {
     
     # Unpack captures for closure access
     # There may be a better/cleaner way to do this, but this works.
-    # It is neccessary because the closure created for the click handler
-    # needs to capture the current values of these variables, not references.
     $capturedWindow            = $Captures.Window
     $capturedState             = $Captures.State
     $capturedDataGrid          = $Captures.DataGrid
@@ -170,7 +168,10 @@ function Add-ResultActionClickHandlers {
                 $actionExecutor.ClearHostProvider = {
                     $capturedConsoleParagraph.Inlines.Clear()
                 }
-                
+
+                # Route Write-Progress, Write-Error, Write-Warning to any -AutoProgress status bar
+                if ($actionSession) { Add-StatusBarAutoWiring -Executor $actionExecutor -Session $actionSession }
+
                 # Store selected items, grid, and action name in $capturedState for OnComplete access
                 $capturedState.ActiveGrid = $activeGrid
                 $capturedState.SelectedItems = @($selected | ForEach-Object { $_ })
