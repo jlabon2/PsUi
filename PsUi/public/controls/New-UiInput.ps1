@@ -128,7 +128,7 @@ function New-UiInput {
 
         [switch]$FullWidth,
 
-        [ValidateSet('None', 'FilePicker', 'FolderPicker', 'AdvancedFolderPicker', 'ComputerPicker', 'UserPicker', 'GroupPicker', 'UserGroupPicker')]
+        [ValidateSet('None', 'FilePicker', 'FolderPicker', 'AdvancedFolderPicker', 'ComputerPicker', 'UserPicker', 'GroupPicker', 'UserGroupPicker', 'OUPicker')]
         [string]$HelperButton = 'None',
 
         [Parameter()]
@@ -264,6 +264,7 @@ function New-UiInput {
             'UserPicker'      { [PsUi.ModuleContext]::GetIcon('Contact') }
             'GroupPicker'     { [PsUi.ModuleContext]::GetIcon('People') }
             'UserGroupPicker' { [PsUi.ModuleContext]::GetIcon('People') }
+            'OUPicker'        { [PsUi.ModuleContext]::GetIcon('People') }
         }
         $helperBtn.ToolTip = switch ($HelperButton) {
             'FilePicker'          { 'Browse for file...' }
@@ -273,6 +274,7 @@ function New-UiInput {
             'UserPicker'      { 'Select user...' }
             'GroupPicker'     { 'Select group...' }
             'UserGroupPicker' { 'Select user or group...' }
+            'OUPicker'        { 'Select organizational unit...' }
         }
 
         $iconBlock = [System.Windows.Controls.TextBlock]::new()
@@ -311,6 +313,18 @@ function New-UiInput {
                     'UserPicker'      { $picked = Show-WindowsObjectPicker -ObjectType User; if ($picked) { $result = $picked.RawValue } }
                     'GroupPicker'     { $picked = Show-WindowsObjectPicker -ObjectType Group; if ($picked) { $result = $picked.RawValue } }
                     'UserGroupPicker' { $picked = Show-WindowsObjectPicker -ObjectType User, Group; if ($picked) { $result = $picked.RawValue } }
+                    'OUPicker' {
+                        try { $picked = Show-UiOuPicker }
+                        catch {
+                            # Not domain-joined - prompt for server and credentials
+                            $server = Show-UiInputDialog -Title 'OU Picker - No Domain Detected' -Prompt 'This machine is not joined to a domain. Enter a domain controller hostname or IP to browse organizational units remotely:'
+                            if ($server) {
+                                $cred = Show-UiCredentialDialog -Caption 'OU Picker - Remote Connection' -Message "Enter credentials with permission to browse OUs on $server"
+                                if ($cred) { $picked = Show-UiOuPicker -Server $server -Credential $cred }
+                            }
+                        }
+                        if ($picked) { $result = $picked.DistinguishedName }
+                    }
                 }
 
                 if ($result) {

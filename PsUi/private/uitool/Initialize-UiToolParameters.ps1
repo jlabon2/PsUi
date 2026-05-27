@@ -391,16 +391,13 @@ function Initialize-UiToolParameters {
             $needsGroupPicker  = $InputHelpers.GroupPicker -contains $param.Name
             $needsMemberPicker = $InputHelpers.MemberPicker -contains $param.Name
 
-            # Computer and OU pickers require domain membership
+            # Computer picker requires domain membership; OU picker prompts for server if needed
             $needsComputerPicker = $false
-            $needsOUPicker       = $false
-            if ($InputHelpers.ComputerPicker -contains $param.Name -or $InputHelpers.OUPicker -contains $param.Name) {
+            $needsOUPicker       = $InputHelpers.OUPicker -contains $param.Name
+            if ($InputHelpers.ComputerPicker -contains $param.Name) {
                 try {
                     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
-                    if ($cs.PartOfDomain) {
-                        $needsComputerPicker = $InputHelpers.ComputerPicker -contains $param.Name
-                        $needsOUPicker       = $InputHelpers.OUPicker -contains $param.Name
-                    }
+                    if ($cs.PartOfDomain) { $needsComputerPicker = $true }
                 }
                 catch { Write-Debug "Domain check failed: $_" }
             }
@@ -551,7 +548,15 @@ function Initialize-UiToolParameters {
                                 }
                             }
                             'OU' {
-                                $picked = Show-UiOuPicker
+                                try { $picked = Show-UiOuPicker  }
+                                catch {
+                                    # Not domain-joined - prompt for server and credentials
+                                    $server = Show-UiInputDialog -Title 'OU Picker - No Domain Detected' -Prompt 'This machine is not joined to a domain. Enter a domain controller hostname or IP to browse organizational units remotely:'
+                                    if ($server) {
+                                        $cred = Show-UiCredentialDialog -Caption 'OU Picker - Remote Connection' -Message "Enter credentials with permission to browse OUs on $server"
+                                        if ($cred) { $picked = Show-UiOuPicker -Server $server -Credential $cred }
+                                    }
+                                }
                                 if ($picked) { $result = $picked.DistinguishedName }
                             }
                             'Filter' {

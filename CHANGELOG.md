@@ -38,6 +38,7 @@ Standalone progress bar control, independent from the status bar's embedded one.
 #### Other
 
 - **New-UiTool**: Added UserPicker, GroupPicker, MemberPicker, and OUPicker input helpers. Auto-detected from parameter names or assignable via `UserPickerParameters`, `GroupPickerParameters`, `MemberPickerParameters`, and `OUPickerParameters` parameters. Click the browse button to open the native Windows object picker.
+- **New-UiInput**: Added `OUPicker` helper button. On non-domain machines, prompts for a domain controller hostname/IP and credentials before opening the OU browser.
 - **Show-UiOuPicker**: Wraps DsBrowseForContainerW (the native OU picker that ADUC and GPMC use). Returns Name, DistinguishedName, AdsPath. Supports alternate credentials, custom root DN, hidden containers, and a target DC. Works from UI and background runspace threads. The dialog itself is pretty horrendous - it lazy-loads containers and always shows a (+) icon even on empty OUs. Placeholder until we build something better.
 - **New-UiWindow**: `-Theme Auto` is now the default. Reads the system light/dark preference from the registry and applies the matching theme. Falls back to Light if the key is missing.
 - **New-UiDropdown**: `-OnChange` scriptblock fires on selection change. Receives the new value, matching New-UiDropdownButton behavior.
