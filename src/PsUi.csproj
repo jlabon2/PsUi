@@ -11,8 +11,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     
     <!-- Output to module's lib folder, organized by framework -->
-    <OutputPath>..\PsUi\lib\$(TargetFramework)\</OutputPath>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>..\PsUi\lib\</OutputPath>
     
     <!-- Copy WebView2 dependencies to output; PowerShell SDK is excluded via PrivateAssets -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>

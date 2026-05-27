@@ -37,6 +37,7 @@ Standalone progress bar control, independent from the status bar's embedded one.
 
 #### Other
 
+- **New-UiTool**: Added UserPicker, GroupPicker, MemberPicker, and OUPicker input helpers. Auto-detected from parameter names or assignable via `UserPickerParameters`, `GroupPickerParameters`, `MemberPickerParameters`, and `OUPickerParameters` parameters. Click the browse button to open the native Windows object picker.
 - **Show-UiOuPicker**: Wraps DsBrowseForContainerW (the native OU picker that ADUC and GPMC use). Returns Name, DistinguishedName, AdsPath. Supports alternate credentials, custom root DN, hidden containers, and a target DC. Works from UI and background runspace threads. The dialog itself is pretty horrendous - it lazy-loads containers and always shows a (+) icon even on empty OUs. Placeholder until we build something better.
 - **New-UiWindow**: `-Theme Auto` is now the default. Reads the system light/dark preference from the registry and applies the matching theme. Falls back to Light if the key is missing.
 - **New-UiDropdown**: `-OnChange` scriptblock fires on selection change. Receives the new value, matching New-UiDropdownButton behavior.
@@ -58,6 +59,10 @@ Standalone progress bar control, independent from the status bar's embedded one.
 #### Theme System
 
 - **Update-SingleControlTheme**: Null Tag on TextBlocks and Borders was silently killing the switch statement when the function ran from a dispatched scriptblock. Certain theme updates (foreground colors, border backgrounds) would just not apply - no error, no warning, the dispatcher swallowed the failure entirely. Added null-tag fast paths that skip the switch and apply defaults directly.
+
+#### Native Dialogs
+
+- **Show-WindowsObjectPicker**: Fixed "No locations can be found" on workgroup, DCs, and, in some instances, domain joined machines. Now auto-detects domain membership via `NetGetJoinInformation` and zeroes uplevel filters on workgroup machines. Also added `SKIP_TARGET_COMPUTER_DC_CHECK` so the picker works on domain controllers, and a progressive fallback chain (local+domain+GC -> local+domain -> local) for domain-joined machines. Added `DiagnoseInit` method for troubleshooting scope failures because this is an absolute nightmare to debug.
 
 #### Other
 

@@ -26,7 +26,7 @@ function Initialize-UiToolParameters {
         $ThemeColors = Get-ThemeColors
     }
     if (!$InputHelpers) {
-        $InputHelpers = @{ FilePicker = @(); FolderPicker = @() }
+        $InputHelpers = @{ FilePicker = @(); FolderPicker = @(); UserPicker = @(); GroupPicker = @(); MemberPicker = @(); OUPicker = @() }
     }
 
     $isFirstParam = $true
@@ -386,20 +386,27 @@ function Initialize-UiToolParameters {
             $needsFilterBuilder  = $InputHelpers.FilterBuilder.ContainsKey($param.Name)
             $filterMode          = if ($needsFilterBuilder) { $InputHelpers.FilterBuilder[$param.Name] } else { 'Generic' }
 
-            # Computer picker only works on domain-joined machines
+            # User, Group, and Member pickers work with local accounts on any machine
+            $needsUserPicker   = $InputHelpers.UserPicker -contains $param.Name
+            $needsGroupPicker  = $InputHelpers.GroupPicker -contains $param.Name
+            $needsMemberPicker = $InputHelpers.MemberPicker -contains $param.Name
+
+            # Computer and OU pickers require domain membership
             $needsComputerPicker = $false
-            if ($InputHelpers.ComputerPicker -contains $param.Name) {
+            $needsOUPicker       = $false
+            if ($InputHelpers.ComputerPicker -contains $param.Name -or $InputHelpers.OUPicker -contains $param.Name) {
                 try {
                     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
                     if ($cs.PartOfDomain) {
-                        $needsComputerPicker = $true
+                        $needsComputerPicker = $InputHelpers.ComputerPicker -contains $param.Name
+                        $needsOUPicker       = $InputHelpers.OUPicker -contains $param.Name
                     }
                 }
                 catch { Write-Debug "Domain check failed: $_" }
             }
 
             # Only add helper to TextBox controls
-            if (($needsFilePicker -or $needsFolderPicker -or $needsComputerPicker -or $needsFilterBuilder) -and $control -is [System.Windows.Controls.TextBox]) {
+            if (($needsFilePicker -or $needsFolderPicker -or $needsComputerPicker -or $needsUserPicker -or $needsGroupPicker -or $needsMemberPicker -or $needsOUPicker -or $needsFilterBuilder) -and $control -is [System.Windows.Controls.TextBox]) {
                 # Create a wrapper grid: [TextBox][Button]
                 $wrapperGrid = [System.Windows.Controls.Grid]::new()
                 $wrapperGrid.Margin = $control.Margin
@@ -441,9 +448,31 @@ function Initialize-UiToolParameters {
                 elseif ($needsComputerPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Desktop')
                     $helperBtn.ToolTip = 'Select computer...'
-                    # Array parameters get multi-select in the picker
                     $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
-                    $helperBtn.Tag = @{ Mode = 'Computer'; TextBox = $control; ThemeColors = $ThemeColors; MultiSelect = $isArray }
+                    $helperBtn.Tag = @{ Mode = 'Computer'; TextBox = $control; MultiSelect = $isArray }
+                }
+                elseif ($needsUserPicker) {
+                    $iconCode = [PsUi.ModuleContext]::GetIcon('Contact')
+                    $helperBtn.ToolTip = 'Select user...'
+                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
+                    $helperBtn.Tag = @{ Mode = 'User'; TextBox = $control; MultiSelect = $isArray }
+                }
+                elseif ($needsGroupPicker) {
+                    $iconCode = [PsUi.ModuleContext]::GetIcon('Group')
+                    $helperBtn.ToolTip = 'Select group...'
+                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
+                    $helperBtn.Tag = @{ Mode = 'Group'; TextBox = $control; MultiSelect = $isArray }
+                }
+                elseif ($needsMemberPicker) {
+                    $iconCode = [PsUi.ModuleContext]::GetIcon('People')
+                    $helperBtn.ToolTip = 'Select user or group...'
+                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
+                    $helperBtn.Tag = @{ Mode = 'Member'; TextBox = $control; MultiSelect = $isArray }
+                }
+                elseif ($needsOUPicker) {
+                    $iconCode = [PsUi.ModuleContext]::GetIcon('People')
+                    $helperBtn.ToolTip = 'Select organizational unit...'
+                    $helperBtn.Tag = @{ Mode = 'OU'; TextBox = $control }
                 }
                 elseif ($needsFilterBuilder) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Filter')
@@ -477,7 +506,6 @@ function Initialize-UiToolParameters {
                                 $multi = if ($info.MultiSelect) { $true } else { $false }
                                 $picked = Show-WindowsObjectPicker -ObjectType Computer -MultiSelect:$multi
                                 if ($picked) {
-                                    # Extract RawValue from picker result objects
                                     if ($picked -is [array]) {
                                         $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
                                     }
@@ -485,6 +513,46 @@ function Initialize-UiToolParameters {
                                         $result = $picked.RawValue
                                     }
                                 }
+                            }
+                            'User' {
+                                $multi = if ($info.MultiSelect) { $true } else { $false }
+                                $picked = Show-WindowsObjectPicker -ObjectType User -MultiSelect:$multi
+                                if ($picked) {
+                                    if ($picked -is [array]) {
+                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
+                                    }
+                                    else {
+                                        $result = $picked.RawValue
+                                    }
+                                }
+                            }
+                            'Group' {
+                                $multi = if ($info.MultiSelect) { $true } else { $false }
+                                $picked = Show-WindowsObjectPicker -ObjectType Group -MultiSelect:$multi
+                                if ($picked) {
+                                    if ($picked -is [array]) {
+                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
+                                    }
+                                    else {
+                                        $result = $picked.RawValue
+                                    }
+                                }
+                            }
+                            'Member' {
+                                $multi = if ($info.MultiSelect) { $true } else { $false }
+                                $picked = Show-WindowsObjectPicker -ObjectType User,Group -MultiSelect:$multi
+                                if ($picked) {
+                                    if ($picked -is [array]) {
+                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
+                                    }
+                                    else {
+                                        $result = $picked.RawValue
+                                    }
+                                }
+                            }
+                            'OU' {
+                                $picked = Show-UiOuPicker
+                                if ($picked) { $result = $picked.DistinguishedName }
                             }
                             'Filter' {
                                 $fMode = if ($info.FilterMode) { $info.FilterMode } else { 'Generic' }

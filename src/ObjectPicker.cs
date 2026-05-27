@@ -170,29 +170,14 @@ namespace PsUi
             ref Guid riid,
             out IntPtr ppv);
 
-        [DllImport("ole32.dll")]
-        private static extern void ReleaseStgMedium(ref STGMEDIUM pmedium);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct STGMEDIUM
-        {
-            public uint tymed;
-            public IntPtr unionmember;
-            public IntPtr pUnkForRelease;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct FORMATETC
-        {
-            public ushort cfFormat;
-            public IntPtr ptd;
-            public uint dwAspect;
-            public int lindex;
-            public uint tymed;
-        }
-
         [DllImport("user32.dll")]
         private static extern ushort RegisterClipboardFormat(string lpszFormat);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetConsoleWindow();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GlobalLock(IntPtr hMem);
@@ -200,6 +185,157 @@ namespace PsUi
         [DllImport("kernel32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GlobalUnlock(IntPtr hMem);
+
+        [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+        private static extern int NetGetJoinInformation(
+            string server, out IntPtr domain, out int status);
+
+        [DllImport("netapi32.dll")]
+        private static extern int NetApiBufferFree(IntPtr buffer);
+
+        private const int NETSETUP_DOMAIN_NAME = 3;
+
+        public static bool IsDomainJoined()
+        {
+            IntPtr pDomain;
+            int joinStatus;
+            int hr = NetGetJoinInformation(null, out pDomain, out joinStatus);
+            if (hr == 0)
+            {
+                NetApiBufferFree(pDomain);
+                return joinStatus == NETSETUP_DOMAIN_NAME;
+            }
+            return false;
+        }
+
+        // Various diagnostic tests for future debugging, since DSObjectPicker seems to die every other week
+        public static string DiagnoseInit(ObjectTypes objectTypes)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("ObjectTypes: " + objectTypes.ToString() + " (" + ((int)objectTypes).ToString() + ")");
+            sb.AppendLine("Domain joined: " + IsDomainJoined());
+            sb.AppendLine("ScopeInfo size: " + Marshal.SizeOf(typeof(DSOP_SCOPE_INIT_INFO)));
+            sb.AppendLine("InitInfo size: " + Marshal.SizeOf(typeof(DSOP_INIT_INFO)));
+            sb.AppendLine("IntPtr size: " + IntPtr.Size);
+
+            // Build filter flags (local uses SAM-safe filters, no global groups)
+            uint localDownlevel = 0;
+            uint uplevel = 0;
+            if ((objectTypes & ObjectTypes.Users) != 0)
+            {
+                localDownlevel |= DSOP_DOWNLEVEL_FILTER_USERS;
+                uplevel |= DSOP_FILTER_USERS;
+            }
+            if ((objectTypes & ObjectTypes.Groups) != 0)
+            {
+                localDownlevel |= DSOP_DOWNLEVEL_FILTER_LOCAL_GROUPS |
+                                  DSOP_DOWNLEVEL_FILTER_ALL_WELLKNOWN_SIDS;
+                uplevel |= DSOP_FILTER_BUILTIN_GROUPS | DSOP_FILTER_WELL_KNOWN_PRINCIPALS |
+                           DSOP_FILTER_GLOBAL_GROUPS_SE | DSOP_FILTER_UNIVERSAL_GROUPS_SE |
+                           DSOP_FILTER_DOMAIN_LOCAL_GROUPS_SE;
+            }
+            if ((objectTypes & ObjectTypes.Computers) != 0)
+            {
+                localDownlevel |= DSOP_DOWNLEVEL_FILTER_COMPUTERS;
+                uplevel |= DSOP_FILTER_COMPUTERS;
+            }
+
+            sb.AppendLine("Local downlevel: 0x" + localDownlevel.ToString("X8"));
+            sb.AppendLine("Uplevel: 0x" + uplevel.ToString("X8"));
+
+            // Test 1: local scope only with downlevel filter
+            sb.AppendLine("Test 1: TARGET_COMPUTER downlevel only");
+            sb.AppendLine("  " + TestSingleScope(
+                DSOP_SCOPE_TYPE_TARGET_COMPUTER,
+                DSOP_SCOPE_FLAG_STARTING_SCOPE | DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT,
+                0, localDownlevel, 0));
+
+            // Test 2: local scope with both uplevel and downlevel
+            sb.AppendLine("Test 2: TARGET_COMPUTER both filters");
+            sb.AppendLine("  " + TestSingleScope(
+                DSOP_SCOPE_TYPE_TARGET_COMPUTER,
+                DSOP_SCOPE_FLAG_STARTING_SCOPE | DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT,
+                uplevel, localDownlevel, 0));
+
+            // Test 3: local scope with SKIP_DC_CHECK
+            sb.AppendLine("Test 3: TARGET_COMPUTER + SKIP_DC_CHECK");
+            sb.AppendLine("  " + TestSingleScope(
+                DSOP_SCOPE_TYPE_TARGET_COMPUTER,
+                DSOP_SCOPE_FLAG_STARTING_SCOPE | DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT,
+                0, localDownlevel, DSOP_FLAG_SKIP_TARGET_COMPUTER_DC_CHECK));
+
+            // Test 4: combined local+domain scope
+            sb.AppendLine("Test 4: TARGET_COMPUTER + UPLEVEL_JOINED + DOWNLEVEL_JOINED");
+            sb.AppendLine("  " + TestSingleScope(
+                DSOP_SCOPE_TYPE_TARGET_COMPUTER |
+                DSOP_SCOPE_TYPE_UPLEVEL_JOINED_DOMAIN |
+                DSOP_SCOPE_TYPE_DOWNLEVEL_JOINED_DOMAIN,
+                DSOP_SCOPE_FLAG_STARTING_SCOPE |
+                DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT |
+                DSOP_SCOPE_FLAG_WANT_PROVIDER_LDAP,
+                uplevel, localDownlevel, DSOP_FLAG_SKIP_TARGET_COMPUTER_DC_CHECK));
+
+            return sb.ToString();
+        }
+
+        private static string TestSingleScope(uint scopeType, uint scopeFlags, uint uplevel, uint downlevel, uint initOptions)
+        {
+            IDsObjectPicker picker = null;
+            try
+            {
+                Guid clsid = CLSID_DsObjectPicker;
+                Guid iid = typeof(IDsObjectPicker).GUID;
+                IntPtr pPicker;
+                int hr = CoCreateInstance(ref clsid, IntPtr.Zero, 1, ref iid, out pPicker);
+                if (hr != 0) { return "CoCreateInstance failed: 0x" + hr.ToString("X8"); }
+
+                picker = (IDsObjectPicker)Marshal.GetObjectForIUnknown(pPicker);
+                Marshal.Release(pPicker);
+
+                int scopeSize = Marshal.SizeOf(typeof(DSOP_SCOPE_INIT_INFO));
+                var scope = new DSOP_SCOPE_INIT_INFO();
+                scope.cbSize = (uint)scopeSize;
+                scope.flType = scopeType;
+                scope.flScope = scopeFlags;
+                scope.FilterFlags.Uplevel.flBothModes = uplevel;
+                scope.FilterFlags.flDownlevel = downlevel;
+
+                IntPtr pScope = Marshal.AllocHGlobal(scopeSize);
+                try
+                {
+                    Marshal.StructureToPtr(scope, pScope, false);
+
+                    var initInfo = new DSOP_INIT_INFO();
+                    initInfo.cbSize = (uint)Marshal.SizeOf(typeof(DSOP_INIT_INFO));
+                    initInfo.pwzTargetComputer = IntPtr.Zero;
+                    initInfo.cDsScopeInfos = 1;
+                    initInfo.aDsScopeInfos = pScope;
+                    initInfo.flOptions = initOptions;
+                    initInfo.cAttributesToFetch = 0;
+                    initInfo.apwzAttributeNames = IntPtr.Zero;
+
+                    hr = picker.Initialize(ref initInfo);
+                    if (hr == 0) { return "OK"; }
+                    return "FAILED: 0x" + hr.ToString("X8");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(pScope);
+                }
+            }
+            catch (Exception ex)
+            {
+                return "Exception: " + ex.Message;
+            }
+            finally
+            {
+                if (picker != null)
+                {
+                    try { Marshal.ReleaseComObject(picker); }
+                    catch { }
+                }
+            }
+        }
 
         public static string[] ShowComputerPicker(IntPtr hwndParent, bool multiSelect = false)
         {
@@ -252,45 +388,39 @@ namespace PsUi
             return ShowObjectPickerCore(hwndParent, objectTypes, multiSelect);
         }
 
-        // Retries on E_INVALIDARG since stale COM state can cause transient failures
+        // Tries progressively simpler scope configs on E_INVALIDARG: local+domain+GC -> local+domain -> local only.
+        // On workgroup machines, skips domain/GC scopes entirely.
         private static string[] ShowObjectPickerCore(IntPtr hwndParent, ObjectTypes objectTypes, bool multiSelect)
         {
-            // E_INVALIDARG (0x80070057) can occur when COM state is stale from a previous session
-            const int maxRetries = 2;
-            
-            for (int attempt = 0; attempt < maxRetries; attempt++)
+            bool domainJoined = IsDomainJoined();
+            int startScopes = domainJoined ? 3 : 1;
+            string[] lastResults = null;
+
+            for (int maxScopes = startScopes; maxScopes >= 1; maxScopes--)
             {
-                var results = ShowObjectPickerCoreInternal(hwndParent, objectTypes, multiSelect);
-                
-                // Check for E_INVALIDARG error which can indicate stale COM state
-                if (results.Length == 1 && results[0].Contains("0x80070057"))
+                lastResults = ShowObjectPickerCoreInternal(hwndParent, objectTypes, multiSelect, maxScopes, !domainJoined);
+
+                if (lastResults.Length == 0 || lastResults[0] == null || !lastResults[0].Contains("0x80070057"))
                 {
-                    // Force COM cleanup and retry
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-                    continue;
+                    return lastResults;
                 }
-                
-                return results;
             }
-            
-            // All retries failed
-            return new string[] { "ERROR: DSObjectPicker failed after " + maxRetries + " attempts (E_INVALIDARG)" };
+
+            return lastResults ?? new string[] { "ERROR: All scope configurations failed (E_INVALIDARG)" };
         }
 
-        private static string[] ShowObjectPickerCoreInternal(IntPtr hwndParent, ObjectTypes objectTypes, bool multiSelect)
+        private static string[] ShowObjectPickerCoreInternal(IntPtr hwndParent, ObjectTypes objectTypes, bool multiSelect, int maxScopes, bool workgroupMode)
         {
             var results = new List<string>();
             IDsObjectPicker picker = null;
 
             try
             {
-                // Create the picker COM object
                 Guid clsid = CLSID_DsObjectPicker;
                 Guid iid = typeof(IDsObjectPicker).GUID;
                 IntPtr pPicker;
                 int hr = CoCreateInstance(ref clsid, IntPtr.Zero, 1 /* CLSCTX_INPROC_SERVER */, ref iid, out pPicker);
-                
+
                 if (hr != 0)
                 {
                     throw new Exception("Failed to create DSObjectPicker: 0x" + hr.ToString("X8"));
@@ -299,38 +429,57 @@ namespace PsUi
                 picker = (IDsObjectPicker)Marshal.GetObjectForIUnknown(pPicker);
                 Marshal.Release(pPicker);
 
-                // Build downlevel filter flags (for local/workgroup machines)
-                uint downlevelFilter = 0;
-                if ((objectTypes & ObjectTypes.Users) != 0)
+                // InvokeDialog requires a valid parent window handle (NULL causes E_INVALIDARG)
+                if (hwndParent == IntPtr.Zero)
                 {
-                    downlevelFilter |= DSOP_DOWNLEVEL_FILTER_USERS;
+                    hwndParent = GetConsoleWindow();
                 }
-                if ((objectTypes & ObjectTypes.Groups) != 0)
+                if (hwndParent == IntPtr.Zero)
                 {
-                    // Include local groups and all well-known SIDs (Administrators, Users, etc.)
-                    downlevelFilter |= DSOP_DOWNLEVEL_FILTER_LOCAL_GROUPS | 
-                                       DSOP_DOWNLEVEL_FILTER_GLOBAL_GROUPS |
-                                       DSOP_DOWNLEVEL_FILTER_ALL_WELLKNOWN_SIDS;
-                }
-                if ((objectTypes & ObjectTypes.Computers) != 0)
-                {
-                    downlevelFilter |= DSOP_DOWNLEVEL_FILTER_COMPUTERS;
+                    hwndParent = GetForegroundWindow();
                 }
 
-                // Build uplevel filter for domain scopes (Active Directory)
+                // Local downlevel filter: only object types that exist in the local SAM.
+                // Global groups are a domain-only concept and cause E_INVALIDARG on workgroup machines.
+                uint localDownlevelFilter = 0;
+                if ((objectTypes & ObjectTypes.Users) != 0)
+                    localDownlevelFilter |= DSOP_DOWNLEVEL_FILTER_USERS;
+                if ((objectTypes & ObjectTypes.Groups) != 0)
+                    localDownlevelFilter |= DSOP_DOWNLEVEL_FILTER_LOCAL_GROUPS |
+                                            DSOP_DOWNLEVEL_FILTER_ALL_WELLKNOWN_SIDS;
+                if ((objectTypes & ObjectTypes.Computers) != 0)
+                    localDownlevelFilter |= DSOP_DOWNLEVEL_FILTER_COMPUTERS;
+
+                // Domain downlevel filter: adds global groups which only exist in domain context
+                uint domainDownlevelFilter = localDownlevelFilter;
+                if ((objectTypes & ObjectTypes.Groups) != 0)
+                    domainDownlevelFilter |= DSOP_DOWNLEVEL_FILTER_GLOBAL_GROUPS;
+
+                // Uplevel filter (LDAP provider - Active Directory)
                 uint uplevelFilter = 0;
                 if ((objectTypes & ObjectTypes.Users) != 0)
                     uplevelFilter |= DSOP_FILTER_USERS;
                 if ((objectTypes & ObjectTypes.Groups) != 0)
-                    uplevelFilter |= DSOP_FILTER_BUILTIN_GROUPS | DSOP_FILTER_WELL_KNOWN_PRINCIPALS | 
-                                     DSOP_FILTER_GLOBAL_GROUPS_SE | DSOP_FILTER_UNIVERSAL_GROUPS_SE | 
+                    uplevelFilter |= DSOP_FILTER_BUILTIN_GROUPS | DSOP_FILTER_WELL_KNOWN_PRINCIPALS |
+                                     DSOP_FILTER_GLOBAL_GROUPS_SE | DSOP_FILTER_UNIVERSAL_GROUPS_SE |
                                      DSOP_FILTER_DOMAIN_LOCAL_GROUPS_SE |
                                      DSOP_FILTER_GLOBAL_GROUPS_DL | DSOP_FILTER_UNIVERSAL_GROUPS_DL |
                                      DSOP_FILTER_DOMAIN_LOCAL_GROUPS_DL;
                 if ((objectTypes & ObjectTypes.Computers) != 0)
                     uplevelFilter |= DSOP_FILTER_COMPUTERS;
 
-                // Build default filter scope flags
+                // GC-safe uplevel: strip domain-local and builtin groups (not replicated to GC)
+                uint gcUplevelFilter = 0;
+                if ((objectTypes & ObjectTypes.Users) != 0)
+                    gcUplevelFilter |= DSOP_FILTER_USERS;
+                if ((objectTypes & ObjectTypes.Groups) != 0)
+                    gcUplevelFilter |= DSOP_FILTER_WELL_KNOWN_PRINCIPALS |
+                                       DSOP_FILTER_GLOBAL_GROUPS_SE | DSOP_FILTER_UNIVERSAL_GROUPS_SE |
+                                       DSOP_FILTER_GLOBAL_GROUPS_DL | DSOP_FILTER_UNIVERSAL_GROUPS_DL;
+                if ((objectTypes & ObjectTypes.Computers) != 0)
+                    gcUplevelFilter |= DSOP_FILTER_COMPUTERS;
+
+                // Pre-check the object type checkboxes in the dialog
                 uint defaultFilterFlags = 0;
                 if ((objectTypes & ObjectTypes.Users) != 0)
                     defaultFilterFlags |= DSOP_SCOPE_FLAG_DEFAULT_FILTER_USERS;
@@ -339,37 +488,51 @@ namespace PsUi
                 if ((objectTypes & ObjectTypes.Computers) != 0)
                     defaultFilterFlags |= DSOP_SCOPE_FLAG_DEFAULT_FILTER_COMPUTERS;
 
-                // Create multiple scopes - one for local, one for domain
-                // This avoids E_INVALIDARG from incompatible scope flag combinations
                 var scopeList = new List<DSOP_SCOPE_INIT_INFO>();
                 int scopeSize = Marshal.SizeOf(typeof(DSOP_SCOPE_INIT_INFO));
 
-                // Scope 1: Local computer (always include for fallback)
+                // Scope 1 (always): local computer - uses local SAM filter (no global groups)
                 var localScope = new DSOP_SCOPE_INIT_INFO();
                 localScope.cbSize = (uint)scopeSize;
                 localScope.flType = DSOP_SCOPE_TYPE_TARGET_COMPUTER;
-                localScope.flScope = DSOP_SCOPE_FLAG_STARTING_SCOPE | DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT | defaultFilterFlags;
-                localScope.FilterFlags.flDownlevel = downlevelFilter;
+                localScope.flScope = DSOP_SCOPE_FLAG_STARTING_SCOPE |
+                                     DSOP_SCOPE_FLAG_WANT_PROVIDER_WINNT |
+                                     DSOP_SCOPE_FLAG_WANT_SID_PATH |
+                                     DSOP_SCOPE_FLAG_WANT_DOWNLEVEL_BUILTIN_PATH |
+                                     defaultFilterFlags;
+                // Workgroup machines access TARGET_COMPUTER via WinNT (downlevel only).
+                // Non-zero uplevel filters cause the scope to be silently discarded.
+                if (!workgroupMode)
+                {
+                    localScope.FilterFlags.Uplevel.flBothModes = uplevelFilter;
+                }
+                localScope.FilterFlags.flDownlevel = localDownlevelFilter;
                 scopeList.Add(localScope);
 
-                // Scope 2: Domain (for domain-joined machines)
-                var domainScope = new DSOP_SCOPE_INIT_INFO();
-                domainScope.cbSize = (uint)scopeSize;
-                domainScope.flType = DSOP_SCOPE_TYPE_UPLEVEL_JOINED_DOMAIN | DSOP_SCOPE_TYPE_DOWNLEVEL_JOINED_DOMAIN;
-                domainScope.flScope = DSOP_SCOPE_FLAG_WANT_PROVIDER_LDAP | defaultFilterFlags;
-                domainScope.FilterFlags.Uplevel.flBothModes = uplevelFilter;
-                domainScope.FilterFlags.flDownlevel = downlevelFilter;
-                scopeList.Add(domainScope);
+                // Scope 2 (if maxScopes >= 2): joined domain - includes global groups
+                if (maxScopes >= 2)
+                {
+                    var domainScope = new DSOP_SCOPE_INIT_INFO();
+                    domainScope.cbSize = (uint)scopeSize;
+                    domainScope.flType = DSOP_SCOPE_TYPE_UPLEVEL_JOINED_DOMAIN |
+                                         DSOP_SCOPE_TYPE_DOWNLEVEL_JOINED_DOMAIN;
+                    domainScope.flScope = DSOP_SCOPE_FLAG_WANT_PROVIDER_LDAP | defaultFilterFlags;
+                    domainScope.FilterFlags.Uplevel.flBothModes = uplevelFilter;
+                    domainScope.FilterFlags.flDownlevel = domainDownlevelFilter;
+                    scopeList.Add(domainScope);
+                }
 
-                // Scope 3: Global Catalog (for enterprise-wide searches)
-                var gcScope = new DSOP_SCOPE_INIT_INFO();
-                gcScope.cbSize = (uint)scopeSize;
-                gcScope.flType = DSOP_SCOPE_TYPE_GLOBAL_CATALOG;
-                gcScope.flScope = DSOP_SCOPE_FLAG_WANT_PROVIDER_GC | defaultFilterFlags;
-                gcScope.FilterFlags.Uplevel.flBothModes = uplevelFilter;
-                scopeList.Add(gcScope);
+                // Scope 3 (if maxScopes >= 3): Global Catalog with GC-safe filter
+                if (maxScopes >= 3 && gcUplevelFilter != 0)
+                {
+                    var gcScope = new DSOP_SCOPE_INIT_INFO();
+                    gcScope.cbSize = (uint)scopeSize;
+                    gcScope.flType = DSOP_SCOPE_TYPE_GLOBAL_CATALOG;
+                    gcScope.flScope = DSOP_SCOPE_FLAG_WANT_PROVIDER_GC | defaultFilterFlags;
+                    gcScope.FilterFlags.Uplevel.flBothModes = gcUplevelFilter;
+                    scopeList.Add(gcScope);
+                }
 
-                // Allocate array of scope structs
                 System.Runtime.InteropServices.ComTypes.IDataObject dataObject = null;
                 IntPtr pScopeInfos = Marshal.AllocHGlobal(scopeSize * scopeList.Count);
                 try
@@ -380,21 +543,26 @@ namespace PsUi
                         Marshal.StructureToPtr(scopeList[i], pScope, false);
                     }
 
-                    // Create init info
                     var initInfo = new DSOP_INIT_INFO();
                     initInfo.cbSize = (uint)Marshal.SizeOf(typeof(DSOP_INIT_INFO));
                     initInfo.pwzTargetComputer = IntPtr.Zero;
                     initInfo.cDsScopeInfos = (uint)scopeList.Count;
                     initInfo.aDsScopeInfos = pScopeInfos;
-                    initInfo.flOptions = multiSelect ? DSOP_FLAG_MULTISELECT : 0;
+                    initInfo.flOptions = DSOP_FLAG_SKIP_TARGET_COMPUTER_DC_CHECK |
+                                         (multiSelect ? DSOP_FLAG_MULTISELECT : 0);
                     initInfo.cAttributesToFetch = 0;
                     initInfo.apwzAttributeNames = IntPtr.Zero;
 
-                    // Initialize the picker
                     hr = picker.Initialize(ref initInfo);
                     if (hr != 0)
                     {
-                        results.Add("ERROR: Initialize returned 0x" + hr.ToString("X8"));
+                        results.Add("ERROR: Initialize returned 0x" + hr.ToString("X8") +
+                            " (objectTypes=" + objectTypes.ToString() +
+                            ", scopes=" + scopeList.Count +
+                            ", uplevel=0x" + uplevelFilter.ToString("X8") +
+                            ", localDL=0x" + localDownlevelFilter.ToString("X8") +
+                            ", domainDL=0x" + domainDownlevelFilter.ToString("X8") +
+                            ", gcUplevel=0x" + gcUplevelFilter.ToString("X8") + ")");
                         return results.ToArray();
                     }
 
@@ -423,59 +591,60 @@ namespace PsUi
                     return results.ToArray();
                 }
 
-                // Get the selection data
-                ushort cfFormat = RegisterClipboardFormat(CFSTR_DSOP_DS_SELECTION_LIST);
-                
-                var formatEtc = new System.Runtime.InteropServices.ComTypes.FORMATETC();
-                formatEtc.cfFormat = (short)cfFormat;
-                formatEtc.ptd = IntPtr.Zero;
-                formatEtc.dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT;
-                formatEtc.lindex = -1;
-                formatEtc.tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL;
-
-                System.Runtime.InteropServices.ComTypes.STGMEDIUM stgMedium;
-                dataObject.GetData(ref formatEtc, out stgMedium);
-
-                if (stgMedium.unionmember != IntPtr.Zero)
+                // Extract selections from the data object
+                try
                 {
-                    IntPtr pData = GlobalLock(stgMedium.unionmember);
-                    if (pData != IntPtr.Zero)
+                    ushort cfFormat = RegisterClipboardFormat(CFSTR_DSOP_DS_SELECTION_LIST);
+
+                    var formatEtc = new System.Runtime.InteropServices.ComTypes.FORMATETC();
+                    formatEtc.cfFormat = (short)cfFormat;
+                    formatEtc.ptd = IntPtr.Zero;
+                    formatEtc.dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT;
+                    formatEtc.lindex = -1;
+                    formatEtc.tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL;
+
+                    System.Runtime.InteropServices.ComTypes.STGMEDIUM stgMedium;
+                    dataObject.GetData(ref formatEtc, out stgMedium);
+
+                    if (stgMedium.unionmember != IntPtr.Zero)
                     {
-                        try
+                        IntPtr pData = GlobalLock(stgMedium.unionmember);
+                        if (pData != IntPtr.Zero)
                         {
-                            // Read the selection list header
-                            var selectionList = (DS_SELECTION_LIST)Marshal.PtrToStructure(pData, typeof(DS_SELECTION_LIST));
-                            
-                            // Move past the header to the array of selections
-                            IntPtr pSelections = new IntPtr(pData.ToInt64() + Marshal.SizeOf(typeof(DS_SELECTION_LIST)));
-                            
-                            for (uint i = 0; i < selectionList.cItems; i++)
+                            try
                             {
-                                var selection = (DS_SELECTION)Marshal.PtrToStructure(
-                                    new IntPtr(pSelections.ToInt64() + (i * Marshal.SizeOf(typeof(DS_SELECTION)))),
-                                    typeof(DS_SELECTION));
-                                
-                                if (selection.pwzName != IntPtr.Zero)
+                                var selectionList = (DS_SELECTION_LIST)Marshal.PtrToStructure(pData, typeof(DS_SELECTION_LIST));
+                                IntPtr pSelections = new IntPtr(pData.ToInt64() + Marshal.SizeOf(typeof(DS_SELECTION_LIST)));
+
+                                for (uint i = 0; i < selectionList.cItems; i++)
                                 {
-                                    string name = Marshal.PtrToStringUni(selection.pwzName);
-                                    if (!string.IsNullOrEmpty(name))
+                                    var selection = (DS_SELECTION)Marshal.PtrToStructure(
+                                        new IntPtr(pSelections.ToInt64() + (i * Marshal.SizeOf(typeof(DS_SELECTION)))),
+                                        typeof(DS_SELECTION));
+
+                                    if (selection.pwzName != IntPtr.Zero)
                                     {
-                                        results.Add(name);
+                                        string name = Marshal.PtrToStringUni(selection.pwzName);
+                                        if (!string.IsNullOrEmpty(name))
+                                        {
+                                            results.Add(name);
+                                        }
                                     }
                                 }
                             }
+                            finally
+                            {
+                                GlobalUnlock(stgMedium.unionmember);
+                            }
                         }
-                        finally
-                        {
-                            GlobalUnlock(stgMedium.unionmember);
-                        }
+
+                        Marshal.FreeHGlobal(stgMedium.unionmember);
                     }
-
-                    // Release the storage medium
-                    Marshal.FreeHGlobal(stgMedium.unionmember);
                 }
-
-                Marshal.ReleaseComObject(dataObject);
+                finally
+                {
+                    Marshal.ReleaseComObject(dataObject);
+                }
             }
             catch (Exception ex)
             {

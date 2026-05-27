@@ -133,6 +133,14 @@ function New-UiTool {
 
         [string[]]$ComputerPickerParameters = @(),
 
+        [string[]]$UserPickerParameters = @(),
+
+        [string[]]$GroupPickerParameters = @(),
+
+        [string[]]$MemberPickerParameters = @(),
+
+        [string[]]$OUPickerParameters = @(),
+
         [switch]$NoAutoHelpers,
 
         # Layout options for parameter panel
@@ -163,15 +171,19 @@ function New-UiTool {
 
     Write-Debug "Introspecting command metadata"
     $defParams = @{
-        Command                 = $Command
-        ParameterSet            = $ParameterSet
-        ExcludeParameters       = $ExcludeParameters
-        IncludeCommonParameters = $IncludeCommonParameters
-        FilePickerParameters    = $FilePickerParameters
-        FolderPickerParameters  = $FolderPickerParameters
+        Command                  = $Command
+        ParameterSet             = $ParameterSet
+        ExcludeParameters        = $ExcludeParameters
+        IncludeCommonParameters  = $IncludeCommonParameters
+        FilePickerParameters     = $FilePickerParameters
+        FolderPickerParameters   = $FolderPickerParameters
         ComputerPickerParameters = $ComputerPickerParameters
-        NoAutoHelpers           = $NoAutoHelpers
-        CallerSessionState      = $callerSessionState
+        UserPickerParameters     = $UserPickerParameters
+        GroupPickerParameters    = $GroupPickerParameters
+        MemberPickerParameters   = $MemberPickerParameters
+        OUPickerParameters       = $OUPickerParameters
+        NoAutoHelpers            = $NoAutoHelpers
+        CallerSessionState       = $callerSessionState
     }
     $uiDef = Get-UiDefinition @defParams
     Write-Debug "Got definition: $($uiDef.Parameters.Count) parameters, sets: $($uiDef.ParameterSets -join ', ')"
@@ -232,11 +244,19 @@ function New-UiTool {
         FilePicker      = [System.Collections.Generic.List[string]]::new()
         FolderPicker    = [System.Collections.Generic.List[string]]::new()
         ComputerPicker  = [System.Collections.Generic.List[string]]::new()
+        UserPicker      = [System.Collections.Generic.List[string]]::new()
+        GroupPicker     = [System.Collections.Generic.List[string]]::new()
+        MemberPicker    = [System.Collections.Generic.List[string]]::new()
+        OUPicker        = [System.Collections.Generic.List[string]]::new()
         FilterBuilder   = @{}  # Hashtable: ParamName -> FilterMode
     }
     if ($FilePickerParameters) { $inputHelpers.FilePicker.AddRange($FilePickerParameters) }
     if ($FolderPickerParameters) { $inputHelpers.FolderPicker.AddRange($FolderPickerParameters) }
     if ($ComputerPickerParameters) { $inputHelpers.ComputerPicker.AddRange($ComputerPickerParameters) }
+    if ($UserPickerParameters) { $inputHelpers.UserPicker.AddRange($UserPickerParameters) }
+    if ($GroupPickerParameters) { $inputHelpers.GroupPicker.AddRange($GroupPickerParameters) }
+    if ($MemberPickerParameters) { $inputHelpers.MemberPicker.AddRange($MemberPickerParameters) }
+    if ($OUPickerParameters) { $inputHelpers.OUPicker.AddRange($OUPickerParameters) }
 
     # Detect command type to determine filter mode
     $cmdName = $cmdInfo.Name
@@ -265,12 +285,7 @@ function New-UiTool {
             $pName = $param.Name
 
             # Skip if already manually specified
-            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName) {
-                continue
-            }
-
-            # Skip non-string types (helpers only make sense for text inputs)
-            if ($param.Type -and $param.Type -ne [string] -and $param.Type -ne [string[]]) {
+            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName -or $inputHelpers.UserPicker -contains $pName -or $inputHelpers.GroupPicker -contains $pName -or $inputHelpers.MemberPicker -contains $pName -or $inputHelpers.OUPicker -contains $pName) {
                 continue
             }
 
@@ -285,6 +300,22 @@ function New-UiTool {
             # Auto-detect filter parameters, apply detected mode
             elseif ($pName -match '^Filter$|^Include$|^Exclude$') {
                 $inputHelpers.FilterBuilder[$pName] = $filterMode
+            }
+            # Auto-detect OU parameters
+            elseif ($pName -match '^OU$|^SearchBase$|^BaseDN$|^SearchRoot$|^TargetOU$|OrganizationalUnit') {
+                $inputHelpers.OUPicker.Add($pName)
+            }
+            # Auto-detect user parameters
+            elseif ($pName -match '^Owner$|^Manager$|^User$|^UserName$|^SamAccountName$|^UserPrincipalName$|^UPN$') {
+                $inputHelpers.UserPicker.Add($pName)
+            }
+            # Auto-detect group parameters
+            elseif ($pName -match '^Group$|^GroupName$|^MemberOf$|^GroupDN$') {
+                $inputHelpers.GroupPicker.Add($pName)
+            }
+            # Auto-detect member parameters (users or groups)
+            elseif ($pName -match '^Member$|^Members$') {
+                $inputHelpers.MemberPicker.Add($pName)
             }
             # Auto-detect computer name parameters
             elseif ($pName -match 'ComputerName|Computer|Server|ServerName|HostName|Host|^CN$|MachineName|Machine') {
