@@ -67,6 +67,17 @@ function New-UiInput {
     .PARAMETER HelperButton
         Adds a picker button next to the input. Supports FilePicker, FolderPicker,
         ComputerPicker, UserPicker, GroupPicker, etc.
+    .PARAMETER HelperOptions
+        Hashtable that is inevitably splatted into the underlying Show-* picker at click time.
+        Any param the picker takes is fair game. String values get looked up against
+        registered control variables first; on a match, the live control value wins.
+        Otherwise the string is a literal. Credential controls unwrap to [PSCredential]
+        automatically. Common keys: Server, Credential, Root (OUPicker); InitialDirectory,
+        Filter, Title (File/Folder pickers).
+
+        Pass the control name as a string ('dcServer'), not the bareword ($dcServer).
+        Variable hydration only fires inside -Action blocks, so $dcServer is $null at the
+        moment this hashtable is built.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
@@ -94,6 +105,10 @@ function New-UiInput {
     .EXAMPLE
         New-UiInput -Label "Port" -Variable "portNum" -InputType Int -Validate { param($val) [int]$val -ge 1 -and [int]$val -le 65535 } -ErrorMessage 'Port must be 1-65535'
         # Custom validation with scriptblock
+    .EXAMPLE
+        New-UiInput -Label "Server" -Variable "dcServer"
+        New-UiInput -Label "OU" -Variable "targetOU" -HelperButton OUPicker -HelperOptions @{ Server = 'dcServer' }
+        # OU picker pulls Server from the dcServer input at click time - no prompt.
     #>
     [CmdletBinding()]
     param(
@@ -130,6 +145,8 @@ function New-UiInput {
 
         [ValidateSet('None', 'FilePicker', 'FolderPicker', 'AdvancedFolderPicker', 'ComputerPicker', 'UserPicker', 'GroupPicker', 'UserGroupPicker', 'OUPicker')]
         [string]$HelperButton = 'None',
+
+        [hashtable]$HelperOptions,
 
         [Parameter()]
         [object]$EnabledWhen,
@@ -294,45 +311,21 @@ function New-UiInput {
 
         # Store info for click handler
         $helperBtn.Tag = @{
-            Mode    = $HelperButton
-            TextBox = $inputControl
+            Mode          = $HelperButton
+            TextBox       = $inputControl
+            HelperOptions = $HelperOptions
         }
 
-        # Click handler
+        # Click handler hands off to the shared dispatcher. Mode + Options is all it needs.
         $helperBtn.Add_Click({
             param($sender, $eventArgs)
             $info = $sender.Tag
-            $result = $null
-
             try {
-                switch ($info.Mode) {
-                    'FilePicker'          { $result = Show-UiPathPicker -Mode 'File' }
-                    'FolderPicker'        { $result = Show-UiFolderPicker -Simple }
-                    'AdvancedFolderPicker' { $result = Show-UiFolderPicker }
-                    'ComputerPicker'  { $picked = Show-WindowsObjectPicker -ObjectType Computer; if ($picked) { $result = $picked.RawValue } }
-                    'UserPicker'      { $picked = Show-WindowsObjectPicker -ObjectType User; if ($picked) { $result = $picked.RawValue } }
-                    'GroupPicker'     { $picked = Show-WindowsObjectPicker -ObjectType Group; if ($picked) { $result = $picked.RawValue } }
-                    'UserGroupPicker' { $picked = Show-WindowsObjectPicker -ObjectType User, Group; if ($picked) { $result = $picked.RawValue } }
-                    'OUPicker' {
-                        try { $picked = Show-UiOuPicker }
-                        catch {
-                            # Not domain-joined - prompt for server and credentials
-                            $server = Show-UiInputDialog -Title 'OU Picker - No Domain Detected' -Prompt 'This machine is not joined to a domain. Enter a domain controller hostname or IP to browse organizational units remotely:'
-                            if ($server) {
-                                $cred = Show-UiCredentialDialog -Caption 'OU Picker - Remote Connection' -Message "Enter credentials with permission to browse OUs on $server"
-                                if ($cred) { $picked = Show-UiOuPicker -Server $server -Credential $cred }
-                            }
-                        }
-                        if ($picked) { $result = $picked.DistinguishedName }
-                    }
-                }
-
-                if ($result) {
-                    $info.TextBox.Text = $result
-                }
+                $result = Invoke-UiHelperPicker -Mode $info.Mode -Options $info.HelperOptions
+                if ($result) { $info.TextBox.Text = $result }
             }
             catch {
-                Write-Warning "Helper button error: $_"
+                Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode
             }
         }.GetNewClosure())
 

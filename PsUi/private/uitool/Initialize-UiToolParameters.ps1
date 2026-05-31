@@ -26,7 +26,14 @@ function Initialize-UiToolParameters {
         $ThemeColors = Get-ThemeColors
     }
     if (!$InputHelpers) {
-        $InputHelpers = @{ FilePicker = @(); FolderPicker = @(); UserPicker = @(); GroupPicker = @(); MemberPicker = @(); OUPicker = @() }
+        $InputHelpers = @{
+            FilePicker   = @()
+            FolderPicker = @()
+            UserPicker   = @()
+            GroupPicker  = @()
+            MemberPicker = @()
+            OUPicker     = @()
+        }
     }
 
     $isFirstParam = $true
@@ -34,7 +41,6 @@ function Initialize-UiToolParameters {
     foreach ($param in $Parameters) {
         # When using wrap layout, each parameter goes into its own container
         $paramContainer = $null
-        $paramBorder    = $null
         $addTarget      = $TargetPanel
 
         if ($UseWrapLayout) {
@@ -431,6 +437,8 @@ function Initialize-UiToolParameters {
                 $helperBtn.Margin = [System.Windows.Thickness]::new(4, 0, 0, 0)
                 $helperBtn.Cursor = [System.Windows.Input.Cursors]::Hand
 
+                $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
+
                 # Determine icon and tooltip based on helper type
                 if ($needsFolderPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Folder')
@@ -445,25 +453,21 @@ function Initialize-UiToolParameters {
                 elseif ($needsComputerPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Desktop')
                     $helperBtn.ToolTip = 'Select computer...'
-                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
                     $helperBtn.Tag = @{ Mode = 'Computer'; TextBox = $control; MultiSelect = $isArray }
                 }
                 elseif ($needsUserPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Contact')
                     $helperBtn.ToolTip = 'Select user...'
-                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
                     $helperBtn.Tag = @{ Mode = 'User'; TextBox = $control; MultiSelect = $isArray }
                 }
                 elseif ($needsGroupPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('Group')
                     $helperBtn.ToolTip = 'Select group...'
-                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
                     $helperBtn.Tag = @{ Mode = 'Group'; TextBox = $control; MultiSelect = $isArray }
                 }
                 elseif ($needsMemberPicker) {
                     $iconCode = [PsUi.ModuleContext]::GetIcon('People')
                     $helperBtn.ToolTip = 'Select user or group...'
-                    $isArray = $param.Type.IsArray -or $param.Type.Name -like '*`[`]*'
                     $helperBtn.Tag = @{ Mode = 'Member'; TextBox = $control; MultiSelect = $isArray }
                 }
                 elseif ($needsOUPicker) {
@@ -489,90 +493,26 @@ function Initialize-UiToolParameters {
                 # Style the button
                 Set-ButtonStyle -Button $helperBtn
 
-                # Click handler based on mode
+                # Filter has its own shape (needs current text + theme colors). Everything else goes through the dispatcher.
                 $helperBtn.Add_Click({
                     param($sender, $eventArgs)
                     $info = $sender.Tag
-                    $result = $null
-
                     try {
-                        switch ($info.Mode) {
-                            'Folder'   { $result = Show-UiPathPicker -Mode 'Folder' }
-                            'File'     { $result = Show-UiPathPicker -Mode 'File' }
-                            'Computer' {
-                                $multi = if ($info.MultiSelect) { $true } else { $false }
-                                $picked = Show-WindowsObjectPicker -ObjectType Computer -MultiSelect:$multi
-                                if ($picked) {
-                                    if ($picked -is [array]) {
-                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
-                                    }
-                                    else {
-                                        $result = $picked.RawValue
-                                    }
-                                }
-                            }
-                            'User' {
-                                $multi = if ($info.MultiSelect) { $true } else { $false }
-                                $picked = Show-WindowsObjectPicker -ObjectType User -MultiSelect:$multi
-                                if ($picked) {
-                                    if ($picked -is [array]) {
-                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
-                                    }
-                                    else {
-                                        $result = $picked.RawValue
-                                    }
-                                }
-                            }
-                            'Group' {
-                                $multi = if ($info.MultiSelect) { $true } else { $false }
-                                $picked = Show-WindowsObjectPicker -ObjectType Group -MultiSelect:$multi
-                                if ($picked) {
-                                    if ($picked -is [array]) {
-                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
-                                    }
-                                    else {
-                                        $result = $picked.RawValue
-                                    }
-                                }
-                            }
-                            'Member' {
-                                $multi = if ($info.MultiSelect) { $true } else { $false }
-                                $picked = Show-WindowsObjectPicker -ObjectType User,Group -MultiSelect:$multi
-                                if ($picked) {
-                                    if ($picked -is [array]) {
-                                        $result = ($picked | ForEach-Object { $_.RawValue }) -join "`r`n"
-                                    }
-                                    else {
-                                        $result = $picked.RawValue
-                                    }
-                                }
-                            }
-                            'OU' {
-                                try { $picked = Show-UiOuPicker  }
-                                catch {
-                                    # Not domain-joined - prompt for server and credentials
-                                    $server = Show-UiInputDialog -Title 'OU Picker - No Domain Detected' -Prompt 'This machine is not joined to a domain. Enter a domain controller hostname or IP to browse organizational units remotely:'
-                                    if ($server) {
-                                        $cred = Show-UiCredentialDialog -Caption 'OU Picker - Remote Connection' -Message "Enter credentials with permission to browse OUs on $server"
-                                        if ($cred) { $picked = Show-UiOuPicker -Server $server -Credential $cred }
-                                    }
-                                }
-                                if ($picked) { $result = $picked.DistinguishedName }
-                            }
-                            'Filter' {
-                                $fMode = if ($info.FilterMode) { $info.FilterMode } else { 'Generic' }
-                                # Get fresh colors at click time so theme changes are reflected
-                                $currentColors = Get-ThemeColors
-                                $result = Show-UiFilterBuilder -CurrentValue $info.TextBox.Text -Mode $fMode -ThemeColors $currentColors
-                            }
+                        $result = if ($info.Mode -eq 'Filter') {
+                            $fMode = if ($info.FilterMode) { $info.FilterMode } else { 'Generic' }
+                            # Read colors at click time - theme may have switched since the button was wired.
+                            $currentColors = Get-ThemeColors
+                            Show-UiFilterBuilder -CurrentValue $info.TextBox.Text -Mode $fMode -ThemeColors $currentColors
+                        }
+                        else {
+                            $multi = [bool]$info.MultiSelect
+                            Invoke-UiHelperPicker -Mode $info.Mode -Options $info.HelperOptions -MultiSelect:$multi
                         }
 
-                        if ($result) {
-                            $info.TextBox.Text = $result
-                        }
+                        if ($result) { $info.TextBox.Text = $result }
                     }
                     catch {
-                        Write-Warning "Helper button error: $_"
+                        Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode
                     }
                 }.GetNewClosure())
 
