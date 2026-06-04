@@ -27,7 +27,7 @@ function Add-MultiTypeFilterControls {
         Tag     = $SubTabControl
         Content = [System.Windows.Controls.TextBlock]@{
             Text       = [PsUi.ModuleContext]::GetIcon('AllApps')
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         }
     }
     Set-ButtonStyle -Button $colButton -IconOnly

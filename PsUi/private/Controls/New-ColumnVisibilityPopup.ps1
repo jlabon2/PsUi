@@ -22,7 +22,7 @@ function New-ColumnVisibilityPopup {
     $colButton = [System.Windows.Controls.Button]@{
         Content = [System.Windows.Controls.TextBlock]@{
             Text       = [PsUi.ModuleContext]::GetIcon('AllApps')
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         }
         Padding = 0
         Width   = 32

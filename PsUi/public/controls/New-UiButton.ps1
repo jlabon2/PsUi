@@ -28,7 +28,7 @@ function New-UiButton {
         are splatted as parameters. For other file types, values are passed as
         command-line arguments.
     .PARAMETER Icon
-        Optional icon name from Segoe MDL2 Assets shown before the text.
+        Optional icon name shown before the text. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER Accent
         Use accent color styling for the button.
     .PARAMETER Width
@@ -216,7 +216,7 @@ function New-UiButton {
 
         $iconBlock = [System.Windows.Controls.TextBlock]@{
             Text = $iconText
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize = 12
             FontWeight = 'Light'
             VerticalAlignment = 'Center'

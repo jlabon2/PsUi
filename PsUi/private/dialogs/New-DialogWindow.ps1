@@ -140,7 +140,7 @@ function New-DialogWindow {
 
         $titleIconBlock = [System.Windows.Controls.TextBlock]@{
             Text              = $TitleIcon
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 14
             Foreground        = ConvertTo-UiBrush $colors.HeaderForeground
             VerticalAlignment = 'Center'

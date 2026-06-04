@@ -48,6 +48,7 @@ Thumbs.db
 
 # Test outputs
 TestResults/
+testResults.xml
 
 # Development test scripts
 Tests/PsUiTests/

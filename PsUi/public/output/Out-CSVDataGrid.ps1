@@ -42,6 +42,15 @@ function Out-CSVDataGrid {
         Column separator character. Defaults to comma.
     .PARAMETER NoHeader
         Treat the first row as data, not column headers.
+    .PARAMETER IconFont
+        Icon font for the editor's chrome (header, save, add/delete row, etc): Inherit (default -
+        keep whatever Set-PsUiIconFont last established), Auto (re-detect), SegoeMDL2, or
+        SegoeFluentIcons. Honored only when launched standalone - when hosted inside a parent
+        New-UiWindow the parent's font wins. Restored to the previous active font on close.
+    .PARAMETER NoIconFontFallback
+        Pin to the chosen icon font with no WPF fallback chain. Honored only when standalone.
+        On Win10 with only MDL2 installed this is a rendering no-op (no secondary to fall back
+        to); the remaining effect is tighter IntelliSense for -Icon names.
     .EXAMPLE
         Out-CSVDataGrid -CSVDirectory 'C:\Data' -IsFilterable -IsResizeable
     .EXAMPLE
@@ -89,7 +98,15 @@ function Out-CSVDataGrid {
 
         [char]$Delimiter = ',',
 
-        [switch]$NoHeader
+        [switch]$NoHeader,
+
+        # Default 'Inherit' (rather than leaving unbound) so $IconFont always satisfies the
+        # ValidateSet. Otherwise any .GetNewClosure() inside the function would explode trying
+        # to carry an unbound "" value through the attribute - PowerShell footgun.
+        [ValidateSet('Inherit', 'Auto', 'SegoeMDL2', 'SegoeFluentIcons')]
+        [string]$IconFont = 'Inherit',
+
+        [switch]$NoIconFontFallback
     )
 
 
@@ -283,6 +300,30 @@ function Out-CSVDataGrid {
         if (!$colors) {
             $colors = Initialize-UITheme -Theme 'Light'
         }
+
+        # Push -IconFont override when standalone. Returns $null when inside a parent (parent's
+        # font wins) or when no override params were supplied. Restore in the finally around
+        # ShowDialog below; trap covers throws between here and there.
+        $overrideParams = @{
+            IsStandalone       = $isStandalone
+            BoundParameters    = $PSBoundParameters
+            IconFont           = $IconFont
+            NoIconFontFallback = [bool]$NoIconFontFallback
+        }
+        $iconFontSnap = Push-UiIconFontOverride @overrideParams
+
+        # A terminating throw between the push above and the inner try/finally around ShowDialog
+        # would leak the override into session state - the finally never runs because we never
+        # entered the try. trap fires on any error reaching function scope, restores, then break
+        # re-throws so the caller still sees the original error.
+        trap {
+            if ($iconFontSnap) {
+                [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+                $iconFontSnap = $null
+            }
+            break
+        }
+
         $Script:CurrentCSVData = @{}
         $Script:HasChanges = $false
 
@@ -402,7 +443,7 @@ function Out-CSVDataGrid {
 
         $headerIcon = [System.Windows.Controls.TextBlock]@{
             Text              = [PsUi.ModuleContext]::GetIcon('Document')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 24
             VerticalAlignment = 'Center'
             Width             = 32
@@ -511,7 +552,7 @@ function Out-CSVDataGrid {
 
         $filterClearBtn = [System.Windows.Controls.Button]::new()
         $filterClearBtn.Content = [PsUi.ModuleContext]::GetIcon('Cancel')
-        $filterClearBtn.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $filterClearBtn.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $filterClearBtn.FontSize = 10
         $filterClearBtn.Width = 16
         $filterClearBtn.Height = 16
@@ -552,7 +593,7 @@ function Out-CSVDataGrid {
 
         $addRowIcon = [System.Windows.Controls.TextBlock]::new()
         $addRowIcon.Text = [PsUi.ModuleContext]::GetIcon('Add')
-        $addRowIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $addRowIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $addRowIcon.FontSize = 14
         $addRowIcon.HorizontalAlignment = 'Center'
         $addRowIcon.VerticalAlignment = 'Center'
@@ -571,7 +612,7 @@ function Out-CSVDataGrid {
 
         $deleteRowIcon = [System.Windows.Controls.TextBlock]::new()
         $deleteRowIcon.Text = [PsUi.ModuleContext]::GetIcon('Delete')
-        $deleteRowIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $deleteRowIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $deleteRowIcon.FontSize = 14
         $deleteRowIcon.HorizontalAlignment = 'Center'
         $deleteRowIcon.VerticalAlignment = 'Center'
@@ -590,7 +631,7 @@ function Out-CSVDataGrid {
 
         $copyRowIcon = [System.Windows.Controls.TextBlock]::new()
         $copyRowIcon.Text = [PsUi.ModuleContext]::GetIcon('Copy')
-        $copyRowIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $copyRowIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $copyRowIcon.FontSize = 14
         $copyRowIcon.HorizontalAlignment = 'Center'
         $copyRowIcon.VerticalAlignment = 'Center'
@@ -609,7 +650,7 @@ function Out-CSVDataGrid {
 
         $saveIcon = [System.Windows.Controls.TextBlock]::new()
         $saveIcon.Text = [PsUi.ModuleContext]::GetIcon('Save')
-        $saveIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $saveIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $saveIcon.FontSize = 14
         $saveIcon.HorizontalAlignment = 'Center'
         $saveIcon.VerticalAlignment = 'Center'
@@ -628,7 +669,7 @@ function Out-CSVDataGrid {
 
         $saveAllIcon = [System.Windows.Controls.TextBlock]::new()
         $saveAllIcon.Text = [PsUi.ModuleContext]::GetIcon('SaveLocal')
-        $saveAllIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $saveAllIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $saveAllIcon.FontSize = 14
         $saveAllIcon.HorizontalAlignment = 'Center'
         $saveAllIcon.VerticalAlignment = 'Center'
@@ -647,7 +688,7 @@ function Out-CSVDataGrid {
 
         $saveAsIcon = [System.Windows.Controls.TextBlock]::new()
         $saveAsIcon.Text = [PsUi.ModuleContext]::GetIcon('SaveAs')
-        $saveAsIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $saveAsIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $saveAsIcon.FontSize = 14
         $saveAsIcon.HorizontalAlignment = 'Center'
         $saveAsIcon.VerticalAlignment = 'Center'
@@ -666,7 +707,7 @@ function Out-CSVDataGrid {
 
         $typeInfoIcon = [System.Windows.Controls.TextBlock]::new()
         $typeInfoIcon.Text = [PsUi.ModuleContext]::GetIcon('Info')
-        $typeInfoIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $typeInfoIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $typeInfoIcon.FontSize = 14
         $typeInfoIcon.HorizontalAlignment = 'Center'
         $typeInfoIcon.VerticalAlignment = 'Center'
@@ -1266,7 +1307,16 @@ function Out-CSVDataGrid {
             Set-UiDialogPosition -Dialog $window
         }
 
-        [void]$window.ShowDialog()
+        try {
+            [void]$window.ShowDialog()
+        }
+        finally {
+            # Restore active icon font if we pushed an override - no-op when $iconFontSnap is $null.
+            # Null after restore so the function-scope trap (if it fires on a ShowDialog throw
+            # propagating past us) doesn't redundantly restore the same snapshot.
+            [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+            $iconFontSnap = $null
+        }
 
         # Cleanup script-scoped data
         $Script:CurrentCSVData = @{}

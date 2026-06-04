@@ -1,7 +1,7 @@
 function New-UiGlyph {
     <#
     .SYNOPSIS
-        Creates a glyph icon from the Segoe MDL2 Assets font.
+        Creates a glyph icon from the active icon font.
     .DESCRIPTION
         Displays an icon from the built-in icon library with optional tooltip showing the glyph name.
         Useful for adding visual indicators, status icons, or decorative elements.
@@ -72,7 +72,7 @@ function New-UiGlyph {
 
     $glyph = [System.Windows.Controls.TextBlock]@{
         Text              = $glyphChar
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = $Size
         Foreground        = $brush
         TextAlignment     = 'Center'

@@ -169,7 +169,7 @@ function New-UiStatusBar {
 
     # Severity indicator glyph (checkmark, warning, error) shown during active tints
     $severityIcon = [System.Windows.Controls.TextBlock]@{
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 12
         VerticalAlignment = 'Center'
         Visibility        = 'Collapsed'
@@ -238,12 +238,13 @@ function New-UiStatusBar {
 
     Set-StatusBarChildLayout -Panel $innerPanel
 
-    # Cache the first non-icon TextBlock as the canonical status label. Glyphs use Segoe MDL2
-    # Assets and are also TextBlocks - writing status text into one produces missing-glyph boxes.
+    # Cache the first non-icon TextBlock as the canonical status label. Glyphs use an icon
+    # font (MDL2 or Fluent) and are also TextBlocks - writing status text into one produces
+    # missing-glyph boxes. Test-IconFont covers bare names and the fallback-chain form.
     $firstText = $null
     foreach ($child in $innerPanel.Children) {
         if ($child -is [System.Windows.Controls.TextBlock]) {
-            $isIconFont = $child.FontFamily -and $child.FontFamily.Source -eq 'Segoe MDL2 Assets'
+            $isIconFont = $child.FontFamily -and (Test-IconFont $child.FontFamily)
             if (!$firstText -and !$isIconFont) { $firstText = $child }
             $child.TextTrimming       = 'CharacterEllipsis'
             $child.TextWrapping       = 'NoWrap'

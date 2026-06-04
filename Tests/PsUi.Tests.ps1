@@ -64,7 +64,7 @@ Describe 'PS 5.1 Compatibility' {
     }
 }
 
-# Icons come from CharList.json (Segoe MDL2 Assets unicode mappings)
+# Icons come from CharList.json (unicode mappings for Segoe MDL2 Assets and Segoe Fluent Icons)
 Describe 'Icon System' {
     It 'Should have icons loaded in ModuleContext' {
         [PsUi.ModuleContext]::IsInitialized | Should -BeTrue
@@ -74,6 +74,209 @@ Describe 'Icon System' {
         $icons = [PsUi.ModuleContext]::Icons
         $icons | Should -Not -BeNullOrEmpty
         $icons.Count | Should -BeGreaterThan 100
+    }
+}
+
+# Snapshot/restore the global icon-font state around any test that mutates it - leaking
+# state into later tests would cause cascading failures that look like phantom regressions.
+Describe 'Icon Font - ModuleContext static API' {
+    BeforeAll {
+        $script:savedIconFontSnap = [PsUi.ModuleContext]::SnapshotIconFontState()
+    }
+    AfterAll {
+        [PsUi.ModuleContext]::RestoreIconFontState($script:savedIconFontSnap)
+    }
+
+    It 'FontNameMDL2 and FontNameFluent constants are exposed' {
+        [PsUi.ModuleContext]::FontNameMDL2   | Should -Be 'Segoe MDL2 Assets'
+        [PsUi.ModuleContext]::FontNameFluent | Should -Be 'Segoe Fluent Icons'
+    }
+
+    It 'DetectDefaultIconFont returns one of the two known names' {
+        $detected = [PsUi.ModuleContext]::DetectDefaultIconFont()
+        $detected | Should -BeIn @(
+            [PsUi.ModuleContext]::FontNameMDL2,
+            [PsUi.ModuleContext]::FontNameFluent
+        )
+    }
+
+    It 'IsFontInstalled returns false for an obvious nonsense font' {
+        [PsUi.ModuleContext]::IsFontInstalled('Definitely Not A Real Font Family Name') | Should -BeFalse
+    }
+
+    It 'ResolveIconFontToken returns null for Inherit, empty, and null' {
+        [PsUi.ModuleContext]::ResolveIconFontToken('Inherit') | Should -BeNullOrEmpty
+        [PsUi.ModuleContext]::ResolveIconFontToken('')        | Should -BeNullOrEmpty
+        [PsUi.ModuleContext]::ResolveIconFontToken($null)     | Should -BeNullOrEmpty
+    }
+
+    It 'ResolveIconFontToken maps SegoeMDL2 and SegoeFluentIcons to their family names' {
+        [PsUi.ModuleContext]::ResolveIconFontToken('SegoeMDL2')        | Should -Be ([PsUi.ModuleContext]::FontNameMDL2)
+        [PsUi.ModuleContext]::ResolveIconFontToken('SegoeFluentIcons') | Should -Be ([PsUi.ModuleContext]::FontNameFluent)
+    }
+
+    It 'ResolveIconFontToken Auto matches DetectDefaultIconFont' {
+        [PsUi.ModuleContext]::ResolveIconFontToken('Auto') |
+            Should -Be ([PsUi.ModuleContext]::DetectDefaultIconFont())
+    }
+
+    It 'IsGlyphAvailable returns true for a common glyph' {
+        [PsUi.ModuleContext]::IsGlyphAvailable('Save') | Should -BeTrue
+    }
+
+    It 'IsGlyphAvailable returns false for an unknown glyph name' {
+        [PsUi.ModuleContext]::IsGlyphAvailable('DefinitelyNotAGlyphName__xyz') | Should -BeFalse
+    }
+
+    It 'Snapshot + Restore round-trips state' {
+        $originalName     = [PsUi.ModuleContext]::ActiveIconFontName
+        $originalFallback = [PsUi.ModuleContext]::IconFontNoFallback
+        $snap = [PsUi.ModuleContext]::SnapshotIconFontState()
+
+        # Mutate to the other installed font with inverted fallback. Skip the mutation entirely
+        # if the other font isn't installed - test still validates the null-mutation round-trip.
+        $other = if ($originalName -eq [PsUi.ModuleContext]::FontNameMDL2) {
+            [PsUi.ModuleContext]::FontNameFluent
+        }
+        else {
+            [PsUi.ModuleContext]::FontNameMDL2
+        }
+        if ([PsUi.ModuleContext]::IsFontInstalled($other)) {
+            [PsUi.ModuleContext]::SetIconFont($other, !$originalFallback)
+            [PsUi.ModuleContext]::ActiveIconFontName | Should -Be $other
+        }
+
+        [PsUi.ModuleContext]::RestoreIconFontState($snap)
+        [PsUi.ModuleContext]::ActiveIconFontName | Should -Be $originalName
+        [PsUi.ModuleContext]::IconFontNoFallback | Should -Be $originalFallback
+    }
+
+    It 'RestoreIconFontState swallows null without throwing' {
+        { [PsUi.ModuleContext]::RestoreIconFontState($null) } | Should -Not -Throw
+    }
+
+    It 'ActiveIconFontFamily builds a fallback chain by default' {
+        [PsUi.ModuleContext]::SetIconFont([PsUi.ModuleContext]::DetectDefaultIconFont(), $false)
+        $src = [PsUi.ModuleContext]::ActiveIconFontFamily.Source
+        # Chain form: "Primary, Secondary"
+        $src | Should -Match ','
+        $src | Should -Match 'Segoe (MDL2 Assets|Fluent Icons)'
+    }
+
+    It 'ActiveIconFontFamily pins to a single name when fallback is off' {
+        [PsUi.ModuleContext]::SetIconFont([PsUi.ModuleContext]::DetectDefaultIconFont(), $true)
+        $src = [PsUi.ModuleContext]::ActiveIconFontFamily.Source
+        $src | Should -Not -Match ','
+    }
+}
+
+Describe 'Icon Font - PowerShell public surface' {
+    BeforeAll {
+        $script:savedIconFontSnap2 = [PsUi.ModuleContext]::SnapshotIconFontState()
+    }
+    AfterAll {
+        [PsUi.ModuleContext]::RestoreIconFontState($script:savedIconFontSnap2)
+    }
+
+    It 'Get-PsUiIconFont returns the active font name as a string' {
+        $name = Get-PsUiIconFont
+        $name | Should -Not -BeNullOrEmpty
+        $name | Should -Match 'Segoe (MDL2 Assets|Fluent Icons)'
+    }
+
+    It 'Set-PsUiIconFont Auto sets the active font to a known name' {
+        Set-PsUiIconFont -FontName Auto
+        Get-PsUiIconFont | Should -BeIn @('Segoe MDL2 Assets', 'Segoe Fluent Icons')
+    }
+
+    It 'Set-PsUiIconFont SegoeFluentIcons (when installed) sets Fluent' {
+        if (![PsUi.ModuleContext]::IsFontInstalled('Segoe Fluent Icons')) {
+            Set-ItResult -Skipped -Because 'Segoe Fluent Icons not installed on this box'
+            return
+        }
+        Set-PsUiIconFont -FontName SegoeFluentIcons
+        Get-PsUiIconFont | Should -Be 'Segoe Fluent Icons'
+    }
+
+    It 'Set-PsUiIconFont SegoeMDL2 (when installed) sets MDL2' {
+        if (![PsUi.ModuleContext]::IsFontInstalled('Segoe MDL2 Assets')) {
+            Set-ItResult -Skipped -Because 'Segoe MDL2 Assets not installed on this box'
+            return
+        }
+        Set-PsUiIconFont -FontName SegoeMDL2
+        Get-PsUiIconFont | Should -Be 'Segoe MDL2 Assets'
+    }
+
+    It 'Set-PsUiIconFont -NoIconFontFallback turns fallback off' {
+        Set-PsUiIconFont -FontName Auto -NoIconFontFallback
+        [PsUi.ModuleContext]::IconFontNoFallback | Should -BeTrue
+    }
+
+    It 'Set-PsUiIconFont -NoIconFontFallback:$false turns fallback on' {
+        Set-PsUiIconFont -FontName Auto -NoIconFontFallback:$false
+        [PsUi.ModuleContext]::IconFontNoFallback | Should -BeFalse
+    }
+
+    It 'Test-PsUiIcon returns true for a common name under -Font Active (default)' {
+        Test-PsUiIcon -Name 'Save' | Should -BeTrue
+    }
+
+    It 'Test-PsUiIcon returns false for an unknown name' {
+        Test-PsUiIcon -Name 'DefinitelyNotAGlyphName__xyz' | Should -BeFalse
+    }
+
+    It 'Test-PsUiIcon -Font Either returns true for a common name' {
+        Test-PsUiIcon -Name 'Save' -Font Either | Should -BeTrue
+    }
+
+    It 'Test-PsUiIcon -Font MDL2 returns true for a basic MDL2 glyph' {
+        if (![PsUi.ModuleContext]::IsFontInstalled('Segoe MDL2 Assets')) {
+            Set-ItResult -Skipped -Because 'Segoe MDL2 Assets not installed on this box'
+            return
+        }
+        Test-PsUiIcon -Name 'Save' -Font MDL2 | Should -BeTrue
+    }
+
+    It 'Test-PsUiIcon -Font Fluent returns true for a basic Fluent glyph' {
+        if (![PsUi.ModuleContext]::IsFontInstalled('Segoe Fluent Icons')) {
+            Set-ItResult -Skipped -Because 'Segoe Fluent Icons not installed on this box'
+            return
+        }
+        Test-PsUiIcon -Name 'Save' -Font Fluent | Should -BeTrue
+    }
+
+    It 'Test-PsUiIcon -Font MDL2 returns false for a Fluent-only name' {
+        if (![PsUi.ModuleContext]::IsFontInstalled('Segoe MDL2 Assets')) {
+            Set-ItResult -Skipped -Because 'Segoe MDL2 Assets not installed on this box'
+            return
+        }
+        # 'Blocked' is one of the 125 Fluent-modern names added to CharList.json - its codepoint
+        # lives in the Fluent-only range so MDL2 strictly doesn't carry it.
+        Test-PsUiIcon -Name 'Blocked' -Font MDL2 | Should -BeFalse
+    }
+}
+
+Describe 'Icon Font - Out-* parameter shape' {
+    It 'Out-Datagrid IconFont parameter has Inherit (default) in its ValidateSet' {
+        $param = (Get-Command Out-Datagrid).Parameters['IconFont']
+        $param | Should -Not -BeNullOrEmpty
+        $vs = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        $vs.ValidValues | Should -Contain 'Inherit'
+        $vs.ValidValues | Should -Contain 'Auto'
+        $vs.ValidValues | Should -Contain 'SegoeMDL2'
+        $vs.ValidValues | Should -Contain 'SegoeFluentIcons'
+    }
+
+    It 'Out-CSVDataGrid IconFont parameter has Inherit (default) in its ValidateSet' {
+        $vs = (Get-Command Out-CSVDataGrid).Parameters['IconFont'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        $vs.ValidValues | Should -Contain 'Inherit'
+    }
+
+    It 'Out-TextEditor IconFont parameter has Inherit (default) in its ValidateSet' {
+        $vs = (Get-Command Out-TextEditor).Parameters['IconFont'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        $vs.ValidValues | Should -Contain 'Inherit'
     }
 }
 
@@ -1122,7 +1325,7 @@ Describe 'Control Creation - Inputs and Toggles' {
         $proxy.IsChecked | Should -BeTrue
     }
 
-    It 'New-UiGlyph adds a glyph TextBlock with MDL2 font' {
+    It 'New-UiGlyph adds a glyph TextBlock with the active icon font' {
         $parent = $script:session.CurrentParent
         $before = $parent.Children.Count
 
@@ -1727,8 +1930,8 @@ InModuleScope PsUi {
                 $script:errBadge.BrushKey | Should -Be 'ErrorBrush'
             }
 
-            It 'GlyphText uses Segoe MDL2 Assets' {
-                $script:warnBadge.GlyphText.FontFamily.Source | Should -Be 'Segoe MDL2 Assets'
+            It 'GlyphText uses the active icon font' {
+                $script:warnBadge.GlyphText.FontFamily.Source | Should -Match 'Segoe (MDL2 Assets|Fluent Icons)'
             }
 
             It 'Pill Tag carries IsBadgePill flag' {
@@ -2097,6 +2300,77 @@ Describe 'Native Dialogs - Runspace and action card paths' {
         finally {
             if ($psInstance) { $psInstance.Dispose() }
             $runspace.Close()
+        }
+    }
+}
+
+# Push-UiIconFontOverride is the per-window/per-Out-* dispatcher that the standalone tools call
+# to apply an icon-font override and hand back a snapshot for restore-on-close. Private, so tests
+# live inside InModuleScope.
+InModuleScope PsUi {
+    Describe 'Push-UiIconFontOverride' {
+        BeforeAll {
+            $script:savedPushSnap = [PsUi.ModuleContext]::SnapshotIconFontState()
+        }
+        AfterAll {
+            [PsUi.ModuleContext]::RestoreIconFontState($script:savedPushSnap)
+        }
+
+        It 'Returns $null when IsStandalone is $false (parent context wins, mirrors -Theme)' {
+            $r = Push-UiIconFontOverride -IsStandalone $false `
+                -BoundParameters @{ IconFont = 'SegoeMDL2' } `
+                -IconFont 'SegoeMDL2' -NoIconFontFallback $false
+            $r | Should -BeNullOrEmpty
+        }
+
+        It 'Returns $null when no override params are bound' {
+            $r = Push-UiIconFontOverride -IsStandalone $true `
+                -BoundParameters @{} `
+                -IconFont 'Inherit' -NoIconFontFallback $false
+            $r | Should -BeNullOrEmpty
+        }
+
+        It 'Treats explicit -IconFont Inherit as not-bound (returns $null, no mutation)' {
+            $before = [PsUi.ModuleContext]::ActiveIconFontName
+            $r = Push-UiIconFontOverride -IsStandalone $true `
+                -BoundParameters @{ IconFont = 'Inherit' } `
+                -IconFont 'Inherit' -NoIconFontFallback $false
+            $r | Should -BeNullOrEmpty
+            [PsUi.ModuleContext]::ActiveIconFontName | Should -Be $before
+        }
+
+        It 'Returns a snapshot capturing pre-mutation state when -IconFont Auto is bound' {
+            $origName     = [PsUi.ModuleContext]::ActiveIconFontName
+            $origFallback = [PsUi.ModuleContext]::IconFontNoFallback
+            $snap = Push-UiIconFontOverride -IsStandalone $true `
+                -BoundParameters @{ IconFont = 'Auto' } `
+                -IconFont 'Auto' -NoIconFontFallback $false
+            try {
+                $snap            | Should -Not -BeNullOrEmpty
+                $snap.FontName   | Should -Be $origName
+                $snap.NoFallback | Should -Be $origFallback
+                # Auto resolves through DetectDefaultIconFont
+                [PsUi.ModuleContext]::ActiveIconFontName |
+                    Should -Be ([PsUi.ModuleContext]::DetectDefaultIconFont())
+            }
+            finally {
+                [PsUi.ModuleContext]::RestoreIconFontState($snap)
+            }
+        }
+
+        It 'Toggles only fallback when only -NoIconFontFallback is bound (font name unchanged)' {
+            $origName = [PsUi.ModuleContext]::ActiveIconFontName
+            $snap = Push-UiIconFontOverride -IsStandalone $true `
+                -BoundParameters @{ NoIconFontFallback = $true } `
+                -IconFont 'Inherit' -NoIconFontFallback $true
+            try {
+                $snap | Should -Not -BeNullOrEmpty
+                [PsUi.ModuleContext]::IconFontNoFallback | Should -BeTrue
+                [PsUi.ModuleContext]::ActiveIconFontName | Should -Be $origName
+            }
+            finally {
+                [PsUi.ModuleContext]::RestoreIconFontState($snap)
+            }
         }
     }
 }

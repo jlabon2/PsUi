@@ -567,7 +567,7 @@ function Invoke-OnCompleteHandler {
 
                 $successIcon = [System.Windows.Controls.TextBlock]@{
                     Text                = [PsUi.ModuleContext]::GetIcon('Accept')
-                    FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                    FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                     FontSize            = 48
                     Foreground          = ConvertTo-UiBrush '#107C10'
                     HorizontalAlignment = 'Center'

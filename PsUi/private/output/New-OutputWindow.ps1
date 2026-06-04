@@ -129,7 +129,7 @@ function New-OutputWindow {
         
         $btn = [System.Windows.Controls.Button]@{
             Content         = $Glyph
-            FontFamily      = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily      = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize        = 10
             Width           = 46
             Height          = 32

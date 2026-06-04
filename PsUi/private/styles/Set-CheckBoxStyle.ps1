@@ -15,6 +15,9 @@ function Set-CheckBoxStyle {
     $CheckBox.VerticalContentAlignment = 'Center'
     $CheckBox.Cursor = [System.Windows.Input.Cursors]::Hand
 
+    # Substitute the active icon font into the XAML template
+    $iconFontName = [PsUi.ModuleContext]::ActiveIconFontName
+
     $xaml = @"
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -38,7 +41,7 @@ function Set-CheckBoxStyle {
             <Grid>
                 <TextBlock x:Name="checkMark"
                            Text="&#xE73E;"
-                           FontFamily="Segoe MDL2 Assets"
+                           FontFamily="$iconFontName"
                            FontSize="9"
                            Margin="-2,0,0,0"
                            Foreground="{DynamicResource AccentBrush}"
@@ -86,9 +89,10 @@ function Set-CheckBoxStyle {
 "@
 
     try {
-        # Parse once per session, reuse for every checkbox (saves ~3-5ms per call)
-        if (!$script:_checkBoxTemplate) {
+        # Re-parse if icon font changed since last cache
+        if (!$script:_checkBoxTemplate -or $script:_checkBoxTemplateFontName -ne $iconFontName) {
             $script:_checkBoxTemplate = [System.Windows.Markup.XamlReader]::Parse($xaml)
+            $script:_checkBoxTemplateFontName = $iconFontName
         }
         $CheckBox.Template = $script:_checkBoxTemplate
         

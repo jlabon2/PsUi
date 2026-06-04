@@ -26,7 +26,7 @@ function New-ThemePopupButton {
     
     $themeIcon = [System.Windows.Controls.TextBlock]::new()
     $themeIcon.Text = [PsUi.ModuleContext]::GetIcon('ColorBackground') 
-    $themeIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $themeIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $themeIcon.FontSize = 14
     $themeIcon.HorizontalAlignment = 'Center'
     $themeIcon.VerticalAlignment = 'Center'
@@ -99,7 +99,7 @@ function New-ThemePopupButton {
         
         $iconBlock = [System.Windows.Controls.TextBlock]::new()
         $iconBlock.Text = $IconChar
-        $iconBlock.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $iconBlock.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $iconBlock.FontSize = 12
         $iconBlock.Foreground = ConvertTo-UiBrush $Colors.SecondaryText
         $iconBlock.VerticalAlignment = 'Center'
@@ -135,7 +135,7 @@ function New-ThemePopupButton {
         
         $checkmark = [System.Windows.Controls.TextBlock]::new()
         $checkmark.Text = if ($ThemeName -eq $CurrentTheme) { [PsUi.ModuleContext]::GetIcon('CheckMark') } else { ' ' }
-        $checkmark.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $checkmark.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $checkmark.FontSize = 12
         $checkmark.Width = 18
         $checkmark.Foreground = ConvertTo-UiBrush $Colors.Accent

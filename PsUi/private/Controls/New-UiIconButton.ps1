@@ -1,7 +1,7 @@
 function New-UiIconButton {
     <#
     .SYNOPSIS
-        Creates a themed button with an icon from Segoe MDL2 Assets font.
+        Creates a themed button with an icon from the active icon font.
     #>
     [CmdletBinding()]
     param(
@@ -19,7 +19,7 @@ function New-UiIconButton {
     
     $icon = [System.Windows.Controls.TextBlock]@{
         Text       = $IconChar
-        FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     }
     
     $button = [System.Windows.Controls.Button]@{

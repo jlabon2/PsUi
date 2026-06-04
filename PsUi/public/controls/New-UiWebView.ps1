@@ -104,7 +104,7 @@ function New-UiWebView {
         
         $iconText = [System.Windows.Controls.TextBlock]@{
             Text                = [char]0xE783
-            FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize            = 32
             Foreground          = $colors.Error
             HorizontalAlignment = 'Center'

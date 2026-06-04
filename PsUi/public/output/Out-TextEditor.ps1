@@ -30,12 +30,24 @@ function Out-TextEditor {
         Font face for the editor. Defaults to Consolas.
     .PARAMETER FontSize
         Font size in points.
+    .PARAMETER IconFont
+        Icon font to use for the editor's chrome (header, find, save, etc): Inherit (default -
+        keep whatever Set-PsUiIconFont last established), Auto (re-detect), SegoeMDL2, or
+        SegoeFluentIcons. Honored only when launched standalone - when hosted inside a parent
+        New-UiWindow the parent's font wins. Restored to the previous active font on close.
+    .PARAMETER NoIconFontFallback
+        Pin to the chosen icon font with no WPF fallback chain. Honored only when standalone.
+        On Win10 with only MDL2 installed this is a rendering no-op (no secondary to fall back
+        to); the remaining effect is tighter IntelliSense for -Icon names.
     .EXAMPLE
         Out-TextEditor -InitialText "Hello World"
     .EXAMPLE
         Get-Content C:\file.txt | Out-TextEditor -Theme Dark
     .EXAMPLE
         "Line 1", "Line 2", "Line 3" | Out-TextEditor
+    .EXAMPLE
+        Out-TextEditor -InitialText 'Modern' -IconFont SegoeFluentIcons
+        # Render chrome icons in Fluent for this window only.
     #>
     [CmdletBinding()]
     param(
@@ -54,6 +66,12 @@ function Out-TextEditor {
         [string]$FontFamily = 'Consolas',
         [ValidateRange(8, 24)]
         [int]$FontSize = 12,
+        # Default 'Inherit' (rather than leaving unbound) so $IconFont always satisfies the
+        # ValidateSet. Otherwise any .GetNewClosure() inside the function would explode trying
+        # to carry an unbound "" value through the attribute - PowerShell footgun.
+        [ValidateSet('Inherit', 'Auto', 'SegoeMDL2', 'SegoeFluentIcons')]
+        [string]$IconFont = 'Inherit',
+        [switch]$NoIconFontFallback,
         [switch]$ReadOnly,
         [switch]$NoWordWrap,
         [switch]$SpellCheck
@@ -103,6 +121,29 @@ function Out-TextEditor {
     else {
         # Child window: use injected theme colors from parent context
         $colors = Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue
+    }
+
+    # Push -IconFont override when standalone. Returns $null when inside a parent (parent's font
+    # wins) or when no override params were supplied. Restore in the finally around ShowDialog
+    # below; trap covers throws between here and there.
+    $overrideParams = @{
+        IsStandalone       = $isStandalone
+        BoundParameters    = $PSBoundParameters
+        IconFont           = $IconFont
+        NoIconFontFallback = [bool]$NoIconFontFallback
+    }
+    $iconFontSnap = Push-UiIconFontOverride @overrideParams
+
+    # A terminating throw between the push above and the inner try/finally around ShowDialog
+    # would leak the override into session state - the finally never runs because we never entered
+    # the try. trap fires on any error reaching function scope, restores, then break re-throws so
+    # the caller still sees the original error.
+    trap {
+        if ($iconFontSnap) {
+            [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+            $iconFontSnap = $null
+        }
+        break
     }
 
     # Ultimate fallback theme colors
@@ -207,7 +248,7 @@ function Out-TextEditor {
 
     $headerIcon = [System.Windows.Controls.TextBlock]@{
         Text              = [PsUi.ModuleContext]::GetIcon('Edit')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 24
         VerticalAlignment = 'Center'
         Width             = 32
@@ -263,7 +304,7 @@ function Out-TextEditor {
     $copyAllPanel.Orientation = 'Horizontal'
     $copyAllIcon = [System.Windows.Controls.TextBlock]::new()
     $copyAllIcon.Text = [PsUi.ModuleContext]::GetIcon('Copy')
-    $copyAllIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $copyAllIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $copyAllIcon.FontSize = 12
     $copyAllIcon.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $copyAllIcon.VerticalAlignment = 'Center'
@@ -287,7 +328,7 @@ function Out-TextEditor {
     $clearPanel.Orientation = 'Horizontal'
     $clearIcon = [System.Windows.Controls.TextBlock]::new()
     $clearIcon.Text = [PsUi.ModuleContext]::GetIcon('Delete')
-    $clearIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $clearIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $clearIcon.FontSize = 12
     $clearIcon.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $clearIcon.VerticalAlignment = 'Center'
@@ -415,7 +456,7 @@ function Out-TextEditor {
 
     $findClearBtn = [System.Windows.Controls.Button]::new()
     $findClearBtn.Content = [PsUi.ModuleContext]::GetIcon('Cancel')
-    $findClearBtn.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findClearBtn.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findClearBtn.FontSize = 9
     $findClearBtn.Width = 14
     $findClearBtn.Height = 14
@@ -445,7 +486,7 @@ function Out-TextEditor {
     $findPrevBtn.ToolTip = 'Find previous occurrence (Shift+F3)'
     $findPrevIcon = [System.Windows.Controls.TextBlock]::new()
     $findPrevIcon.Text = [PsUi.ModuleContext]::GetIcon('ArrowLeft')
-    $findPrevIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findPrevIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findPrevIcon.FontSize = 12
     $findPrevIcon.HorizontalAlignment = 'Center'
     $findPrevIcon.VerticalAlignment = 'Center'
@@ -462,7 +503,7 @@ function Out-TextEditor {
     $findNextBtn.ToolTip = 'Find next occurrence (F3)'
     $findNextIcon = [System.Windows.Controls.TextBlock]::new()
     $findNextIcon.Text = [PsUi.ModuleContext]::GetIcon('ArrowRight')
-    $findNextIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findNextIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findNextIcon.FontSize = 12
     $findNextIcon.HorizontalAlignment = 'Center'
     $findNextIcon.VerticalAlignment = 'Center'
@@ -879,7 +920,16 @@ function Out-TextEditor {
         }
     }.GetNewClosure())
 
-    [void]$window.ShowDialog()
+    try {
+        [void]$window.ShowDialog()
+    }
+    finally {
+        # Restore the active icon font if we pushed an override - no-op when $iconFontSnap is $null.
+        # Null after restore so the function-scope trap (if it fires on a ShowDialog throw
+        # propagating past us) doesn't redundantly restore the same snapshot.
+        [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+        $iconFontSnap = $null
+    }
 
     return $window.Tag
     } # end block

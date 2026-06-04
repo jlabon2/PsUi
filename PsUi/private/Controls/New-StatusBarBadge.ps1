@@ -30,7 +30,7 @@ function New-StatusBarBadge {
     # Icon glyph - tagged so severity DFS skips it
     $glyphText = [System.Windows.Controls.TextBlock]@{
         Text              = $glyph
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 10
         VerticalAlignment = 'Center'
         Tag               = @{ IsBadgeText = $true }

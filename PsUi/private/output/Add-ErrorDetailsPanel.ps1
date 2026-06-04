@@ -43,7 +43,7 @@ function Add-ErrorDetailsPanel {
     }
     $expandIcon = [System.Windows.Controls.TextBlock]@{
         Text              = [PsUi.ModuleContext]::GetIcon('ChevronRight')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 12
         VerticalAlignment = 'Center'
         Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)

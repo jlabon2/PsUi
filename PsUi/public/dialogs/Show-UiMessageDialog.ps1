@@ -125,7 +125,7 @@ function Show-UiMessageDialog {
         $copyContent = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
         $copyIcon = [System.Windows.Controls.TextBlock]@{
             Text              = [PsUi.ModuleContext]::GetIcon('Copy')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 12
             Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
             VerticalAlignment = 'Center'
@@ -224,7 +224,7 @@ function Show-UiMessageDialog {
         if ($hasIcon) {
             $iconBlock = [System.Windows.Controls.TextBlock]@{
                 Text                = $overlayGlyph
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize            = 32
                 Foreground          = ConvertTo-UiBrush $iconColor
                 VerticalAlignment   = 'Center'

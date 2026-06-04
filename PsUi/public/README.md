@@ -27,7 +27,7 @@ User-facing functions exported by the PsUi module, organized by category.
 | `New-UiDatePicker` | Creates a date selection control |
 | `New-UiDropdown` | Creates a dropdown selection control |
 | `New-UiDropdownButton` | Creates a button with dropdown menu |
-| `New-UiGlyph` | Creates an icon from Segoe MDL2 Assets |
+| `New-UiGlyph` | Creates an icon from the active icon font |
 | `New-UiImage` | Creates an image control from file or base64 |
 | `New-UiInput` | Creates a labeled text input field |
 | `New-UiLabel` | Creates a text label |

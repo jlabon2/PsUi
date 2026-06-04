@@ -77,6 +77,10 @@ if (Test-Path $iconPath) {
 
         # Hand off the icons to the C# side
         [PsUi.ModuleContext]::Initialize($iconDict)
+
+        if ([PsUi.ModuleContext]::NoIconFontInstalled) {
+            Write-Warning "No icon font found (Segoe MDL2 Assets or Segoe Fluent Icons). Icons will not render correctly."
+        }
     }
     catch {
         Write-Warning "Failed to load icons: $_"

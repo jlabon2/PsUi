@@ -22,6 +22,15 @@ function Out-Datagrid {
         Window width (400-2000).
     .PARAMETER Height
         Window height (300-1500).
+    .PARAMETER IconFont
+        Icon font for the grid's chrome (header, export, copy, filter clear): Inherit (default -
+        keep whatever Set-PsUiIconFont last established), Auto (re-detect), SegoeMDL2, or
+        SegoeFluentIcons. Honored only when launched standalone - when hosted inside a parent
+        New-UiWindow the parent's font wins. Restored to the previous active font on close.
+    .PARAMETER NoIconFontFallback
+        Pin to the chosen icon font with no WPF fallback chain. Honored only when standalone.
+        On Win10 with only MDL2 installed this is a rendering no-op (no secondary to fall back
+        to); the remaining effect is tighter IntelliSense for -Icon names.
     .EXAMPLE
         Get-Process | Out-Datagrid -TitleText 'Processes' -IsFilterable
         # Display processes in a grid
@@ -54,7 +63,15 @@ function Out-Datagrid {
         [int]$Width = 900,
 
         [ValidateRange(300, 1500)]
-        [int]$Height = 600
+        [int]$Height = 600,
+
+        # Default 'Inherit' (rather than leaving unbound) so $IconFont always satisfies the
+        # ValidateSet. Otherwise any .GetNewClosure() inside the function would explode trying
+        # to carry an unbound "" value through the attribute - PowerShell footgun.
+        [ValidateSet('Inherit', 'Auto', 'SegoeMDL2', 'SegoeFluentIcons')]
+        [string]$IconFont = 'Inherit',
+
+        [switch]$NoIconFontFallback
     )
 
     begin {
@@ -103,6 +120,29 @@ function Out-Datagrid {
         }
         else {
             $colors = Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue
+        }
+
+        # Push -IconFont override when standalone. Returns $null when inside a parent (parent's
+        # font wins) or when no override params were supplied. Restore in the finally around
+        # ShowDialog below; trap covers throws between here and there.
+        $overrideParams = @{
+            IsStandalone       = $isStandalone
+            BoundParameters    = $PSBoundParameters
+            IconFont           = $IconFont
+            NoIconFontFallback = [bool]$NoIconFontFallback
+        }
+        $iconFontSnap = Push-UiIconFontOverride @overrideParams
+
+        # A terminating throw between the push above and the inner try/finally around ShowDialog
+        # would leak the override into session state - the finally never runs because we never
+        # entered the try. trap fires on any error reaching function scope, restores, then break
+        # re-throws so the caller still sees the original error.
+        trap {
+            if ($iconFontSnap) {
+                [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+                $iconFontSnap = $null
+            }
+            break
         }
 
         if (!$colors) {
@@ -186,7 +226,7 @@ function Out-Datagrid {
 
         $headerIcon = [System.Windows.Controls.TextBlock]@{
             Text              = [PsUi.ModuleContext]::GetIcon('Grid')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 24
             VerticalAlignment = 'Center'
             Width             = 32
@@ -260,7 +300,7 @@ function Out-Datagrid {
             # Clear button overlaid on filter box
             $filterClearBtn = [System.Windows.Controls.Button]@{
                 Content             = [PsUi.ModuleContext]::GetIcon('Cancel')
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize            = 10
                 Width               = 16
                 Height              = 16
@@ -302,7 +342,7 @@ function Out-Datagrid {
         }
         $exportIcon = [System.Windows.Controls.TextBlock]@{
             Text                = [PsUi.ModuleContext]::GetIcon('SaveLocal')
-            FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize            = 16
             HorizontalAlignment = 'Center'
             VerticalAlignment   = 'Center'
@@ -321,7 +361,7 @@ function Out-Datagrid {
         }
         $copyIcon = [System.Windows.Controls.TextBlock]@{
             Text                = [PsUi.ModuleContext]::GetIcon('Copy')
-            FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize            = 16
             HorizontalAlignment = 'Center'
             VerticalAlignment   = 'Center'
@@ -567,7 +607,16 @@ function Out-Datagrid {
             Set-UiDialogPosition -Dialog $window
         }
 
-        [void]$window.ShowDialog()
+        try {
+            [void]$window.ShowDialog()
+        }
+        finally {
+            # Restore active icon font if we pushed an override - no-op when $iconFontSnap is $null.
+            # Null after restore so the function-scope trap (if it fires on a ShowDialog throw
+            # propagating past us) doesn't redundantly restore the same snapshot.
+            [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+            $iconFontSnap = $null
+        }
 
         # Return selection if PassThru and OK was clicked
         if ($PassThru -and $result.Selection) {

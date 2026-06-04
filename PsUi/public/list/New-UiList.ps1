@@ -232,7 +232,7 @@ function New-UiList {
             # Search icon OUTSIDE the textbox (to the left)
             $searchIcon = [System.Windows.Controls.TextBlock]@{
                 Text                = [PsUi.ModuleContext]::GetIcon('Search')
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize            = 14
                 Foreground          = ConvertTo-UiBrush $colors.SecondaryText
                 VerticalAlignment   = 'Center'
@@ -261,7 +261,7 @@ function New-UiList {
             # Clear button overlay (right side) - uses $this.Tag pattern like datagrid
             $clearBtn = [System.Windows.Controls.Button]@{
                 Content             = [PsUi.ModuleContext]::GetIcon('Cancel')
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize            = 10
                 Width               = 16
                 Height              = 16
@@ -357,7 +357,7 @@ function New-UiList {
         if ($AllowAdd) {
             $addBtn = [System.Windows.Controls.Button]@{
                 Content    = [PsUi.ModuleContext]::GetIcon('Add')
-                FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize   = 12
                 Width      = 24
                 Height     = 24

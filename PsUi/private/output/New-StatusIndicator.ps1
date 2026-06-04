@@ -58,7 +58,7 @@ function New-StatusIndicator {
     # Success checkmark icon (hidden initially)
     $statusSuccess = [System.Windows.Controls.TextBlock]@{
         Text                = [PsUi.ModuleContext]::GetIcon('Accept')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 16
         Foreground          = ConvertTo-UiBrush '#107C10'
         HorizontalAlignment = 'Center'
@@ -70,7 +70,7 @@ function New-StatusIndicator {
     # Warning icon (hidden initially)
     $statusWarning = [System.Windows.Controls.TextBlock]@{
         Text                = [PsUi.ModuleContext]::GetIcon('Warning')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 16
         Foreground          = ConvertTo-UiBrush '#FFA500'
         HorizontalAlignment = 'Center'

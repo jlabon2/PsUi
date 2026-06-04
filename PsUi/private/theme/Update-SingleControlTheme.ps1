@@ -79,7 +79,7 @@ function Update-SingleControlTheme {
         # Update button icon color (non-accent buttons use accent color for icon)
         if (!$isAccent -and $Control.Content -is [System.Windows.Controls.StackPanel]) {
             foreach ($child in $Control.Content.Children) {
-                if ($child -is [System.Windows.Controls.TextBlock] -and $child.FontFamily.Source -eq 'Segoe MDL2 Assets') {
+                if ($child -is [System.Windows.Controls.TextBlock] -and (Test-IconFont $child.FontFamily)) {
                     $child.Foreground = ConvertTo-UiBrush $Colors.Accent
                 }
             }
@@ -136,7 +136,7 @@ function Update-SingleControlTheme {
         # when invoked from a dispatched scriptblock
         $tag = $Control.Tag
         if ($null -eq $tag) {
-            if ($Control.FontFamily.Source -ne 'Segoe MDL2 Assets') {
+            if (!(Test-IconFont $Control.FontFamily)) {
                 $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
             }
         }
@@ -173,7 +173,7 @@ function Update-SingleControlTheme {
                 }
                 default {
                     # Regular text (not an icon font)
-                    if ($Control.FontFamily.Source -ne 'Segoe MDL2 Assets') {
+                    if (!(Test-IconFont $Control.FontFamily)) {
                         $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
                     }
                 }

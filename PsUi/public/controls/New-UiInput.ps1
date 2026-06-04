@@ -296,7 +296,7 @@ function New-UiInput {
 
         $iconBlock = [System.Windows.Controls.TextBlock]::new()
         $iconBlock.Text = $iconCode
-        $iconBlock.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        $iconBlock.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         $iconBlock.FontSize = 14
         $iconBlock.HorizontalAlignment = 'Center'
         $iconBlock.VerticalAlignment = 'Center'

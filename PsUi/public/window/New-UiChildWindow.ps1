@@ -310,7 +310,7 @@ function New-UiChildWindow {
     # it creates a local value that overrides template trigger setters after theme changes.
     $closeBtn = [System.Windows.Controls.Button]@{
         Content             = [PsUi.ModuleContext]::GetIcon('Close')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 10
         Width               = 36
         Height              = 36
@@ -434,6 +434,12 @@ catch {
     return $null
 }
 
+# Resolve private function ahead of time so the closure below carries the resolved CommandInfo.
+# WPF event handlers fire under the dispatcher's session state, which doesn't see module-private
+# functions even though the script block was defined inside the module. Capturing here sidesteps
+# the lookup at fire time.
+$setUiResourcesCmd = Get-Command Set-UIResources -ErrorAction SilentlyContinue
+
 # Set up window load event for fade-in and theming
 $window.Add_Loaded({
     # Apply manual positioning if specified
@@ -443,7 +449,9 @@ $window.Add_Loaded({
     }
 
     # Apply title bar theming using Set-UIResources (same as main window)
-    Set-UIResources -Window $this -Colors $colors -IconPath $null
+    if ($setUiResourcesCmd) {
+        & $setUiResourcesCmd -Window $this -Colors $colors -IconPath $null
+    }
 
     # Force taskbar to use our themed icon (requires window handle)
     if ($childWindowIcon) {

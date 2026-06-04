@@ -64,7 +64,7 @@ function New-PasswordInputWithPeek {
 
     $eyeIcon = [System.Windows.Controls.TextBlock]@{
         Text                = [PsUi.ModuleContext]::GetIcon('DarkEye')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 14
         Foreground          = ConvertTo-UiBrush $colors.ButtonFg
         HorizontalAlignment = 'Center'

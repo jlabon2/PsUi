@@ -67,7 +67,7 @@ function New-StatusBarMessagePopup {
     # Close button (X glyph, inherits foreground from themed button style)
     $closeGlyph = [System.Windows.Controls.TextBlock]@{
         Text                = [char]0xE711
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 10
         VerticalAlignment   = 'Center'
         HorizontalAlignment = 'Center'

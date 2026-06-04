@@ -1602,19 +1602,14 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 }
             }
 
-            New-UiActionCard -Header "Multi-Tab DataSet" -Icon "MapLayers" -ButtonText "View" -Description "Multiple data types in one grid with tabs" -Action {
-                Out-Datagrid -TitleText "System Overview" -IsFilterable -DataScriptBlock {
-                    New-DataSet -Name "Processes" -Data (
-                        Get-Process | Select-Object Name, Id, CPU, WorkingSet
-                    )
-                    New-DataSet -Name "Services" -Data (
-                        Get-Service | Select-Object Name, DisplayName, Status
-                    )
-                    New-DataSet -Name "Drives" -Data (
-                        Get-PSDrive -PSProvider FileSystem | Where-Object Used |
-                            Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,1)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}}
-                    )
-                }
+            New-UiActionCard -Header "View Drives" -Icon "HardDrive" -ButtonText "View" -Description "Filesystem drives with usage stats" -Action {
+                Get-PSDrive -PSProvider FileSystem | Where-Object Used |
+                    Select-Object Name,
+                        @{N='UsedGB' ;E={[math]::Round($_.Used/1GB,1)}},
+                        @{N='FreeGB' ;E={[math]::Round($_.Free/1GB,1)}},
+                        @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}},
+                        DisplayRoot |
+                    Out-Datagrid -TitleText "Filesystem Drives" -IsFilterable
             }
         }
 

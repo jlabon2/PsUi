@@ -36,7 +36,7 @@ function New-ActionDropdownButton {
     if ($iconChar) {
         $iconText = [System.Windows.Controls.TextBlock]@{
             Text       = $iconChar
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize   = 14
             Margin     = [System.Windows.Thickness]::new(0, 0, 6, 0)
             VerticalAlignment = 'Center'
@@ -52,7 +52,7 @@ function New-ActionDropdownButton {
 
     $chevron = [System.Windows.Controls.TextBlock]@{
         Text       = [PsUi.ModuleContext]::GetIcon('ChevronDown')
-        FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize   = 10
         Margin     = [System.Windows.Thickness]::new(6, 0, 0, 0)
         VerticalAlignment = 'Center'
@@ -108,7 +108,7 @@ function New-ActionDropdownButton {
 
             $actionIcon = [System.Windows.Controls.TextBlock]@{
                 Text       = $actionIconChar
-                FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize   = 14
                 Width      = 24
                 VerticalAlignment = 'Center'

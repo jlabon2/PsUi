@@ -10,7 +10,7 @@ function New-UiCard {
     .PARAMETER Content
         ScriptBlock containing the card's content controls.
     .PARAMETER Icon
-        Optional icon name from Segoe MDL2 Assets to display in the header.
+        Optional icon name to display in the header. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER Accent
         Use the theme's accent color for the card header/border.
     .PARAMETER HeaderBackground
@@ -167,7 +167,7 @@ function New-UiCard {
 
                 $iconBlock = [System.Windows.Controls.TextBlock]@{
                     Text       = $iconChar
-                    FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                    FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
                     FontSize   = 16
                     Foreground = $iconForeground
                     VerticalAlignment = [System.Windows.VerticalAlignment]::Center

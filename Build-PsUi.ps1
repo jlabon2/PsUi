@@ -45,12 +45,17 @@ if (Test-Path $libPath) {
     Remove-Item $libPath -Recurse -Force
 }
 
-# Build
+# Build each target sequentially to avoid obj/ file-lock race condition.
+# Multi-target parallel builds share obj/Release/ intermediates and collide
+# when three frameworks write to the same PsUi.dll at the same time.
 Push-Location $srcPath
 try {
-    dotnet build -c $Configuration
-    if ($LASTEXITCODE -ne 0) {
-        throw "Build failed with exit code $LASTEXITCODE"
+    foreach ($tfm in @('net452', 'net472', 'net6.0-windows')) {
+        Write-Host "  Building $tfm..." -ForegroundColor Gray
+        dotnet build -c $Configuration -f $tfm
+        if ($LASTEXITCODE -ne 0) {
+            throw "Build failed for $tfm with exit code $LASTEXITCODE"
+        }
     }
 }
 finally {

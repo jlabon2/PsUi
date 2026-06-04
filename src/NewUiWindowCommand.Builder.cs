@@ -23,7 +23,8 @@ namespace PsUi
             Window window = null;
             Guid sessionId = Guid.Empty;
             Runspace windowRunspace = null;
-            
+            ModuleContext.IconFontSnapshot iconFontSnapshot = null;
+
             try
             {
                 // Create session for this thread FIRST
@@ -101,6 +102,37 @@ namespace PsUi
 
                 // Re-set session after module import (module may have reset it)
                 SessionManager.SetCurrentSession(sessionId);
+
+                // Resolve icon font. Inherit (the default) keeps whatever Set-PsUiIconFont or a previous
+                // window left active. Auto re-detects. Explicit names pin the font.
+                // NoIconFontFallback can be specified independently to toggle just the fallback chain.
+                // Snapshot first so the finally block can restore on window close - per-window
+                // overrides shouldn't leak to subsequent operations.
+                bool iconFontExplicit = !string.Equals(p.IconFont, "Inherit", StringComparison.OrdinalIgnoreCase);
+                if (iconFontExplicit || p.NoIconFontFallbackBound)
+                {
+                    iconFontSnapshot = ModuleContext.SnapshotIconFontState();
+                }
+
+                if (iconFontExplicit)
+                {
+                    string resolvedIconFont = ModuleContext.ResolveIconFontToken(p.IconFont);
+                    // ResolveIconFontToken returns null only for Inherit/empty - guarded above.
+                    // If the user supplied NoIconFontFallback use it, else inherit the current setting.
+                    bool noFallback = p.NoIconFontFallbackBound ? p.NoIconFontFallback : ModuleContext.IconFontNoFallback;
+                    ModuleContext.SetIconFont(resolvedIconFont, noFallback);
+                    DebugLog("ICON", "Icon font set to: " + ModuleContext.ActiveIconFontName + (noFallback ? " (no-fallback)" : " (with-fallback)"));
+                }
+                else if (p.NoIconFontFallbackBound)
+                {
+                    // IconFont=Inherit but user toggled the fallback flag - apply just that change.
+                    ModuleContext.SetIconFontNoFallback(p.NoIconFontFallback);
+                    DebugLog("ICON", "Icon font fallback: " + (p.NoIconFontFallback ? "off" : "on") + " (font unchanged: " + ModuleContext.ActiveIconFontName + ")");
+                }
+                else
+                {
+                    DebugLog("ICON", "Icon font inherited: " + ModuleContext.ActiveIconFontName);
+                }
 
                 // Clear stale registered elements from previous windows
                 ThemeEngine.Reset();
@@ -343,12 +375,20 @@ namespace PsUi
             }
             finally
             {
+                // Restore icon font state if we overrode it - per-window -IconFont shouldn't leak
+                // to subsequent operations in the same session. No-op when nothing was overridden.
+                if (iconFontSnapshot != null)
+                {
+                    try { ModuleContext.RestoreIconFontState(iconFontSnapshot); }
+                    catch (Exception restoreEx) { DebugLog("ICON", "Restore failed: " + restoreEx.Message); }
+                }
+
                 // Always clean up session, even on error
                 if (sessionId != Guid.Empty)
                 {
                     SessionManager.DisposeSession(sessionId);
                 }
-                
+
                 if (windowRunspace != null)
                 {
                     try
@@ -744,7 +784,7 @@ namespace PsUi
             var btn = new Button
             {
                 Content = glyph,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ModuleContext.ActiveIconFontFamily,
                 FontSize = 10,
                 Width = 46,
                 Height = 32,

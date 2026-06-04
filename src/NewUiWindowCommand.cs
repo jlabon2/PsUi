@@ -47,6 +47,13 @@ namespace PsUi
         [Parameter]
         public string ThemePath { get; set; }
 
+        [Parameter(HelpMessage = "Icon font for this window: Inherit (default - keep whatever Set-PsUiIconFont last established), Auto (re-detect), SegoeMDL2, or SegoeFluentIcons. Restored to the previous active font on window close.")]
+        [ValidateSet("Inherit", "Auto", "SegoeMDL2", "SegoeFluentIcons")]
+        public string IconFont { get; set; } = "Inherit";
+
+        [Parameter(HelpMessage = "Pin the chosen icon font with no WPF fallback chain. Glyphs missing from the chosen font render as tofu. On a Win10 box with only MDL2 installed this is a rendering no-op (no secondary to fall back to); its remaining effect is tighter IntelliSense for -Icon names.")]
+        public SwitchParameter NoIconFontFallback { get; set; }
+
         [Parameter]
         public SwitchParameter NoResize { get; set; }
 
@@ -149,6 +156,20 @@ namespace PsUi
                 return;
             }
 
+            // Warn when the caller named a specific icon font that isn't installed - matches
+            // Set-PsUiIconFont so the per-window override doesn't silently fall back. Auto and
+            // Inherit stay silent. Done here (not in RunWindow) because RunWindow is on a worker
+            // thread and WriteWarning is only safe on the cmdlet processing thread.
+            if (string.Equals(IconFont, "SegoeMDL2", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(IconFont, "SegoeFluentIcons", StringComparison.OrdinalIgnoreCase))
+            {
+                string resolvedIconFont = ModuleContext.ResolveIconFontToken(IconFont);
+                if (!ModuleContext.IsFontInstalled(resolvedIconFont))
+                {
+                    WriteWarning(resolvedIconFont + " is not installed. Falling back to " + ModuleContext.FontNameMDL2 + ".");
+                }
+            }
+
             // Check if -Debug or -Verbose was passed
             bool debugMode = MyInvocation.BoundParameters.ContainsKey("Debug");
             bool verboseMode = MyInvocation.BoundParameters.ContainsKey("Verbose");
@@ -172,6 +193,9 @@ namespace PsUi
                 AutoSizeHeight = autoSizeHeight,
                 Theme = Theme,
                 ThemePath = ThemePath,
+                IconFont = IconFont,
+                NoIconFontFallback = NoIconFontFallback.IsPresent,
+                NoIconFontFallbackBound = MyInvocation.BoundParameters.ContainsKey("NoIconFontFallback"),
                 NoResize = NoResize.IsPresent,
                 Icon = Icon,
                 LayoutMode = LayoutMode,
@@ -328,6 +352,9 @@ namespace PsUi
             public bool AutoSizeHeight { get; set; }
             public string Theme { get; set; }
             public string ThemePath { get; set; }
+            public string IconFont { get; set; }
+            public bool NoIconFontFallback { get; set; }
+            public bool NoIconFontFallbackBound { get; set; }
             public bool NoResize { get; set; }
             public string Icon { get; set; }
             public string LayoutMode { get; set; }

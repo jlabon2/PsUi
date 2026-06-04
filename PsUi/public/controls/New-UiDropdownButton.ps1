@@ -13,8 +13,8 @@ function New-UiDropdownButton {
     .PARAMETER Variable
         Variable name to register the control with for hydration access.
     .PARAMETER Icon
-        Icon name from Segoe MDL2 Assets (e.g., 'ChevronDown', 'Settings', 'Filter').
-        Default is 'ChevronDown'.
+        Icon name (e.g., 'ChevronDown', 'Settings', 'Filter'). Default is 'ChevronDown'.
+        Use Show-UiGlyphBrowser to browse names.
     .PARAMETER Tooltip
         Tooltip text shown on hover.
     .PARAMETER OnChange
@@ -118,7 +118,7 @@ function New-UiDropdownButton {
 
     # Icon
     $iconBlock = [System.Windows.Controls.TextBlock]@{
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 12
         HorizontalAlignment = 'Center'
         VerticalAlignment   = 'Center'

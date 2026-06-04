@@ -366,7 +366,7 @@ namespace PsUi
             var peekIcon = new TextBlock
             {
                 Text = "\uE7B3",  // Eye icon
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ModuleContext.ActiveIconFontFamily,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -558,7 +558,7 @@ namespace PsUi
             _iconText = new TextBlock
             {
                 Text = "\uE765",  // Keyboard icon
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ModuleContext.ActiveIconFontFamily,
                 FontSize = IconFontSize,
                 Foreground = new SolidColorBrush(_accentColor),
                 VerticalAlignment = VerticalAlignment.Center,
@@ -582,7 +582,7 @@ namespace PsUi
             var closeButton = new Button
             {
                 Content = "\uE8BB",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = ModuleContext.ActiveIconFontFamily,
                 FontSize = 10,
                 Width = CloseButtonSize,
                 Height = CloseButtonSize,
@@ -1414,7 +1414,7 @@ namespace PsUi
                 
                 // Create typeface for glyph
                 var typeface = new Typeface(
-                    new FontFamily("Segoe MDL2 Assets"),
+                    ModuleContext.ActiveIconFontFamily,
                     FontStyles.Normal,
                     FontWeights.Normal,
                     FontStretches.Normal
