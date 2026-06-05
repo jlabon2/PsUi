@@ -4,7 +4,7 @@ All changes to PsUi will be documented in this file.
 
 ## [Unreleased]
 
-Status bars, progress bars, input dialogs, threading fixes, and a pile of theme corrections. The headline feature is `-Intercept` on `New-UiStatusBar` - drop a status bar in your window and Write-Warning, Write-Error, Write-Host, and Write-Progress just show up. No code changes needed, no new patterns to learn.
+Status bars, progress bars, input dialogs, threading fixes, and a pile of theme corrections. The headline feature is `-Intercept` on `New-UiStatusBar` - drop a status bar in your window and Write-Warning, Write-Error, Write-Host, and Write-Progress just show up.
 
 ### Added
 
@@ -93,6 +93,10 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11) per-session or per-
 
 - **Show-WindowsObjectPicker**: Fixed "No locations can be found" on workgroup, DCs, and, in some instances, domain joined machines. Now auto-detects domain membership via `NetGetJoinInformation` and zeroes uplevel filters on workgroup machines. Also added `SKIP_TARGET_COMPUTER_DC_CHECK` so the picker works on domain controllers, and a progressive fallback chain (local+domain+GC -> local+domain -> local) for domain-joined machines. Added `DiagnoseInit` method for troubleshooting scope failures because this is an absolute nightmare to debug.
 
+#### New-UiTool
+
+- **Async button actions**: `New-UiTool` crashed when called from a default async `-Action` - WPF windows on the async runspace's STA thread inevitably die. `New-UiButton` AST-detects window-spawners and auto-flips to `-NoAsync` so the spawn lands on the host's dispatcher. (Fixes #22)
+
 #### Other
 
 - **ConvertTo-UiBrush**: Brush cache was null on first call from a freshly hydrated runspace. Now lazy-initialized so Set-UiProgress from button actions doesn't throw. Turns out the module-scope init only fixed half the problem - WPF event handler callbacks resolve to the `Global:` function copy that AsyncExecutor injects, and that copy has its own `$script:` scope where nobody ever created the cache. Moved the lazy-init inside the function body so it doesn't matter which copy you hit.
@@ -105,7 +109,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11) per-session or per-
 - **Show-UiOutput**: `Start-Sleep -Milliseconds 500` in the Escape and window-close handlers replaced with a short DispatcherTimer. The sleep was blocking the UI thread while waiting for the Topmost change to render before showing a confirm dialog. Now deferred so the UI stays responsive.
 - **Show-UiOutput**: The 50ms host output queue polling timer now stops itself after the executor finishes and both queues are drained. Previously it kept firing 20 times per second for the entire lifetime of the output window, even when idle, burning cycles endlessly until closed.
 - **New-UiChildWindow**: The `Add_Loaded` handler called a private function (`Set-UIResources`) by name. WPF event handlers can't see module-private functions even when the script block was defined inside the module - `.GetNewClosure()` carries variable values across, but not the ability to find private functions by name. Manifested as `The term 'Set-UIResources' is not recognized` any time a child window opened without a parent (e.g. `Show-UiGlyphBrowser` from the console). Pre-existing since initial release, surfaced now by the new icon-font test rig exercising the standalone path. Resolves the function ahead of the closure now.
-- **Start-PSUiDemo (Standalone tab, Data Grid panel)**: The "Multi-Tab DataSet" card called `Out-Datagrid -DataScriptBlock { New-DataSet ... }`. Neither `-DataScriptBlock` nor `New-DataSet` has ever existed in source - this was aspirational demo code that shipped in the initial release for a feature that was never implemented. Replaced with a "View Drives" card that uses the real pipeline API.
+- **Start-PSUiDemo (Standalone tab, Data Grid panel)**: The "Multi-Tab DataSet" card called `Out-Datagrid -DataScriptBlock { New-DataSet ... }`. Neither `-DataScriptBlock` nor `New-DataSet` has ever existed in source - this was aspirational demo code that shipped in the initial release for a feature that was temporarily implemented but never kept. Replaced with a "View Drives" card that uses the real pipeline API.
 
 ## [1.0.4] - 2026-04-30
 

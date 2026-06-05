@@ -36,7 +36,9 @@ function New-UiButton {
     .PARAMETER Height
         Button height in pixels. Defaults to 28.
     .PARAMETER NoAsync
-        Execute synchronously on the UI thread (blocks UI).
+        Execute synchronously on the UI thread (blocks UI). Auto-set when the action
+        spawns a window so it renders on the host's dispatcher; pass -NoAsync:$false
+        to override.
     .PARAMETER NoWait
         Execute async with output window, but don't block the parent window.
         Other buttons remain clickable while this action runs. The clicked button
@@ -322,6 +324,15 @@ function New-UiButton {
     $capturedVars  = $actionContext.CapturedVars
     $capturedFuncs = $actionContext.CapturedFuncs
     $resolvedModules = $actionContext.LinkedModules
+
+    # WPF windows on the async runspace's STA thread inevtiably die. If the action's AST
+    # has a window-spawner in it, flip to sync so the spawn lands on the host's dispatcher instead.
+    $windowSpawners = @('New-UiTool', 'New-UiChildWindow', 'New-UiWindow')
+    $detected = $actionContext.AutoDetectedFuncs | Where-Object { $windowSpawners -contains $_ }
+    if ($detected -and !$PSBoundParameters.ContainsKey('NoAsync')) {
+        Write-Debug "[New-UiButton] AST found $($detected -join ', '), forcing -NoAsync."
+        $NoAsync = $true
+    }
 
     # Store action context in button tag for click handler
     $displayTitle = if ($OutputTitle) { $OutputTitle } else { $Text }
