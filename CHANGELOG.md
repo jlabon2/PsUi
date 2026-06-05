@@ -50,6 +50,17 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11) per-session or per-
 - **`-NoIconFontFallback` on single-font systems**: On Win10/MDL2-only there's nothing to fall back to. The flag still tightens the `-Icon` dropdown so write-time picks can't include the 15 names that don't render anywhere.
 - **Build-PsUi.ps1**: Builds each target framework one at a time now. Parallel builds were racing on shared files while three frameworks tried to write the same DLL. Costs a few seconds, buys reliability.
 
+#### Tree CheckBoxes
+
+`-ParentCheckBoxes` and `-ChildCheckBoxes` on `New-UiTree`. Each flag is independent: parents-only, leaves-only, or both for the full picker. Cascade defaults on when both are; `-NoCascade` opts out.
+
+- **New-UiTree `-ParentCheckBoxes`**: Checkbox on every item with children. Click a parent to mass-select enabled descendants. Used alone, hydration returns descendant leaves under checked branches.
+- **New-UiTree `-ChildCheckBoxes`**: Checkbox on every leaf. Used alone, parents become unselectable (Focusable=$false) so the checkbox is the obvious selection control.
+- **New-UiTree `-WhenEnabled` / `-Checked`**: Scriptblock run per item. WhenEnabled returns $false and the box renders disabled and dimmed; cascade skips it. Checked returns $true and the box starts checked at build time.
+- **New-UiTree `-NoCascade`**: Independent boxes for tagging workflows where parent and leaves are orthogonal selections.
+- **Hydration**: `$tree` in a button action returns an array of checked source items - each once, in tree order. Both modes: parents + leaves. Parent-only: descendant leaves under checked branches. Child-only: checked leaves. Path-mode stand-in parents never appear in the result.
+- **Selection foreground tracking**: Label text follows `SelectionForegroundBrush` when the row is selected and the tree has focus, falls back to `ControlForegroundBrush` otherwise. Custom-header TVIs (anything that isn't a plain string header) don't inherit this through WPF property inheritance - hooked explicitly via `Loaded`/`Unloaded` so the subscription doesn't outlive the window.
+
 #### Other
 
 - **New-UiTool**: Added UserPicker, GroupPicker, MemberPicker, and OUPicker input helpers. Auto-detected from parameter names or assignable via `UserPickerParameters`, `GroupPickerParameters`, `MemberPickerParameters`, and `OUPickerParameters` parameters. Click the browse button to open the native Windows object picker.

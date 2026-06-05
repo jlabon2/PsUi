@@ -34,6 +34,17 @@ function New-UiTree {
         Height of the tree control. Defaults to 200.
     .PARAMETER ExpandAll
         Expand all nodes on load.
+    .PARAMETER ParentCheckBoxes
+        Checkbox on every item with children. Click a parent to toggle enabled descendants.
+        Combine with -ChildCheckBoxes for the full picker.
+    .PARAMETER ChildCheckBoxes
+        Checkbox on every leaf. Alone, parents become unselectable - the box is the only way in.
+    .PARAMETER WhenEnabled
+        Scriptblock run per item. Returns $false and the box renders disabled; cascade skips it.
+    .PARAMETER Checked
+        Scriptblock run per item at build time. Returns $true and the box starts checked.
+    .PARAMETER NoCascade
+        Independent boxes - parent clicks don't cascade. For tagging workflows.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
     .EXAMPLE
@@ -63,9 +74,15 @@ function New-UiTree {
         $employees | New-UiTree -Variable 'org' -IdProperty 'EmployeeId' -ParentIdProperty 'Manager.EmployeeId' -DisplayProperty 'Name'
     .EXAMPLE
         # .NET namespaces
-        [AppDomain]::CurrentDomain.GetAssemblies().GetTypes() | 
-            Select -Unique FullName | 
+        [AppDomain]::CurrentDomain.GetAssemblies().GetTypes() |
+            Select -Unique FullName |
             New-UiTree -Variable 'types' -PathProperty 'FullName' -PathSeparator '.'
+    .EXAMPLE
+        # Services by status; auto-start protected, stopped pre-selected.
+        Get-Service | Group-Object Status | ForEach-Object {
+            [PSCustomObject]@{ Name = $_.Name; Children = $_.Group }
+        } | New-UiTree -Variable 'svc' -ParentCheckBoxes -ChildCheckBoxes `
+              -WhenEnabled { $_.StartType -ne 'Automatic' } -Checked { $_.Status -eq 'Stopped' }
     #>
     [CmdletBinding()]
     param(
@@ -98,6 +115,16 @@ function New-UiTree {
         [int]$Height = 200,
 
         [switch]$ExpandAll,
+
+        [switch]$ParentCheckBoxes,
+
+        [switch]$ChildCheckBoxes,
+
+        [scriptblock]$WhenEnabled,
+
+        [scriptblock]$Checked,
+
+        [switch]$NoCascade,
 
         [Parameter()]
         [hashtable]$WPFProperties
@@ -281,6 +308,322 @@ function New-UiTree {
             }
             
             & $buildNodes $allItems $null
+        }
+
+        # Decoration runs after the tree is built so parent/leaf is structural (Items.Count > 0)
+        # not predicted. All three build modes converge to the same TreeViewItem shape.
+        $useCheckBoxes = $ParentCheckBoxes -or $ChildCheckBoxes
+        if ($useCheckBoxes) {
+
+            # Marker the C# extractor reads to flip hydration from snapshot to checked-items array.
+            $tree.Tag = @{
+                IsCheckBoxTree     = $true
+                ParentMode         = [bool]$ParentCheckBoxes
+                ChildMode          = [bool]$ChildCheckBoxes
+                CascadeInProgress  = $false
+            }
+            $treeMeta = $tree.Tag
+
+            # Synchronous helpers - only used during build. The cascade handler is stateless.
+            $getHeaderCheckBox = {
+                param($tvi)
+                $hdr = $tvi.Header
+                if ($hdr -is [System.Windows.Controls.StackPanel]) {
+                    foreach ($child in $hdr.Children) {
+                        if ($child -is [System.Windows.Controls.CheckBox]) { return $child }
+                    }
+                }
+                $null
+            }
+
+            # Path mode invents stand-in parent nodes that aren't real items - WhenEnabled and Checked skip them.
+            $isSynthesized = {
+                param($source)
+                if ($null -eq $source) { return $true }
+                if ($source -is [PSCustomObject]) {
+                    $p = $source.PSObject.Properties['Synthesized']
+                    return ($p -and $p.Value)
+                }
+                if ($source -is [hashtable]) { return [bool]$source['Synthesized'] }
+                $false
+            }
+
+            # One handler instance + two cached descriptors, hoisted out of the foreach. 10k-row trees notice.
+            $dpdIsSelected = [System.ComponentModel.DependencyPropertyDescriptor]::FromProperty(
+                [System.Windows.Controls.TreeViewItem]::IsSelectedProperty,
+                [System.Windows.Controls.TreeViewItem])
+
+            $dpdIsSelectionActive = [System.ComponentModel.DependencyPropertyDescriptor]::FromProperty(
+                [System.Windows.Controls.Primitives.Selector]::IsSelectionActiveProperty,
+                [System.Windows.Controls.TreeViewItem])
+
+            $updateLabelFg = {
+                param($sender, $e)
+                $tviLocal = $sender -as [System.Windows.Controls.TreeViewItem]
+                if ($null -eq $tviLocal -or $tviLocal.Header -isnot [System.Windows.Controls.StackPanel]) { return }
+                $isActiveSel = $tviLocal.IsSelected -and
+                    [System.Windows.Controls.Primitives.Selector]::GetIsSelectionActive($tviLocal)
+                $key = if ($isActiveSel) { 'SelectionForegroundBrush' } else { 'ControlForegroundBrush' }
+                foreach ($childCtrl in $tviLocal.Header.Children) {
+                    if ($childCtrl -is [System.Windows.Controls.TextBlock]) {
+                        $childCtrl.SetResourceReference(
+                            [System.Windows.Controls.TextBlock]::ForegroundProperty, $key)
+                    }
+                }
+            }
+
+            # Walk every TVI and decorate it.
+            $decorate = {
+                param($items)
+                # Drag the outer descriptors and handler into local scope. GetNewClosure
+                # only captures locals - parent-scope vars resolve to null after this
+                # function returns and Loaded fires.
+                $dpdSel = $dpdIsSelected
+                $dpdAct = $dpdIsSelectionActive
+                $upd    = $updateLabelFg
+                foreach ($tvi in $items) {
+                    $hasChildren = $tvi.Items.Count -gt 0
+                    $wantsBox = ($ParentCheckBoxes -and $hasChildren) -or
+                                ($ChildCheckBoxes  -and !$hasChildren)
+
+                    # Non-checkbox rows in a mixed-mode tree shouldn't look selectable - checkboxes
+                    # are the selection control. Focusable=$false kills arrow-nav and click-select;
+                    # the expander toggle still works (separate element).
+                    if (!$wantsBox -and ($ParentCheckBoxes -or $ChildCheckBoxes)) {
+                        $tvi.Focusable = $false
+                    }
+
+                    if ($wantsBox) {
+                        $source     = $tvi.Tag
+                        $isFake     = & $isSynthesized $source
+                        $headerText = $tvi.Header
+
+                        $cb = [System.Windows.Controls.CheckBox]@{
+                            VerticalAlignment = 'Center'
+                            Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
+                        }
+
+                        # Cascade handler is stateless - reads everything from $sender.Tag. The C#
+                        # extractor walks TreeViewItems not CheckBoxes, so this Tag shape doesn't
+                        # disturb hydration.
+                        $cb.Tag = @{
+                            Tvi      = $tvi
+                            TreeMeta = $treeMeta
+                        }
+
+                        $disableThis = $false
+                        if (!$isFake) {
+                            # ForEach-Object binds $_. `$source | & $sb` does NOT (verified).
+                            if ($Checked) {
+                                $checkedResult = $source | ForEach-Object $Checked
+                                if ($checkedResult) { $cb.IsChecked = $true }
+                            }
+                            if ($WhenEnabled) {
+                                $enabledResult = $source | ForEach-Object $WhenEnabled
+                                if (!$enabledResult) {
+                                    $cb.IsEnabled = $false
+                                    $disableThis = $true
+                                }
+                            }
+                        }
+
+                        $label = [System.Windows.Controls.TextBlock]@{
+                            Text              = [string]$headerText
+                            VerticalAlignment = 'Center'
+                        }
+                        # Default Foreground via DynamicResource so theme swaps reach it.
+                        $label.SetResourceReference(
+                            [System.Windows.Controls.TextBlock]::ForegroundProperty,
+                            'ControlForegroundBrush')
+
+                        # Watch IsSelected AND IsSelectionActive - Add_Selected misses the inactive
+                        # case (tree loses focus, row stays selected). Loaded subscribes, Unloaded
+                        # unsubscribes; the descriptor holds a strong reference and leaks a tree's
+                        # worth of TVIs per closed window otherwise. WPF's memory model is more or
+                        # less just a series of suggestions.
+                        $tvi.Add_Loaded({
+                            $dpdSel.AddValueChanged($tvi, $upd)
+                            $dpdAct.AddValueChanged($tvi, $upd)
+                        }.GetNewClosure())
+
+                        $tvi.Add_Unloaded({
+                            $dpdSel.RemoveValueChanged($tvi, $upd)
+                            $dpdAct.RemoveValueChanged($tvi, $upd)
+                        }.GetNewClosure())
+
+                        $stack = [System.Windows.Controls.StackPanel]@{
+                            Orientation = 'Horizontal'
+                        }
+                        [void]$stack.Children.Add($cb)
+                        [void]$stack.Children.Add($label)
+                        
+                        # Set-CheckBoxStyle has no IsEnabled trigger - disabled boxes look enabled.
+                        # Dim the whole header instead of patching the module-wide style.
+                        if ($disableThis) { $stack.Opacity = 0.45 }
+                        $tvi.Header = $stack
+
+                        # Style AFTER the CheckBox is in the visual tree - DynamicResource lookups
+                        # resolve better with a parent to walk up from. Set-CheckBoxStyle registers
+                        # with ThemeEngine itself.
+                        Set-CheckBoxStyle -CheckBox $cb
+                    }
+
+                    if ($tvi.Items.Count -gt 0) { & $decorate $tvi.Items }
+                }
+            }
+
+            & $decorate $tree.Items
+
+            # Wire cascade handlers. Skip when -NoCascade is set, or when only one checkbox
+            # level is enabled (nothing to cascade to/from).
+            $wireCascade = ($ParentCheckBoxes -and $ChildCheckBoxes -and !$NoCascade)
+            if ($wireCascade) {
+
+                # Stateless - state via $sender.Tag, no closure capture. PS finally blocks get
+                # silently skipped when WPF fires the click, leaving CascadeInProgress stuck at
+                # true and locking subsequent clicks out. Reset inline in both paths.
+                $cascadeHandler = {
+                    param($sender, $eventArgs)
+                    $treeMetaForReset = $null
+                    try {
+                        $data = $sender.Tag
+                        if ($data -isnot [hashtable]) { return }
+                        $treeMeta  = $data['TreeMeta']
+                        $sourceTvi = $data['Tvi']
+                        if ($null -eq $treeMeta -or $sourceTvi -isnot [System.Windows.Controls.TreeViewItem]) { return }
+                        if ($treeMeta['CascadeInProgress']) { return }
+                        $treeMeta['CascadeInProgress'] = $true
+                        $treeMetaForReset = $treeMeta
+                        $newState = [bool]$sender.IsChecked
+
+                        # Cascade-down: walk children with a stack, checkbox lookup inlined.
+                        # Helper script blocks throw on null lookups when called from the click handler.
+                        $dnStack = [System.Collections.Generic.Stack[object]]::new()
+                        $dnStack.Push($sourceTvi)
+                        while ($dnStack.Count -gt 0) {
+                            $node = $dnStack.Pop()
+                            if ($null -eq $node) { continue }
+                            foreach ($child in $node.Items) {
+                                if ($null -eq $child) { continue }
+                                $childHdr = $child.Header
+                                if ($childHdr -is [System.Windows.Controls.StackPanel]) {
+                                    foreach ($el in $childHdr.Children) {
+                                        if ($el -is [System.Windows.Controls.CheckBox]) {
+                                            if ($el.IsEnabled) { $el.IsChecked = $newState }
+                                            break
+                                        }
+                                    }
+                                }
+                                $dnStack.Push($child)
+                            }
+                        }
+
+                        # Cascade-up: walk ancestors via ItemsControlFromItemContainer. .Parent
+                        # returns the visual-tree wrapper sometimes - this doesn't.
+                        $node = $sourceTvi
+                        while ($true) {
+                            if ($null -eq $node) { break }
+                            $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
+                            if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
+
+                            $parentCb  = $null
+                            $parentHdr = $parentTvi.Header
+                            if ($parentHdr -is [System.Windows.Controls.StackPanel]) {
+                                foreach ($el in $parentHdr.Children) {
+                                    if ($el -is [System.Windows.Controls.CheckBox]) { $parentCb = $el; break }
+                                }
+                            }
+                            if ($null -eq $parentCb) { break }
+
+                            $allCheckedOrNone = $true
+                            $anyEnabled       = $false
+                            foreach ($sib in $parentTvi.Items) {
+                                if ($null -eq $sib) { continue }
+                                $sibCb  = $null
+                                $sibHdr = $sib.Header
+                                if ($sibHdr -is [System.Windows.Controls.StackPanel]) {
+                                    foreach ($el in $sibHdr.Children) {
+                                        if ($el -is [System.Windows.Controls.CheckBox]) { $sibCb = $el; break }
+                                    }
+                                }
+                                if ($null -eq $sibCb -or !$sibCb.IsEnabled) { continue }
+                                $anyEnabled = $true
+                                if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
+                            }
+                            if (!$anyEnabled) { break }
+                            $parentCb.IsChecked = $allCheckedOrNone
+
+                            $node = $parentTvi
+                        }
+
+                        # Inline reset - finally is unreliable here.
+                        if ($treeMetaForReset) { $treeMetaForReset['CascadeInProgress'] = $false }
+                    }
+                    catch {
+                        # Catch path reset too - any throw otherwise locks the flag and kills subsequent cascades.
+                        try { if ($treeMetaForReset) { $treeMetaForReset['CascadeInProgress'] = $false } } catch {}
+                        try { Write-Warning ("[CASCADE] " + $_.Exception.Message) } catch {}
+                    }
+                }
+
+                # Attach the cascade handler to every CheckBox we placed. Synchronous, $getHeaderCheckBox in scope.
+                $wireBoxes = {
+                    param($items)
+                    foreach ($tvi in $items) {
+                        $cb = & $getHeaderCheckBox $tvi
+                        if ($cb) {
+                            $cb.Add_Checked($cascadeHandler)
+                            $cb.Add_Unchecked($cascadeHandler)
+                        }
+                        if ($tvi.Items.Count -gt 0) { & $wireBoxes $tvi.Items }
+                    }
+                }
+                & $wireBoxes $tree.Items
+
+                # Seed initial parent state - if -Checked pre-checked anything, walk ancestors
+                # and recompute their binary state. Loop, not recursion, to mirror the runtime cascade.
+                $treeMeta.CascadeInProgress = $true
+                try {
+                    # Collect every TVI that starts checked.
+                    $allNodes = [System.Collections.Generic.Stack[object]]::new()
+                    foreach ($root in $tree.Items) { $allNodes.Push($root) }
+                    $checkedTvis = [System.Collections.Generic.List[object]]::new()
+                    while ($allNodes.Count -gt 0) {
+                        $n = $allNodes.Pop()
+                        foreach ($c in $n.Items) { $allNodes.Push($c) }
+                        $ncb = & $getHeaderCheckBox $n
+                        if ($ncb -and $ncb.IsChecked -eq $true) { [void]$checkedTvis.Add($n) }
+                    }
+
+                    # For each checked node, ascend and refresh parent binary state.
+                    foreach ($cnode in $checkedTvis) {
+                        $node = $cnode
+                        while ($true) {
+                            $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
+                            if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
+                            $parentCb = & $getHeaderCheckBox $parentTvi
+                            if (!$parentCb) { break }
+
+                            # Counter names avoid the bare word 'checked' - the function has a
+                            # [scriptblock]$Checked param and PS is case-insensitive. `$checked = 0`
+                            # inherits the [scriptblock] constraint and throws at compile time.
+                            $allCheckedOrNone = $true
+                            $anyEnabled       = $false
+                            foreach ($sib in $parentTvi.Items) {
+                                $sibCb = & $getHeaderCheckBox $sib
+                                if (!$sibCb -or !$sibCb.IsEnabled) { continue }
+                                $anyEnabled = $true
+                                if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
+                            }
+                            if (!$anyEnabled) { break }
+                            $parentCb.IsChecked = $allCheckedOrNone
+
+                            $node = $parentTvi
+                        }
+                    }
+                }
+                finally { $treeMeta.CascadeInProgress = $false }
+            }
         }
 
         # Register control for variable hydration

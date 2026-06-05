@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Management.Automation;
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
@@ -276,13 +277,24 @@ namespace PsUi
             }
         }
 
-        // TreeView snapshot with selection info - captured on UI thread for async access
-        private static Hashtable ExtractTreeViewSnapshot(TreeView treeView)
+        // TreeView snapshot - captured on UI thread for async access. Checkbox trees return
+        // an object[] of checked items instead; matches -MultiSelect list / -PassThru datagrid hydration.
+        private static object ExtractTreeViewSnapshot(TreeView treeView)
         {
+            // Type-check before unbox - Tag is a PowerShell hashtable, anything goes.
+            // Skip the `is bool` and a no-checkbox tree throws on the cast.
+            Hashtable tag = treeView.Tag as Hashtable;
+            if (tag != null && tag["IsCheckBoxTree"] is bool && (bool)tag["IsCheckBoxTree"])
+            {
+                bool parentMode = tag["ParentMode"] is bool && (bool)tag["ParentMode"];
+                bool childMode = tag["ChildMode"] is bool && (bool)tag["ChildMode"];
+                return ExtractCheckedTreeItems(treeView, parentMode, childMode);
+            }
+
             var snapshot = new Hashtable();
             snapshot["SelectedItem"] = treeView.SelectedItem;
             snapshot["SelectedValue"] = treeView.SelectedValue;
-            
+
             // Extract header text if selected item is TreeViewItem
             TreeViewItem selectedTvi = treeView.SelectedItem as TreeViewItem;
             if (selectedTvi != null)
@@ -290,8 +302,106 @@ namespace PsUi
                 snapshot["SelectedHeader"] = selectedTvi.Header;
                 snapshot["SelectedTag"] = selectedTvi.Tag;
             }
-            
+
             return snapshot;
+        }
+
+        // Walks the visual tree and returns the checked source items - once each, in tree order.
+        //  - both modes on : every checked TreeViewItem's source (parents + leaves)
+        //  - parent-only   : descendant leaves of every checked branch (mass-select shorthand)
+        //  - child-only    : checked leaves only
+        // Skips path-mode stand-in parents (Tag carries Synthesized=$true).
+        private static object[] ExtractCheckedTreeItems(TreeView treeView, bool parentMode, bool childMode)
+        {
+            var results = new List<object>();
+            var seen = new HashSet<object>();
+            CollectCheckedItems(treeView.Items, parentMode, childMode, results, seen);
+            return results.ToArray();
+        }
+
+        private static void CollectCheckedItems(ItemCollection items, bool parentMode, bool childMode, List<object> results, HashSet<object> seen)
+        {
+            foreach (object item in items)
+            {
+                TreeViewItem tvi = item as TreeViewItem;
+                if (tvi == null) continue;
+
+                bool hasChildren = tvi.Items.Count > 0;
+                CheckBox box = FindHeaderCheckBox(tvi);
+                bool isChecked = box != null && box.IsChecked == true;
+
+                if (parentMode && childMode)
+                {
+                    if (isChecked) AddSource(tvi, results, seen);
+                    CollectCheckedItems(tvi.Items, parentMode, childMode, results, seen);
+                }
+                else if (parentMode)
+                {
+                    if (isChecked && hasChildren)
+                    {
+                        CollectLeafSources(tvi.Items, results, seen);
+                    }
+                    else
+                    {
+                        CollectCheckedItems(tvi.Items, parentMode, childMode, results, seen);
+                    }
+                }
+                else if (childMode)
+                {
+                    if (isChecked && !hasChildren) AddSource(tvi, results, seen);
+                    CollectCheckedItems(tvi.Items, parentMode, childMode, results, seen);
+                }
+            }
+        }
+
+        // Mass-select helper: under a checked branch, return every descendant leaf's source item.
+        private static void CollectLeafSources(ItemCollection items, List<object> results, HashSet<object> seen)
+        {
+            foreach (object item in items)
+            {
+                TreeViewItem tvi = item as TreeViewItem;
+                if (tvi == null) continue;
+
+                if (tvi.Items.Count == 0)
+                {
+                    AddSource(tvi, results, seen);
+                }
+                else
+                {
+                    CollectLeafSources(tvi.Items, results, seen);
+                }
+            }
+        }
+
+        private static void AddSource(TreeViewItem tvi, List<object> results, HashSet<object> seen)
+        {
+            object source = tvi.Tag;
+            if (source == null) return;
+            // Path mode adds stand-in parents for the path segments - skip them, the caller
+            // only piped in real items. Check both Hashtable and PSObject shapes.
+            PSObject pso = source as PSObject;
+            object underlying = pso != null ? pso.BaseObject : source;
+            Hashtable ht = underlying as Hashtable;
+            if (ht != null && ht["Synthesized"] is bool && (bool)ht["Synthesized"]) return;
+            if (pso != null)
+            {
+                PSMemberInfo m = pso.Members["Synthesized"];
+                if (m != null && m.Value is bool && (bool)m.Value) return;
+            }
+            if (seen.Add(source)) results.Add(source);
+        }
+
+        // Knows the decoration's shape: CheckBox as a direct child of a StackPanel header.
+        private static CheckBox FindHeaderCheckBox(TreeViewItem tvi)
+        {
+            StackPanel sp = tvi.Header as StackPanel;
+            if (sp == null) return null;
+            foreach (object child in sp.Children)
+            {
+                CheckBox cb = child as CheckBox;
+                if (cb != null) return cb;
+            }
+            return null;
         }
 
         // DataGrid snapshot with selection info
