@@ -442,7 +442,7 @@ function New-UiStatusBar {
 
     $bar.Tag = $meta
 
-    # Identify the window's outer DockPanel so we can dock the bar there when at root
+    # Identify the window's outer DockPanel so the bar can dock there when at root
     $window     = $session.Window
     $chromeInfo = $window.Tag
     $outerPanel = $null

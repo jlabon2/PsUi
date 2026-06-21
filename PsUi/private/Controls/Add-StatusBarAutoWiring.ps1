@@ -9,14 +9,7 @@ $script:StatusBarDefaults = @{
 function Add-StatusBarAutoWiring {
     <#
     .SYNOPSIS
-        Routes an AsyncExecutor's lifecycle events into any registered status bar
-        that opted in with -AutoProgress, -AutoCancel, or -Intercept.
-    .DESCRIPTION
-        The autowiring narrates real signals from the action's streams (Write-Progress
-        drives the embedded bar; Write-Error/Write-Warning tint accordingly). It does
-        NOT clobber text or tint from the OnStarted/OnComplete lifecycle - those
-        only manage the AutoCancel button and the progress bar's indeterminate state.
-        That way Write-Status calls made inside the action survive intact.
+        Routes executor lifecycle events to any registered status bar that opted in.
     #>
     [CmdletBinding()]
     param(
@@ -31,7 +24,7 @@ function Add-StatusBarAutoWiring {
 
     if (!$Executor -or !$Session) { return }
 
-    # Collect every bar that opted into automatic wiring
+    # Collect every bar that opted in to auto-routing
     $targets = [System.Collections.Generic.List[object]]::new()
     foreach ($key in @($Session.SafeVariables.Keys)) {
         $candidate = $Session.GetControl($key)
@@ -78,8 +71,8 @@ function Add-StatusBarAutoWiring {
         $capturedMaxMessages  = if ($bar.Tag['MaxMessages']) { $bar.Tag['MaxMessages'] } else { 100 }
         $capturedExecutor     = $Executor
 
-        # The $meta guard repeats in every handler. Tag is always our hashtable from New-UiStatusBar
-        # (if it ever isn't, we have bigger problems). Same reference, so mutations write through.
+        # The $meta guard repeats in every handler. Tag is always the New-UiStatusBar hashtable
+        # (if it ever isn't, something larger is broken). Same reference, mutations write through.
 
         # OnStarted: reveal Cancel button and progress bar (severity already reset above)
         $Executor.add_OnStarted({
@@ -231,7 +224,7 @@ function Add-StatusBarAutoWiring {
             }
 
             # Extract every diagnostic field PSErrorRecord has to offer. "Unknown error" is never
-            # helpful, so we go a little overboard here. Exception type first.
+            # helpful, so go a little overboard here. Exception type first.
             $exceptionType = $null
             if ($errorRecord.RawRecord -and $errorRecord.RawRecord.Exception) {
                 $exceptionType = $errorRecord.RawRecord.Exception.GetType().Name

@@ -84,6 +84,20 @@ function Set-CheckBoxStyle {
             <Setter TargetName="checkMark" Property="Visibility" Value="Collapsed"/>
             <Setter TargetName="indeterminateMark" Property="Visibility" Value="Visible"/>
         </Trigger>
+
+        <!-- Inside a selected DataGridRow the accent selection brush matches the checked fill -
+             swap to SelectionTextBrush so the box stays visible against the row highlight. -->
+        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}, AncestorLevel=1}, Path=IsSelected, FallbackValue=False}" Value="True">
+            <Setter TargetName="checkBoxBorder" Property="BorderBrush" Value="{DynamicResource SelectionTextBrush}"/>
+        </DataTrigger>
+        <MultiDataTrigger>
+            <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}, AncestorLevel=1}, Path=IsSelected, FallbackValue=False}" Value="True"/>
+                <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=IsChecked}" Value="True"/>
+            </MultiDataTrigger.Conditions>
+            <Setter TargetName="checkBoxBorder" Property="Background" Value="{DynamicResource SelectionTextBrush}"/>
+            <Setter TargetName="checkMark" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        </MultiDataTrigger>
     </ControlTemplate.Triggers>
 </ControlTemplate>
 "@

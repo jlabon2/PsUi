@@ -11,7 +11,7 @@ function Invoke-UiOuPickerOrPrompt {
     $picked = $null
 
     if ($Resolved.ContainsKey('Server')) {
-        # Server is known. Only ask for creds if the caller didn't wire one in.
+        # Server is known. Only ask for creds if the caller didn't pass one in.
         if (!$Resolved.ContainsKey('Credential')) {
             $credParams = @{
                 Caption = 'OU Picker - Remote Connection'

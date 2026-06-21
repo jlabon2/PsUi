@@ -10,7 +10,7 @@ function Resolve-HelperOptionValue {
 
     if ($null -eq $Value) { return $null }
 
-    # Strings might be lookup keys. Ints, creds, anything else - the user meant it literally.
+    # Strings are treated as lookup keys. Ints, creds, anything else - the user meant it literally.
     if ($Value -isnot [string]) { return $Value }
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
 

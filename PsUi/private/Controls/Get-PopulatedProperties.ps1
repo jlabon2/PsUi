@@ -1,8 +1,7 @@
 function Get-PopulatedProperties {
     <#
     .SYNOPSIS
-        Returns property names that have at least one non-empty value across items.
-        We use this to optimize which columns to show by default in data grids from Show-UIOutput.
+        Property names with at least one non-empty value across items. Drives default column visibility.
     #>
     [CmdletBinding()]
     param(
@@ -14,37 +13,39 @@ function Get-PopulatedProperties {
 
     $populated = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
-    # Iterate through each item and check specified properties to ensure we are using only populated ones
     foreach ($item in $Items) {
-        
+
         if ($null -eq $item) { continue }
 
-        # If specific properties requested, only check those
         $propsToCheck = if ($PropertyNames) { $PropertyNames }
                         else { $item.PSObject.Properties.Name  }
 
         foreach ($propName in $propsToCheck) {
-            
-            # Skip if already known to be populated
-            if ($populated.Contains($propName)) { continue }
 
-            # Skip internal properties
+            if ($populated.Contains($propName)) { continue }
             if ($propName.StartsWith('_')) { continue }
 
-            $value = $item.$propName
+            # Some .NET objects (Process, WMI) throw on property access. Treat throw as "no value for this row" 
+            # They may still be populated in another row, so don't break out.
+            $value = $null
+            try   { $value = $item.$propName }
+            catch { continue }
 
-            # Empty strings, null, and empty collections don't count
             $hasValue = $false
             if ($null -ne $value) {
-                if ($value -is [string]) { $hasValue = ![string]::IsNullOrWhiteSpace($value) }
-                elseif ($value -is [System.Collections.ICollection]) { $hasValue = $value.Count -gt 0 } 
+                if ($value -is [string]) {
+                    
+                    # '[Access Denied]' is the string ConvertTo-SafeDataArray implants when the source property threw. 
+                    # Treating it as a real value means columns full of "Access Denied" show up as populated; which defeats HasData.
+                    $hasValue = ![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]'
+                }
+                elseif ($value -is [System.Collections.ICollection]) { $hasValue = $value.Count -gt 0 }
                 else { $hasValue = $true }
             }
 
             if ($hasValue) { [void]$populated.Add($propName) }
         }
 
-        # Early exit if all properties are populated
         if ($PropertyNames -and $populated.Count -eq $PropertyNames.Count) { break }
     }
 

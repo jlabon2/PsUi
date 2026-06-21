@@ -327,6 +327,9 @@ function New-UiButton {
 
     # WPF windows on the async runspace's STA thread inevtiably die. If the action's AST
     # has a window-spawner in it, flip to sync so the spawn lands on the host's dispatcher instead.
+    # Out-Datagrid / Out-CSVDataGrid / Out-TextEditor stay off this list - they each run
+    # the window on their own STA dispatcher (the caller's, or a spawned STA runspace when
+    # the caller is MTA), so the async caller is safe and the data fetch stays off the UI thread.
     $windowSpawners = @('New-UiTool', 'New-UiChildWindow', 'New-UiWindow')
     $detected = $actionContext.AutoDetectedFuncs | Where-Object { $windowSpawners -contains $_ }
     if ($detected -and !$PSBoundParameters.ContainsKey('NoAsync')) {

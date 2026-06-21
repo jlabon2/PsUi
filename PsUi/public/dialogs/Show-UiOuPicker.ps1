@@ -63,14 +63,14 @@ function Show-UiOuPicker {
 
     Write-Debug "Title='$Title' Root='$Root' Server='$Server'"
 
-    # Pull creds early - we need them for the RootDSE query and pre-flight
-    # bind before the dialog even opens.
+    # Pull creds early - the RootDSE query and pre-flight bind need them before the
+    # dialog even opens.
     $credUser = $null; $credPass = $null
     if ($Credential) {
         $credUser = $Credential.UserName
         $credPass = $Credential.GetNetworkCredential().Password
 
-        # Probe the bind now so we fail with a real error, not an empty tree.
+        # Probe the bind now to surface a real error instead of an empty tree.
         if ($Server) {
             try {
                 $testEntry = [System.DirectoryServices.DirectoryEntry]::new("LDAP://$Server/RootDSE", $credUser, $credPass)
@@ -119,7 +119,7 @@ function Show-UiOuPicker {
     elseif ($Server) {
         # Server without a root - point at its defaultNamingContext so the picker
         # targets that DC. There's no way to say "default domain on this specific
-        # server" with pszRoot=NULL, so we accept the treatAsLeaf trade-off here.
+        # server" with pszRoot=NULL, so the treatAsLeaf trade-off applies here.
         # If RootDSE is unreachable (firewall, permissions, etc.), fall back to
         # pszRoot=NULL and let the dialog auto-discover.
         try {
@@ -169,7 +169,7 @@ function Show-UiOuPicker {
         catch { $hwnd = [IntPtr]::Zero }
     }
 
-    # When called from a button action we're on a background MTA thread. Route through
+    # When called from a button action, the caller is on a background MTA thread. Route through
     # the session dispatcher so the dialog has a proper parent thread context.
     $ignoreTreatAsLeaf = $IgnoreTreatAsLeaf.IsPresent
 
@@ -202,7 +202,7 @@ function Show-UiOuPicker {
     $dn      = $adsPath
     if ($dn -match '^LDAP://(?:[^/]+/)?(.+)$') { $dn = $matches[1] }
 
-    # Leaf RDN value is the human-readable name (OU=Servers -> Servers)
+    # Leaf RDN value is the human-readable name (OU=Servers becomes Servers)
     $name = $dn
     if ($dn -match '^[A-Za-z]+=([^,]+)') { $name = $matches[1] }
 

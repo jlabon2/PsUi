@@ -75,15 +75,15 @@
                                 <ColumnDefinition Width="Auto" SharedSizeGroup="ShortcutColumn"/>
                             </Grid.ColumnDefinitions>
                             
-                            <!-- Icon column -->
+                            <!-- Icon column. Default Visibility is Visible; the null-Icon trigger
+                                 below collapses it when MenuItem.Icon hasn't been set. -->
                             <ContentPresenter x:Name="Icon"
                                               Grid.Column="0"
                                               ContentSource="Icon"
                                               Width="16"
                                               Height="16"
                                               Margin="0,0,10,0"
-                                              VerticalAlignment="Center"
-                                              Visibility="Collapsed"/>
+                                              VerticalAlignment="Center"/>
                             
                             <!-- Header text -->
                             <ContentPresenter x:Name="HeaderHost"

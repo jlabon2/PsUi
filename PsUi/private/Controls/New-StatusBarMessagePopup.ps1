@@ -154,7 +154,7 @@ function New-StatusBarMessagePopup {
         Child              = $outerBorder
     }
 
-    # Wire Clear button to reset badge and close popup
+    # Clear button resets the badge and closes the popup
     $capturedBadge   = $BadgeInfo
     $capturedMsgList = $MessageList
     $capturedPanel   = $messagePanel

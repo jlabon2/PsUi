@@ -66,12 +66,14 @@ function Show-UiConfirmDialog {
     $scrollViewer.Content = $messageText
     [void]$contentPanel.Children.Add($scrollViewer)
 
-    # Confirm button (accent)
+    # MinWidth lets long labels grow, but 'Yes' and 'No' still get the 80px floor so the
+    # two buttons line up cleanly when their text is mixed lengths.
     $confirmBtn = [System.Windows.Controls.Button]@{
-        Content = $ConfirmText
-        Width   = 80
-        Height  = 28
-        Margin  = [System.Windows.Thickness]::new(0, 0, 4, 0)
+        Content  = $ConfirmText
+        MinWidth = 80
+        Height   = 28
+        Padding  = [System.Windows.Thickness]::new(10, 0, 10, 0)
+        Margin   = [System.Windows.Thickness]::new(0, 0, 4, 0)
     }
     Set-ButtonStyle -Button $confirmBtn -Accent
     $confirmBtn.Add_Click({
@@ -81,12 +83,12 @@ function Show-UiConfirmDialog {
     [void]$buttonPanel.Children.Add($confirmBtn)
     $confirmBtn.IsDefault = $true
 
-    # Cancel button
     $cancelBtn = [System.Windows.Controls.Button]@{
-        Content = $CancelText
-        Width   = 80
-        Height  = 28
-        Margin  = [System.Windows.Thickness]::new(4, 0, 0, 0)
+        Content  = $CancelText
+        MinWidth = 80
+        Height   = 28
+        Padding  = [System.Windows.Thickness]::new(10, 0, 10, 0)
+        Margin   = [System.Windows.Thickness]::new(4, 0, 0, 0)
     }
     Set-ButtonStyle -Button $cancelBtn
     $cancelBtn.Add_Click({
