@@ -35,9 +35,7 @@ function Add-StatusBarAutoWiring {
     }
     if ($targets.Count -eq 0) { return }
 
-    # Reset severity synchronously before the executor starts. OnStarted fires from a ThreadPool
-    # via BeginInvoke, and the dispatch gap is long enough for WPF to paint one frame of stale
-    # tint (e.g. leftover green from a prior Success).
+    # Reset severity synchronously before the executor starts. OnStarted fires from a ThreadPool via BeginInvoke, and the dispatch gap is long enough for WPF to paint one frame of stale tint (e.g. leftover green from a prior Success).
     foreach ($bar in $targets) {
         $barMeta = if ($bar.Tag -is [hashtable]) { $bar.Tag } else { @{} }
         if ($barMeta.SeverityTimer) { $barMeta.SeverityTimer.Stop() }
@@ -71,11 +69,10 @@ function Add-StatusBarAutoWiring {
         $capturedMaxMessages  = if ($bar.Tag['MaxMessages']) { $bar.Tag['MaxMessages'] } else { 100 }
         $capturedExecutor     = $Executor
 
-        # The $meta guard repeats in every handler. Tag is always the New-UiStatusBar hashtable
-        # (if it ever isn't, something larger is broken). Same reference, mutations write through.
+        # The $meta guard repeats in every handler. Tag is always the New-UiStatusBar hashtable (if it ever isn't, something larger is broken). Same reference, mutations write through.
 
         # OnStarted: reveal Cancel button and progress bar (severity already reset above)
-        $Executor.add_OnStarted({
+        $revealOnStart = {
             Invoke-OnUIThread {
                 if ($capturedCancel) {
                     $capturedCancel.Visibility = [System.Windows.Visibility]::Visible
@@ -99,7 +96,13 @@ function Add-StatusBarAutoWiring {
                     Reset-StatusBarBadges -Meta $meta
                 }
             }
-        }.GetNewClosure())
+        }.GetNewClosure()
+
+        $Executor.add_OnStarted({ & $revealOnStart }.GetNewClosure())
+
+        # RaiseOnStarted snapshots its handler list on the worker thread at slot acquire; attach after ExecuteAsync (Invoke-UiAction does) and the raise is already gone.
+        # Compensate for mid-flight executors; the reveal is idempotent, double fire is free.
+        if ($Executor.IsRunning) { & $revealOnStart }
 
         # OnProgress: drive embedded bar text + fill from Write-Progress
         $Executor.add_OnProgress({
@@ -211,42 +214,38 @@ function Add-StatusBarAutoWiring {
             }.GetNewClosure())
         }
 
-        # OnError: the heavyweight. Tints severity, truncates the message for the status text,
-        # extracts every diagnostic field PSErrorRecord offers, and builds a popup entry.
+        # OnError: the big ol' heavyweight. Tints severity, truncates the message for the status text, extracts every diagnostic field PSErrorRecord offers, and builds a popup entry.
         $Executor.add_OnError({
             param($errorRecord)
             $fullErrorMsg = if ($errorRecord -and $errorRecord.Message) { $errorRecord.Message }
                             elseif ($errorRecord) { $errorRecord.ToString() }
                             else { 'Unknown error' }
+            # Clamp the cut so a small/absent $maxChars can't drive Substring negative ("Length cannot be less than zero" spam on the dispatcher that made me bald(er)).
+            $limit = if ([int]$maxChars -gt 3) { [int]$maxChars } else { 120 }
             $errorMessage = $fullErrorMsg
-            if ($null -ne $errorMessage -and $errorMessage.Length -gt $maxChars) {
-                $errorMessage = $errorMessage.Substring(0, $maxChars - 3) + '...'
-            }
+            
+            if ($null -ne $errorMessage -and $errorMessage.Length -gt $limit) { $errorMessage = $errorMessage.Substring(0, $limit - 3) + '...'  }
 
-            # Extract every diagnostic field PSErrorRecord has to offer. "Unknown error" is never
-            # helpful, so go a little overboard here. Exception type first.
+            # Extract every diagnostic field PSErrorRecord has to offer. "Unknown error" is never helpful, so go a little overboard here. Exception type first.
             $exceptionType = $null
-            if ($errorRecord.RawRecord -and $errorRecord.RawRecord.Exception) {
-                $exceptionType = $errorRecord.RawRecord.Exception.GetType().Name
-            }
+            
+            if ($errorRecord.RawRecord -and $errorRecord.RawRecord.Exception) { $exceptionType = $errorRecord.RawRecord.Exception.GetType().Name  }
 
-            # Location: file:line, category, FQEID - whatever the record actually populated
+            # Location file:line, category, FQEID - whatever the record actually populated
             $locationParts = [System.Collections.Generic.List[string]]::new()
             if ($exceptionType) { $locationParts.Add($exceptionType) }
+            
             if ($errorRecord.ScriptName) {
                 $fileName = [System.IO.Path]::GetFileName($errorRecord.ScriptName)
                 if ($errorRecord.LineNumber -gt 0) { $locationParts.Add("${fileName}:$($errorRecord.LineNumber)") }
                 else { $locationParts.Add($fileName) }
             }
-            elseif ($errorRecord.LineNumber -gt 0) {
-                $locationParts.Add("line $($errorRecord.LineNumber)")
-            }
-            if ($errorRecord.Category -and $errorRecord.Category -ne 'NotSpecified') {
-                $locationParts.Add($errorRecord.Category)
-            }
-            if ($errorRecord.FullyQualifiedErrorId) {
-                $locationParts.Add($errorRecord.FullyQualifiedErrorId)
-            }
+            
+            elseif ($errorRecord.LineNumber -gt 0) { $locationParts.Add("line $($errorRecord.LineNumber)") }
+            
+            if ($errorRecord.Category -and $errorRecord.Category -ne 'NotSpecified') { $locationParts.Add($errorRecord.Category) }
+            
+            if ($errorRecord.FullyQualifiedErrorId) {  $locationParts.Add($errorRecord.FullyQualifiedErrorId) }
             $detailLine = if ($locationParts.Count -gt 0) { $locationParts -join ' | ' } else { $null }
             $codeLine   = if ($errorRecord.Line) { $errorRecord.Line.Trim() } else { $null }
 
@@ -410,8 +409,9 @@ function Add-StatusBarAutoWiring {
             param($warningMessage)
             $fullWarnMsg = $warningMessage
             $shown       = $warningMessage
-            if ($null -ne $shown -and $shown.Length -gt $maxChars) {
-                $shown = $shown.Substring(0, $maxChars - 3) + '...'
+            $warnLimit   = if ([int]$maxChars -gt 3) { [int]$maxChars } else { 120 }
+            if ($null -ne $shown -and $shown.Length -gt $warnLimit) {
+                $shown = $shown.Substring(0, $warnLimit - 3) + '...'
             }
 
             Invoke-OnUIThread {
@@ -489,8 +489,7 @@ function Add-StatusBarAutoWiring {
             }
         }.GetNewClosure())
 
-        # OnComplete: hide Cancel and progress bar, drop indeterminate. Leave text
-        # and severity alone so the user's last Write-Status / Set-UiStatusBar wins.
+        # OnComplete: hide Cancel and progress bar, drop indeterminate. Leave text and severity alone so the user's last Write-Status / Set-UiStatusBar wins.
         $Executor.add_OnComplete({
             Invoke-OnUIThread {
                 if ($capturedCancel) { $capturedCancel.Visibility = [System.Windows.Visibility]::Hidden }

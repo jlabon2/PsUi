@@ -119,7 +119,8 @@ function New-UiStatusBar {
     if ($WPFProperties) {
         if ($WPFProperties.ContainsKey('Tag')) {
             Write-Warning "New-UiStatusBar: -WPFProperties Tag is reserved and will be ignored."
-            $WPFProperties.Remove('Tag')
+            $WPFProperties = @{} + $WPFProperties
+            [void]$WPFProperties.Remove('Tag')
         }
         if ($WPFProperties.Count) { Set-UiProperties -Control $bar -Properties $WPFProperties }
     }
@@ -129,9 +130,8 @@ function New-UiStatusBar {
     $innerPanel.LastChildFill = $true
     $bar.Child                = $innerPanel
 
-    # Yeah this hashtable grows into a bit of a beast by the time Intercept
-    # is done with it (~20 keys). Would benefit from a proper class at some
-    # point but it works fine as a bag of state for now.
+    # Yeah this hashtable grows into a bit of a beast by the time Intercept is done with it (~20 keys).
+    # Would benefit from a proper class at some point but it works fine as a bag of state for now.
     $meta = @{
         IsStatusBar = $true
         InnerPanel  = $innerPanel
@@ -238,9 +238,9 @@ function New-UiStatusBar {
 
     Set-StatusBarChildLayout -Panel $innerPanel
 
-    # Cache the first non-icon TextBlock as the canonical status label. Glyphs use an icon
-    # font (MDL2 or Fluent) and are also TextBlocks - writing status text into one produces
-    # missing-glyph boxes. Test-IconFont covers bare names and the fallback-chain form.
+    # Cache the first non-icon TextBlock as the canonical status label.
+    # Glyphs use an icon font (MDL2 or Fluent) and are also TextBlocks - writing status text into one produces missing-glyph boxes.
+    # Test-IconFont covers bare names and the fallback-chain form.
     $firstText = $null
     foreach ($child in $innerPanel.Children) {
         if ($child -is [System.Windows.Controls.TextBlock]) {
@@ -280,8 +280,7 @@ function New-UiStatusBar {
             Margin            = [System.Windows.Thickness]::new(0, 0, 0, 0)
         }
 
-        # Tag must be a hashtable before styling - Set-UiStatusBar and the timer Tick handler
-        # both reach into it to update fill color when severity changes
+        # Tag must be a hashtable before styling - Set-UiStatusBar and the timer Tick handler both reach into it to update fill color when severity changes
         $autoBar.Tag = @{ BrushTag = 'AccentBrush'; Severity = 'Info' }
 
         try { Set-ProgressBarStyle -ProgressBar $autoBar }
@@ -453,8 +452,8 @@ function New-UiStatusBar {
         }
     }
 
-    # Walk up the parent chain to decide where to dock. Tabs and expanders get a local bar;
-    # everything else docks to the window unless -Inline says otherwise.
+    # Walk up the parent chain to decide where to dock.
+    # Tabs and expanders get a local bar; everything else docks to the window unless -Inline says otherwise.
     $dockToWindow = !$Inline.IsPresent
     if ($dockToWindow) {
         $walker = $session.CurrentParent
@@ -492,8 +491,7 @@ function New-UiStatusBar {
         elseif ($parent -is [System.Windows.Controls.ContentControl]) { $parent.Content = $bar }
     }
 
-    # Anonymous bars still need a name for Register-UiControlComplete; the IsStatusBar
-    # tag keeps them findable via Resolve-UiStatusBar's fallback
+    # Anonymous bars still need a name for Register-UiControlComplete; the IsStatusBar tag keeps them findable via Resolve-UiStatusBar's fallback
     $varName = if ($Variable) {
         $Variable
     }

@@ -37,7 +37,7 @@ function New-UiProgress {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
+        # Optional - a bare display bar needs no name. Omitted means "don't register for Set-UiProgress by name"; the body puts up a throwaway name for the registry.
         [string]$Variable,
 
         [string]$Label,
@@ -93,15 +93,13 @@ function New-UiProgress {
         BrushTag    = $brushKey
     }
 
-    # Tag is set above, so Set-ProgressBarStyle's RegisterElement picks up the
-    # right severity brush on the first paint.
+    # Tag is set above, so Set-ProgressBarStyle's RegisterElement picks up the right severity brush on the first paint.
     Set-ProgressBarStyle -ProgressBar $progress
 
     if ($PSBoundParameters.ContainsKey('Height')) { $progress.Height = $Height }
 
     if ($WPFProperties) {
-        # Tag is reserved - it stores the metadata that makes -Label/-ShowValue/-Severity
-        # work. Letting the caller stomp it would silently break all three.
+        # Tag is reserved - it stores the metadata that makes -Label/-ShowValue/-Severity work. Letting the caller stomp it would silently break all three.
         if ($WPFProperties.ContainsKey('Tag')) {
             Write-Warning "New-UiProgress: -WPFProperties Tag is reserved (used for label/value/severity bookkeeping). Ignoring."
             $WPFProperties = @{} + $WPFProperties
@@ -110,8 +108,7 @@ function New-UiProgress {
         Set-UiProperties -Control $progress -Properties $WPFProperties
     }
 
-    # Wrap in a stack only when there's a label or value text. Bare bars stay
-    # bare so existing layouts don't shift a pixel.
+    # Wrap in a stack only when there's a label or value text. Bare bars stay bare so existing layouts don't shift a pixel.
     $needsWrapper = $Label -or $ShowValue
     if ($needsWrapper) {
         $colors = Get-ThemeColors
@@ -158,8 +155,7 @@ function New-UiProgress {
             [System.Windows.Controls.Grid]::SetColumn($valueBlock, 1)
             [void]$row.Children.Add($valueBlock)
 
-            # Update the text whenever the bar moves. Read Maximum from the sender so
-            # post-construction tweaks (yes, people do that) stay in sync.
+            # Update the text whenever the bar moves. Read Maximum from the sender so post-construction tweaks (yes, people do that) stay in sync.
             $capturedFormat = $ValueFormat
             $progress.Add_ValueChanged({
                 param($sender, $e)
@@ -182,7 +178,11 @@ function New-UiProgress {
     $progress.Tag.LabelBlock = $labelBlock
     $progress.Tag.ValueBlock = $valueBlock
 
-    Write-Debug "Registered progress bar '$Variable' (wrapper=$needsWrapper)"
-    Register-UiControlComplete -Name $Variable -Control $progress -InitialValue $progress.Value
+    # A bare display bar has no -Variable, but Register-UiControlComplete's -Name is Mandatory - an empty string there makes PowerShell prompt for it and the whole window hangs. Hand it a throwaway name (same trick New-UiStatusBar uses for anonymous bars).
+    $varName = if ($Variable) { $Variable  }
+    else {  '_anonProgress_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8)  }
+
+    Write-Debug "Registered progress bar '$varName' (wrapper=$needsWrapper)"
+    Register-UiControlComplete -Name $varName -Control $progress -InitialValue $progress.Value
 }
 

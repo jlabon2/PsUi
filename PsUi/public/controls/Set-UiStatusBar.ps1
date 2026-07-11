@@ -33,6 +33,7 @@ function Set-UiStatusBar {
     param(
         [string]$Text,
 
+         # Skipping [ValidateRange] here and on -Increment. Percentage math can occasionally round up to 101, and crashing the loop with a parameter error is much worse than just capping the progress bar.
         [int]$Progress,
 
         [int]$Increment,
@@ -40,7 +41,7 @@ function Set-UiStatusBar {
         [ValidateSet('Info', 'Success', 'Warning', 'Error')]
         [string]$Severity,
 
-        [bool]$Indeterminate,
+        [switch]$Indeterminate,
 
         [int]$Timeout,
 
@@ -48,6 +49,29 @@ function Set-UiStatusBar {
     )
 
     if (!$PSBoundParameters.Count) { return }
+
+    # v2.x -Indeterminate took [bool]. Under [switch] a space-form '-Indeterminate $false' leaves the switch present (=$true) and spills $false to the next free positional slot: -Text when no text was passed ('False'/'True'), -Progress when text is bound (0/1), -Increment when both are (0/1).
+    # Recover only when the switch is on - an explicit -Indeterminate:$false / splat $false is a modern caller who means it, so honor their -Text/-Progress as is. The spilled bool always lands in Text, Progress, or Increment; read it back.
+    # Known edges, chosen not to chase: a modern caller pairing -Indeterminate with a literal -Text 'True'/'False', or with -Progress 0/1, gets reinterpreted as a v2.x spill. No in-repo caller does either, and a real status text is never the bare word 'True'.
+    $indeterminateValue = [bool]$Indeterminate
+    if ($Indeterminate) {
+        if ($PSBoundParameters.ContainsKey('Text') -and $Text -in 'True', 'False') {
+            $indeterminateValue = $Text -eq 'True'
+            [void]$PSBoundParameters.Remove('Text')
+            $Text = ''
+        }
+        elseif ($PSBoundParameters.ContainsKey('Text') -and $PSBoundParameters.ContainsKey('Progress') -and
+                $Progress -in 0, 1 -and !$PSBoundParameters.ContainsKey('Increment')) {
+            $indeterminateValue = $Progress -eq 1
+            [void]$PSBoundParameters.Remove('Progress')
+        }
+        # Text and Progress both bound by name pushes the spill one slot further, into -Increment. -Progress plus -Increment in one call is already contradictory (set vs bump), so a 0/1 Increment here can only be the spilled bool.
+        elseif ($PSBoundParameters.ContainsKey('Increment') -and $Increment -in 0, 1 -and
+                $PSBoundParameters.ContainsKey('Text') -and $PSBoundParameters.ContainsKey('Progress')) {
+            $indeterminateValue = $Increment -eq 1
+            [void]$PSBoundParameters.Remove('Increment')
+        }
+    }
 
     $session = Get-UiSession
     if (!$session) { return }
@@ -111,7 +135,7 @@ function Set-UiStatusBar {
             }
 
             if ($boundKeys -contains 'Indeterminate') {
-                $progBar.IsIndeterminate = $Indeterminate
+                $progBar.IsIndeterminate = $indeterminateValue
                 Set-ProgressBarStyle -ProgressBar $progBar
             }
         }

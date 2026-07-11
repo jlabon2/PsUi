@@ -13,9 +13,9 @@ function Set-UiProgress {
     .PARAMETER Severity
         Re-tint the bar: Info, Success, Warning, Error.
     .PARAMETER Indeterminate
-        Toggle marquee mode on/off. Note: the bar's template was chosen at
-        construction time, so toggling here rides on WPF's default behavior.
-        For the slickest visuals, set -Indeterminate up front on New-UiProgress.
+        Toggle marquee mode on/off. Bar template is fixed at construction, so the first
+        toggle starts the animation cold. Pass -Indeterminate to New-UiProgress up front
+        for cleaner motion.
     .EXAMPLE
         Set-UiProgress -Variable 'progress' -Value 50
     .EXAMPLE
@@ -37,8 +37,7 @@ function Set-UiProgress {
         [ValidateSet('Info', 'Success', 'Warning', 'Error')]
         [string]$Severity,
 
-        # Bool can't be null, so PSBoundParameters.ContainsKey() is what tells us
-        # whether the caller actually asked to toggle the mode.
+        # Bool can't be null, so PSBoundParameters.ContainsKey() is what tells us whether the caller actually asked to toggle the mode.
         [bool]$Indeterminate
     )
 
@@ -66,9 +65,7 @@ function Set-UiProgress {
 
     Invoke-OnUIThread {
         if ($hasValue -or $hasIncrement) {
-            # Read $progress.Value here (inside the dispatcher) so -Increment alone
-            # sees the latest committed value, not whatever was current when the
-            # call queued. Matters when callers fire Set-UiProgress in tight loops.
+            # Read $progress.Value here (inside the dispatcher) so -Increment alone sees the latest committed value, not whatever was current when the call queued. Matters when callers fire Set-UiProgress in tight loops.
             $newValue = if ($hasValue) { $Value } else { $progress.Value }
 
             if ($hasIncrement) { $newValue += $Increment }
