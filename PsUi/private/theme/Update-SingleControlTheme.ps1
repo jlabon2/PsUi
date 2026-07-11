@@ -11,136 +11,116 @@ function Update-SingleControlTheme {
         [hashtable]$Colors
     )
 
-    # Window styling
-    if ($Control -is [System.Windows.Window]) {
-        Write-Debug "Updating Window with accent: $($Colors.Accent)"
+    # Type dispatch
+    switch ($Control) {
+        { $_ -is [System.Windows.Window] } {
+            Write-Debug "Updating Window with accent: $($Colors.Accent)"
 
-        # Update window title bar color via DWM (only for native chrome windows)
-        if ([PsUi.ModuleContext]::IsInitialized -and $Control.WindowStyle -ne 'None') {
-            $headerBg = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.HeaderBackground)
-            $headerFg = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.HeaderForeground)
-            [PsUi.WindowManager]::SetTitleBarColor($Control, $headerBg, $headerFg)
-        }
+            # Update the title bar color via DWM (native chrome only). Skip when header color is missing; sparse hashtables from child theme resolution otherwise NullRef the converter midwalk.
+            if ([PsUi.ModuleContext]::IsInitialized -and $Control.WindowStyle -ne 'None' -and ![string]::IsNullOrEmpty($Colors.HeaderBackground) -and  ![string]::IsNullOrEmpty($Colors.HeaderForeground)) {
+                $headerBg = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.HeaderBackground)
+                $headerFg = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.HeaderForeground)
+                [PsUi.WindowManager]::SetTitleBarColor($Control, $headerBg, $headerFg)
+            }
 
-        # Skip background for transparent/borderless windows (custom chrome needs transparent background)
-        if (!$Control.AllowsTransparency) {
-            $Control.Background = ConvertTo-UiBrush $Colors.WindowBg
-        }
-        $Control.Foreground = ConvertTo-UiBrush $Colors.WindowFg
+            # Skip background for transparent/borderless windows (custom chrome needs transparent background)
+            if (!$Control.AllowsTransparency) {  $Control.Background = ConvertTo-UiBrush $Colors.WindowBg  }
+            $Control.Foreground = ConvertTo-UiBrush $Colors.WindowFg
 
-        # Regenerate window icon with new theme colors (unless custom logo is set)
-        $session = Get-UiSession
-        if ($session -and $session.CustomLogo -and (Test-Path $session.CustomLogo)) {
-            # Custom logo is set - load it instead of regenerating themed icon
-            $newIcon = Get-CustomLogoIcon -Path $session.CustomLogo
+            # Regenerate window icon with new theme colors (unless custom logo is set)
+            $session = Get-UiSession
+            if ($session -and $session.CustomLogo -and (Test-Path $session.CustomLogo)) {
+                # Custom logo is set - load it instead of regenerating themed icon
+                $newIcon = Get-CustomLogoIcon -Path $session.CustomLogo
+            }
+            else { $newIcon = New-WindowIcon -Colors $Colors }
+
+            if ($newIcon) {
+                Write-Debug "New icon created, setting on window"
+                $Control.Icon = $newIcon
+                [PsUi.WindowManager]::SetTaskbarIcon($Control, $newIcon)
+
+                # Update titlebar icon for custom chrome windows (Tag is a hashtable)
+                $chromeInfo = $Control.Tag
+                if ($chromeInfo -is [System.Collections.IDictionary] -and $chromeInfo['TitleBarIcon']) {  $chromeInfo['TitleBarIcon'].Source = $newIcon }
+            }
+
+            # Update taskbar overlay if present (e.g. TextEditor document icon)
+            if ($Control.Resources.Contains('OverlayGlyph')) {
+                try {
+                    $glyph       = $Control.Resources['OverlayGlyph']
+                    $overlayIcon = New-TaskbarOverlayIcon -GlyphChar $glyph -Color $Colors.Accent
+                    if ($overlayIcon) { [PsUi.WindowManager]::SetTaskbarOverlay($Control, $overlayIcon, 'Overlay') }
+                }
+                catch {  Write-Verbose "Failed to update taskbar overlay: $_"  }
+            }
+            break
         }
-        else {
-            $newIcon = New-WindowIcon -Colors $Colors
+        { $_ -is [System.Windows.Controls.GroupBox] } { Set-GroupBoxStyle -GroupBox $Control; break }
+        { $_ -is [System.Windows.Controls.Button] } {
+
+            # Inline button theme update logic (was Update-ButtonTheme)
+            $isAccent = $false
+            if ($Control.Tag -is [System.Collections.IDictionary] -and $Control.Tag['IsAccent']) {  $isAccent = $true  }
+
+            # Apply base button style
+            Set-ButtonStyle -Button $Control -Accent:$isAccent
+
+            # Update button icon color (non-accent buttons use accent color for icon)
+            if (!$isAccent -and $Control.Content -is [System.Windows.Controls.StackPanel]) {
+                foreach ($child in $Control.Content.Children) {
+                    if ($child -is [System.Windows.Controls.TextBlock] -and (Test-IconFont $child.FontFamily)) {
+                        $child.Foreground = ConvertTo-UiBrush $Colors.Accent
+                    }
+                }
+            }
+
+            # Update checkmark for theme menu buttons
+            if ($Control.Tag -is [System.Collections.IDictionary] -and $Control.Tag.ContainsKey('ThemeName')) {
+                if ($Control.Tag.ContainsKey('Checkmark') -and $Control.Tag['Checkmark']) {
+                    $isActive = $Control.Tag['ThemeName'] -eq [PsUi.ModuleContext]::ActiveTheme
+                    $Control.Tag['Checkmark'].Text = if ($isActive) { [char]0x2713 } else { ' ' }
+                    if ($isActive) { $Control.Tag['Checkmark'].Foreground = ConvertTo-UiBrush $Colors.Accent }
+                }
+            }
+
+            # Style popup contents if button has a popup tag
+            if ($Control.Tag -is [System.Windows.Controls.Primitives.Popup]) {
+                $popup       = $Control.Tag
+                $popupBorder = $popup.Child
+                if ($popupBorder -is [System.Windows.Controls.Border]) {
+                    $popupBorder.Background  = ConvertTo-UiBrush $Colors.ControlBg
+                    $popupBorder.BorderBrush = ConvertTo-UiBrush $Colors.Border
+                }
+            }
+            break
         }
-        if ($newIcon) {
-            Write-Debug "New icon created, setting on window"
-            $Control.Icon = $newIcon
-            [PsUi.WindowManager]::SetTaskbarIcon($Control, $newIcon)
+        { $_ -is [System.Windows.Controls.TextBox] } { Set-TextBoxStyle -TextBox $Control; break }
+        { $_ -is [System.Windows.Controls.DataGrid] } { Set-DataGridStyle -Grid $Control; break }
+        { $_ -is [System.Windows.Controls.TabControl] } {
+            Set-TabControlStyle -TabControl $Control
+            $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
+            break
+        }
+        { $_ -is [System.Windows.Controls.TabItem] } { Set-TabItemStyle -TabItem $Control; break }
+        { $_ -is [System.Windows.Controls.ComboBox] } { Set-ComboBoxStyle -ComboBox $Control; break }
+        { $_ -is [System.Windows.Controls.RadioButton] } {
+            # Wrap in try/catch - internal template RadioButtons may fail
+            try { Set-RadioButtonStyle -RadioButton $Control }
+            catch { Write-Debug "RadioButton style skipped: $_" }
+            break
+        }
+        { $_ -is [System.Windows.Controls.ListBox] } { Set-ListBoxStyle -ListBox $Control; break }
+        { $_ -is [System.Windows.Controls.DatePicker] } { Set-DatePickerStyle -DatePicker $Control; break }
+        { $_ -is [System.Windows.Controls.TextBlock] } {
             
-            # Update titlebar icon for custom chrome windows (Tag is a hashtable)
-            $chromeInfo = $Control.Tag
-            if ($chromeInfo -is [System.Collections.IDictionary] -and $chromeInfo['TitleBarIcon']) {
-                $chromeInfo['TitleBarIcon'].Source = $newIcon
+            # Null-tag fast path - the tag switch below has scriptblock conditions that die on $null input when invoked from a dispatched scriptblock.
+            $tag = $Control.Tag
+            if ($null -eq $tag) {
+                if (!(Test-IconFont $Control.FontFamily)) { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
+                break
             }
-        }
 
-        # Update taskbar overlay if present (e.g. TextEditor document icon)
-        if ($Control.Resources.Contains('OverlayGlyph')) {
-            try {
-                $glyph       = $Control.Resources['OverlayGlyph']
-                $overlayIcon = New-TaskbarOverlayIcon -GlyphChar $glyph -Color $Colors.Accent
-                if ($overlayIcon) {
-                    [PsUi.WindowManager]::SetTaskbarOverlay($Control, $overlayIcon, 'Overlay')
-                }
-            }
-            catch {
-                Write-Verbose "Failed to update taskbar overlay: $_"
-            }
-        }
-    }
-    elseif ($Control -is [System.Windows.Controls.GroupBox]) {
-        Set-GroupBoxStyle -GroupBox $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.Button]) {
-        # Inline button theme update logic (was Update-ButtonTheme)
-        $isAccent = $false
-        if ($Control.Tag -is [System.Collections.IDictionary] -and $Control.Tag['IsAccent']) {
-            $isAccent = $true
-        }
-
-        # Apply base button style
-        Set-ButtonStyle -Button $Control -Accent:$isAccent
-
-        # Update button icon color (non-accent buttons use accent color for icon)
-        if (!$isAccent -and $Control.Content -is [System.Windows.Controls.StackPanel]) {
-            foreach ($child in $Control.Content.Children) {
-                if ($child -is [System.Windows.Controls.TextBlock] -and (Test-IconFont $child.FontFamily)) {
-                    $child.Foreground = ConvertTo-UiBrush $Colors.Accent
-                }
-            }
-        }
-
-        # Update checkmark for theme menu buttons
-        if ($Control.Tag -is [System.Collections.IDictionary] -and $Control.Tag.ContainsKey('ThemeName')) {
-            if ($Control.Tag.ContainsKey('Checkmark') -and $Control.Tag['Checkmark']) {
-                $isActive = $Control.Tag['ThemeName'] -eq [PsUi.ModuleContext]::ActiveTheme
-                $Control.Tag['Checkmark'].Text = if ($isActive) { [char]0x2713 } else { ' ' }
-                if ($isActive) { $Control.Tag['Checkmark'].Foreground = ConvertTo-UiBrush $Colors.Accent }
-            }
-        }
-
-        # Style popup contents if button has a popup tag
-        if ($Control.Tag -is [System.Windows.Controls.Primitives.Popup]) {
-            $popup       = $Control.Tag
-            $popupBorder = $popup.Child
-            if ($popupBorder -is [System.Windows.Controls.Border]) {
-                $popupBorder.Background  = ConvertTo-UiBrush $Colors.ControlBg
-                $popupBorder.BorderBrush = ConvertTo-UiBrush $Colors.Border
-            }
-        }
-    }
-    elseif ($Control -is [System.Windows.Controls.TextBox]) {
-        Set-TextBoxStyle -TextBox $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.DataGrid]) {
-        Set-DataGridStyle -Grid $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.TabControl]) {
-        Set-TabControlStyle -TabControl $Control
-        $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
-    }
-    elseif ($Control -is [System.Windows.Controls.TabItem]) {
-        Set-TabItemStyle -TabItem $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.ComboBox]) {
-        Set-ComboBoxStyle -ComboBox $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.RadioButton]) {
-        # Wrap in try/catch - internal template RadioButtons may fail
-        try { Set-RadioButtonStyle -RadioButton $Control }
-        catch { Write-Debug "RadioButton style skipped: $_" }
-    }
-    elseif ($Control -is [System.Windows.Controls.ListBox]) {
-        Set-ListBoxStyle -ListBox $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.DatePicker]) {
-        Set-DatePickerStyle -DatePicker $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.TextBlock]) {
-        # Null-tag fast path, the switch below has scriptblock conditions that die on $null input 
-        # when invoked from a dispatched scriptblock
-        $tag = $Control.Tag
-        if ($null -eq $tag) {
-            if (!(Test-IconFont $Control.FontFamily)) {
-                $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
-            }
-        }
-        else {
             switch ($tag) {
                 'AccentBrush'                 { $Control.Foreground = ConvertTo-UiBrush $Colors.Accent }
                 'AccentHeaderForegroundBrush' { $Control.Foreground = ConvertTo-UiBrush $Colors.AccentHeaderFg }
@@ -167,33 +147,27 @@ function Update-SingleControlTheme {
                         $bgColor = if ($parent.Tag['CustomColor']) { $parent.Tag['CustomColor'] } else { $Colors.Accent }
                         $Control.Foreground = ConvertTo-UiBrush (Get-ContrastColor -HexColor $bgColor)
                     }
-                    else {
-                        $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
-                    }
+                    else { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
                 }
                 default {
                     # Regular text (not an icon font)
-                    if (!(Test-IconFont $Control.FontFamily)) {
-                        $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg
-                    }
+                    if (!(Test-IconFont $Control.FontFamily)) { $Control.Foreground = ConvertTo-UiBrush $Colors.ControlFg }
                 }
             }
+            break
         }
-    }
-    elseif ($Control -is [System.Windows.Controls.Border]) {
-        # Same null-Tag bypass as the TextBlock branch - the switch below has
-        # scriptblock conditions that deadlock on $null when invoked from a
-        # dispatched scriptblock (see TextBlock branch comment).
-        $tag = $Control.Tag
-        if ($null -ne $tag) {
+        { $_ -is [System.Windows.Controls.Border] } {
+            # Same null-Tag bypass as the TextBlock branch - the scriptblock switch conditions below deadlock on $null when invoked from a dispatched scriptblock.
+            $tag = $Control.Tag
+            if ($null -eq $tag) { break }
+
             # Inline Border theme update logic (was Update-BorderTheme)
             switch ($tag) {
                 'HeaderBorder' {
+                    # Local brush from $Colors. SetResourceReference points at Application.Current.Resources, which goes stale when ApplyTheme's cross-thread Invoke aborts under the child-STA-picker dispatcher deadlock.
                     $Control.Background = ConvertTo-UiBrush $Colors.HeaderBackground
                 }
-                { $_ -is [hashtable] -and $_.IsStatusBar } {
-                    Update-StatusBarTheme -Bar $Control -Colors $Colors
-                }
+                { $_ -is [hashtable] -and $_.IsStatusBar } { Update-StatusBarTheme -Bar $Control -Colors $Colors }
                 'PopupBorder' {
                     $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
                     $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
@@ -202,9 +176,7 @@ function Update-SingleControlTheme {
                     $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
                     $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
                 }
-                'CardSeparator' {
-                    $Control.Background = ConvertTo-UiBrush $Colors.Border
-                }
+                'CardSeparator' { $Control.Background = ConvertTo-UiBrush $Colors.Border }
                 'ConsoleGutter' {
                     $Control.Background  = ConvertTo-UiBrush $Colors.WindowBg
                     $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
@@ -213,13 +185,10 @@ function Update-SingleControlTheme {
                     $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
                     $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
                 }
-                'TimePickerSeparator' {
-                    $Control.Background = ConvertTo-UiBrush $Colors.Border
-                }
-                'Separator_Solid' {
-                    $Control.Background = ConvertTo-UiBrush $Colors.Border
-                }
+                'TimePickerSeparator' { $Control.Background = ConvertTo-UiBrush $Colors.Border }
+                'Separator_Solid'     { $Control.Background = ConvertTo-UiBrush $Colors.Border }
                 'Separator_Fade' {
+                    if ([string]::IsNullOrEmpty($Colors.Border)) { break }
                     # Recreate fade gradient with new border color
                     $borderColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Border)
                     $transparentBorder = [System.Windows.Media.Color]::FromArgb(0, $borderColor.R, $borderColor.G, $borderColor.B)
@@ -233,6 +202,7 @@ function Update-SingleControlTheme {
                     $Control.Background = $gradient
                 }
                 'Separator_Accent' {
+                    if ([string]::IsNullOrEmpty($Colors.Accent)) { break }
                     # Recreate accent fade gradient
                     $accentColor       = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.Accent)
                     $transparentAccent = [System.Windows.Media.Color]::FromArgb(0, $accentColor.R, $accentColor.G, $accentColor.B)
@@ -251,49 +221,39 @@ function Update-SingleControlTheme {
             if ($tag -is [System.Collections.IDictionary]) {
                 $tagType = $tag['Type']
                 if ($tagType -eq 'CardHeader') {
-                    if ($tag['CustomColor']) {
-                        $Control.Background = ConvertTo-UiBrush $tag['CustomColor']
-                    }
-                    elseif ($tag['IsAccent']) {
-                        $Control.Background = ConvertTo-UiBrush $Colors.Accent
-                    }
+                    if ($tag['CustomColor']) { $Control.Background = ConvertTo-UiBrush $tag['CustomColor'] }
+                    elseif ($tag['IsAccent']) { $Control.Background = ConvertTo-UiBrush $Colors.Accent }
                     else {
                         $headerBgColor = if ($Colors.GroupBoxBg) { $Colors.GroupBoxBg } else { $Colors.WindowBg }
                         $Control.Background = ConvertTo-UiBrush $headerBgColor
                     }
                 }
             }
+            break
         }
-    }
-    elseif ($Control -is [System.Windows.Controls.PasswordBox]) {
-        $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-        $Control.Foreground  = ConvertTo-UiBrush $Colors.ControlFg
-        $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-    }
-    elseif ($Control -is [System.Windows.Controls.CheckBox]) {
-        Set-CheckBoxStyle -CheckBox $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.RichTextBox]) {
-        $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
-        $Control.Foreground  = ConvertTo-UiBrush $Colors.ControlFg
-        $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
-        $highlightColor      = if ($Colors.TextHighlight) { $Colors.TextHighlight } else { $Colors.Selection }
-        $Control.SelectionBrush = ConvertTo-UiBrush $highlightColor
-    }
-    elseif ($Control -is [System.Windows.Controls.ProgressBar]) {
-        Set-ProgressBarStyle -ProgressBar $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.Slider]) {
-        Set-SliderStyle -Slider $Control
-    }
-    elseif ($Control -is [System.Windows.Controls.StackPanel]) {
-        if ($Control.Tag -eq 'ProgressPanel') {
-            $Control.Background = ConvertTo-UiBrush $Colors.ControlBg
+        { $_ -is [System.Windows.Controls.PasswordBox] } {
+            $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
+            $Control.Foreground  = ConvertTo-UiBrush $Colors.ControlFg
+            $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+            break
+        }
+        { $_ -is [System.Windows.Controls.CheckBox] } { Set-CheckBoxStyle -CheckBox $Control; break }
+        { $_ -is [System.Windows.Controls.RichTextBox] } {
+            $Control.Background  = ConvertTo-UiBrush $Colors.ControlBg
+            $Control.Foreground  = ConvertTo-UiBrush $Colors.ControlFg
+            $Control.BorderBrush = ConvertTo-UiBrush $Colors.Border
+            $highlightColor      = if ($Colors.TextHighlight) { $Colors.TextHighlight } else { $Colors.Selection }
+            $Control.SelectionBrush = ConvertTo-UiBrush $highlightColor
+            break
+        }
+        { $_ -is [System.Windows.Controls.ProgressBar] } { Set-ProgressBarStyle -ProgressBar $Control; break }
+        { $_ -is [System.Windows.Controls.Slider] } { Set-SliderStyle -Slider $Control; break }
+        { $_ -is [System.Windows.Controls.StackPanel] } {
+            if ($Control.Tag -eq 'ProgressPanel') { $Control.Background = ConvertTo-UiBrush $Colors.ControlBg }
+            break
         }
     }
 
     # Update ContextMenu if present (not in visual tree)
-    if ($Control -is [System.Windows.FrameworkElement] -and $Control.ContextMenu) {
-        Set-ContextMenuStyle -ContextMenu $Control.ContextMenu
-    }
+    if ($Control -is [System.Windows.FrameworkElement] -and $Control.ContextMenu) {  Set-ContextMenuStyle -ContextMenu $Control.ContextMenu  }
 }
