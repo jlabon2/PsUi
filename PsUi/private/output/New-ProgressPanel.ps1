@@ -21,7 +21,12 @@ function New-ProgressPanel {
     # Dictionary to track multiple progress activities (keyed by ActivityId)
     $progressActivities = @{}
 
-    # Helper function to create a progress bar UI element for an activity
+    # Resolve brushes up front so GetNewClosure captures the values. Show-UiOutput invokes this per ActivityId after this function returns, and -NoWait leaves no dynamic scope to supply $Colors. Inline calls die regardless since closures carry values and not private functions.
+    $secondaryBrush = ConvertTo-UiBrush $Colors.SecondaryText
+    $barBgBrush     = ConvertTo-UiBrush $Colors.ControlBg
+    $accentBrush    = ConvertTo-UiBrush $Colors.Accent
+    $applyBarStyle  = ${function:Set-ProgressBarStyle}
+
     $createProgressUI = {
         param($activityId, $isChild)
 
@@ -32,7 +37,7 @@ function New-ProgressPanel {
 
         $label = [System.Windows.Controls.TextBlock]@{
             FontSize   = if ($isChild) { 10 } else { 11 }
-            Foreground = ConvertTo-UiBrush $Colors.SecondaryText
+            Foreground = $secondaryBrush
             Margin     = [System.Windows.Thickness]::new(0, 0, 0, 2)
         }
         [void]$stack.Children.Add($label)
@@ -40,10 +45,10 @@ function New-ProgressPanel {
         $bar = [System.Windows.Controls.ProgressBar]@{
             IsIndeterminate = $true
             Height          = if ($isChild) { 3 } else { 4 }
-            Background      = ConvertTo-UiBrush $Colors.ControlBg
-            Foreground      = if ($isChild) { ConvertTo-UiBrush $Colors.SecondaryText } else { ConvertTo-UiBrush $Colors.Accent }
+            Background      = $barBgBrush
+            Foreground      = if ($isChild) { $secondaryBrush } else { $accentBrush }
         }
-        Set-ProgressBarStyle -ProgressBar $bar
+        & $applyBarStyle -ProgressBar $bar
         [void]$stack.Children.Add($bar)
 
         return @{
@@ -52,7 +57,7 @@ function New-ProgressPanel {
             Bar       = $bar
             IsChild   = $isChild
         }
-    }
+    }.GetNewClosure()
 
     # Create default progress bar (ActivityId = 0) but DON'T add to panel yet
     $defaultProgressUI             = & $createProgressUI 0 $false

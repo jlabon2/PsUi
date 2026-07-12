@@ -8,7 +8,7 @@ function Write-UiHostDirect {
         when logging outside the UI or writing to a console window.
         
         Uses [Console]::WriteLine to bypass both the PSHost proxy and runspace boundaries.
-        Note: Color support is limited compared to Write-Host since we use Console APIs directly.
+        Color support is thinner than Write-Host since Console APIs are doing the work.
     .PARAMETER Object
         The object to write.
     .PARAMETER ForegroundColor
@@ -59,12 +59,8 @@ function Write-UiHostDirect {
                 $restoreBg = $true
             }
 
-            if ($NoNewline) {
-                [Console]::Write($text)
-            }
-            else {
-                [Console]::WriteLine($text)
-            }
+            if ($NoNewline) {  [Console]::Write($text)   }
+            else { [Console]::WriteLine($text) }
         }
         finally {
             # Restore original colors

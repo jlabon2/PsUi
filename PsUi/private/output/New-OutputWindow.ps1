@@ -141,8 +141,7 @@ function New-OutputWindow {
         $btn.OverridesDefaultStyle = $true
         
         # Foreground is set inside the template via TextElement.Foreground on ContentPresenter.
-        # Do NOT use SetResourceReference on the button - it creates a local value that
-        # overrides template trigger setters after theme changes.
+        # Do NOT use SetResourceReference on the button. It creates a local value that overrides template trigger setters after theme changes.
         
         if ($IsClose) {
             # Close button: red hover with white X, darker red pressed
@@ -185,7 +184,7 @@ function New-OutputWindow {
 </ControlTemplate>
 '@
         }
-        # Cache parsed templates per session — avoids re-parsing identical XAML for every window
+        # Cache parsed templates per session to avoid reparsing identical XAML for every window.
         if ($IsClose) {
             if (!$script:_closeBtnTemplate) { $script:_closeBtnTemplate = [System.Windows.Markup.XamlReader]::Parse($templateXaml) }
             $btn.Template = $script:_closeBtnTemplate
@@ -219,8 +218,7 @@ function New-OutputWindow {
     [void]$buttonPanel.Children.Add($maximizeBtn)
 
     $closeBtn = & $createWindowBtn ([PsUi.ModuleContext]::GetIcon('ChromeClose')) { 
-        # Just close the window - let the Closing event handler deal with confirmations
-        # and closing the ReadKey dialog at the appropriate time
+        # Just close the window and let the Closing event handler deal with confirmations and closing the ReadKey dialog at the appropriate time.
         $capturedWindow.Close() 
     }.GetNewClosure() $true
     [void]$buttonPanel.Children.Add($closeBtn)

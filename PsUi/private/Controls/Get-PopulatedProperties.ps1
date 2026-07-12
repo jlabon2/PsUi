@@ -6,6 +6,8 @@ function Get-PopulatedProperties {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [AllowNull()]
         [object[]]$Items,
 
         [string[]]$PropertyNames
@@ -25,17 +27,19 @@ function Get-PopulatedProperties {
             if ($populated.Contains($propName)) { continue }
             if ($propName.StartsWith('_')) { continue }
 
-            # Some .NET objects (Process, WMI) throw on property access. Treat throw as "no value for this row" 
-            # They may still be populated in another row, so don't break out.
+            # PSObject.Properties[name] resolves the member without invoking its getter, so a missing member is an explicit skip instead of a silent $null read. The read stays in the try but getters can still throw (eg Process.MainModule on elevated procs).
+            $prop = $item.PSObject.Properties[$propName]
+            if (!$prop) { continue }
+
             $value = $null
-            try   { $value = $item.$propName }
+            try   { $value = $prop.Value }
             catch { continue }
 
             $hasValue = $false
             if ($null -ne $value) {
                 if ($value -is [string]) {
-                    
-                    # '[Access Denied]' is the string ConvertTo-SafeDataArray implants when the source property threw. 
+
+                    # '[Access Denied]' is the string ConvertTo-SafeDataArray implants when the source property threw.
                     # Treating it as a real value means columns full of "Access Denied" show up as populated; which defeats HasData.
                     $hasValue = ![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]'
                 }
@@ -49,5 +53,6 @@ function Get-PopulatedProperties {
         if ($PropertyNames -and $populated.Count -eq $PropertyNames.Count) { break }
     }
 
-    return @($populated)
+    # Return the HashSet itself. @() and [string[]] still use it fine, and can now makeuse of Contains().
+    return ,$populated
 }

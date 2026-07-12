@@ -124,8 +124,7 @@ function New-UiChart {
 
         # Detect whether we're inside a Grid with star rows (e.g., FillParent dashboard).
         # Star grids constrain cell height, so a squarer canvas fills cells better.
-        # Standalone charts use a wider canvas to prevent excessive vertical growth
-        # when the Viewbox scales uniformly to fill parent width.
+        # Standalone charts use a wider canvas to prevent excessive vertical growth when the Viewbox scales uniformly to fill parent width.
         $inStarGrid = $false
         if (!$fixedSize -and $parent -is [System.Windows.Controls.Grid]) {
             foreach ($rowDef in $parent.RowDefinitions) {
@@ -231,8 +230,7 @@ function New-UiChart {
         # Invoke-ChartRedraw handles both data rendering and empty placeholder
         Invoke-ChartRedraw -Container $container -NewData $chartData
 
-        # Register hydration callback - dehydration triggers this when $chartVar
-        # is reassigned in a button action. Reads data from DataProperty.
+        # Register hydration callback - dehydration triggers this when $chartVar is reassigned in a button action. Reads data from DataProperty.
         $containerRef = $container
         $redrawCallback = [Action]{
             $storedData = [PsUi.UiHydration]::GetData($containerRef)
@@ -254,12 +252,9 @@ function New-UiChart {
             $parent.Content = $container
         }
 
-        # WrapPanel parents size children to their content width, so charts need
-        # explicit Width to fill the available space and track parent resizes.
-        # Other parents (StackPanel vertical, Grid with star columns) constrain
-        # width naturally - the Viewbox Uniform stretch fits within those bounds.
-        # Note: horizontal StackPanels give children their desired width, so charts
-        # in side-by-side layouts should use New-UiGrid -Columns 2 instead.
+        # WrapPanel parents size children to their content width, so charts need explicit Width to fill the available space and track parent resizes.
+        # Other parents (StackPanel vertical, Grid with star columns) constrain width naturally - the Viewbox Uniform stretch fits within those bounds.
+        # Horizontal StackPanels hand children their desired width, so charts in side-by-side layouts want New-UiGrid -Columns 2 instead.
         if (!$fixedSize -and $parent -is [System.Windows.Controls.WrapPanel]) {
             $chartRef  = $container
             $parentRef = $parent
