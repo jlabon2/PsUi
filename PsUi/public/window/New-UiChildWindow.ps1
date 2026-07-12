@@ -133,9 +133,7 @@ function New-UiChildWindow {
         Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue
     } else { $null }
 
-    if (!$colors) {
-        $colors = Get-ThemeColors
-    }
+    if (!$colors) { $colors = Get-ThemeColors  }
 
     if (!$colors) {
         $colors = @{
@@ -192,24 +190,16 @@ function New-UiChildWindow {
     $childWindowIcon = $null
     try {
         $parentSession = Get-UiSession
-        if ($parentSession.CustomLogo -and (Test-Path $parentSession.CustomLogo)) {
-            $childWindowIcon = Get-CustomLogoIcon -Path $parentSession.CustomLogo
-        }
-        else {
-            $childWindowIcon = New-WindowIcon -Colors $colors
-        }
-        if ($childWindowIcon) {
-            $window.Icon = $childWindowIcon
-        }
+        
+        if ($parentSession.CustomLogo -and (Test-Path $parentSession.CustomLogo)) { $childWindowIcon = Get-CustomLogoIcon -Path $parentSession.CustomLogo }
+        else {  $childWindowIcon = New-WindowIcon -Colors $colors }
+        
+        if ($childWindowIcon) {  $window.Icon = $childWindowIcon  }
     }
-    catch {
-        Write-Verbose "Failed to create window icon:  $_"
-    }
+    catch { Write-Verbose "Failed to create window icon:  $_" }
 
     if ($Parent) {
-        try {
-            $window.Owner = $Parent
-        }
+        try { $window.Owner = $Parent }
         catch {
             Write-Verbose "[New-UiChildWindow] Could not set Owner: $_"
             # Adjust startup location if we couldn't set owner
@@ -296,18 +286,33 @@ function New-UiChildWindow {
     $titleGrid = [System.Windows.Controls.Grid]::new()
     $titleBar.Child = $titleGrid
 
+    # WindowStyle='None' on the child window means the OS-native title-bar icon never renders and custom chrome has to draw its own. Copy the same 16x16 pattern as the main window's BuildTitleBar in NewUiWindowCommand.Builder.cs. 
+    # Skip the Image if no icon was resolved above.
+    $titleTextLeftMargin = 0
+    if ($childWindowIcon) {
+        $titleIcon = [System.Windows.Controls.Image]@{
+            Source              = $childWindowIcon
+            Width               = 16
+            Height              = 16
+            HorizontalAlignment = 'Left'
+            VerticalAlignment   = 'Center'
+        }
+        [void]$titleGrid.Children.Add($titleIcon)
+        $titleTextLeftMargin = 24
+    }
+
     $titleText = [System.Windows.Controls.TextBlock]@{
         Text              = $Title
         FontSize          = 13
         FontWeight        = 'SemiBold'
         Foreground        = ConvertTo-UiBrush $colors.HeaderForeground
         VerticalAlignment = 'Center'
+        Margin            = [System.Windows.Thickness]::new($titleTextLeftMargin, 0, 0, 0)
     }
     [void]$titleGrid.Children.Add($titleText)
 
     # Close button with red hover effect
-    # Foreground is set inside the template - do NOT use a property setter on the button,
-    # it creates a local value that overrides template trigger setters after theme changes.
+    # Foreground is set inside the template - do NOT use a property setter on the button, it creates a local value that overrides template trigger setters after theme changes.
     $closeBtn = [System.Windows.Controls.Button]@{
         Content             = [PsUi.ModuleContext]::GetIcon('Close')
         FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
@@ -343,9 +348,7 @@ function New-UiChildWindow {
     $capturedWindow = $window
     $capturedModal  = $Modal
     $closeBtn.Add_Click({
-        if ($capturedModal) {
-            $capturedWindow.DialogResult = $false
-        }
+        if ($capturedModal) {  $capturedWindow.DialogResult = $false }
         $capturedWindow.Close()
     }.GetNewClosure())
     [void]$titleGrid.Children.Add($closeBtn)
@@ -406,38 +409,40 @@ try {
         # Try to get the variable from caller's scope
         try {
             $var = $callerSessionState.PSVariable.Get($varName)
-            if ($null -ne $var) {
-                $capturedVars[$varName] = $var.Value
-            }
+            if ($null -ne $var) {  $capturedVars[$varName] = $var.Value  }
         }
         catch { Write-Debug "Variable capture failed for '$varName': $_" }
     }
 
     # Inject captured variables into current scope before running Content
-    foreach ($key in $capturedVars.Keys) {
-        Set-Variable -Name $key -Value $capturedVars[$key] -Scope Local
-    }
+    foreach ($key in $capturedVars.Keys) { Set-Variable -Name $key -Value $capturedVars[$key] -Scope Local }
 
     Write-Verbose "[New-UiChildWindow] Captured $($capturedVars.Count) variables from caller scope"
 }
-catch {
-    Write-Verbose "[New-UiChildWindow] Variable capture failed: $_"
-}
+catch { Write-Verbose "[New-UiChildWindow] Variable capture failed: $_" }
 
 try {
     Write-Debug "Executing content block"
     Invoke-UiContent -Content $Content -CallerName 'New-UiChildWindow'
 }
 catch {
+
     Write-Error $_
-    Clear-UiSession
+    # The window never got shown, so the Add_Closed restore below was never wired. Undo the child session and hand the parent back by hand - Clear-UiSession would leave the caller on a fresh empty session and every later Get-UiSession on this thread would miss the parent.
+    if ($childSessionId -ne [Guid]::Empty) {
+        [PsUi.SessionManager]::DisposeSession($childSessionId)
+    }
+
+    if ($parentSessionId -ne [Guid]::Empty) {
+        [PsUi.SessionManager]::SetCurrentSession($parentSessionId)
+        $Global:__PsUiSessionId = $parentSessionId.ToString()
+    }
+
     return $null
 }
 
 # Resolve private function ahead of time so the closure below carries the resolved CommandInfo.
-# WPF event handlers fire under the dispatcher's session state, which doesn't see module-private
-# functions even though the script block was defined inside the module. Capturing here sidesteps
-# the lookup at fire time.
+# WPF event handlers fire under the dispatcher's session state, which doesn't see module-private functions even though the script block was defined inside the module. Capturing here sidesteps the lookup at fire time.
 $setUiResourcesCmd = Get-Command Set-UIResources -ErrorAction SilentlyContinue
 
 # Set up window load event for fade-in and theming
@@ -449,14 +454,10 @@ $window.Add_Loaded({
     }
 
     # Apply title bar theming using Set-UIResources (same as main window)
-    if ($setUiResourcesCmd) {
-        & $setUiResourcesCmd -Window $this -Colors $colors -IconPath $null
-    }
+    if ($setUiResourcesCmd) { & $setUiResourcesCmd -Window $this -Colors $colors -IconPath $null }
 
     # Force taskbar to use our themed icon (requires window handle)
-    if ($childWindowIcon) {
-        [PsUi.WindowManager]::SetTaskbarIcon($this, $childWindowIcon)
-    }
+    if ($childWindowIcon) { [PsUi.WindowManager]::SetTaskbarIcon($this, $childWindowIcon) }
 
     # Fade-in animation with easing
     $fadeIn = [System.Windows.Media.Animation.DoubleAnimation]@{
@@ -464,9 +465,7 @@ $window.Add_Loaded({
         To       = 1
         Duration = [System.Windows.Duration]::new([System.TimeSpan]::FromMilliseconds(350))
     }
-    $fadeIn.EasingFunction = [System.Windows.Media.Animation.QuadraticEase]@{
-        EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseOut
-    }
+    $fadeIn.EasingFunction = [System.Windows.Media.Animation.QuadraticEase]@{ EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseOut }
     $this.BeginAnimation([System.Windows.Window]::OpacityProperty, $fadeIn)
 }.GetNewClosure())
 
@@ -480,9 +479,7 @@ $window.Add_Loaded({
     $capturedParent = $Parent
     $window.Add_Closed({
         # Dispose the child window's session
-        if ($childSessionId -ne [Guid]::Empty) {
-            [PsUi.SessionManager]::DisposeSession($childSessionId)
-        }
+        if ($childSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($childSessionId) }
         
         # Restore the parent window's session as current (both ThreadStatic and global variable)
         if ($parentSessionId -ne [Guid]::Empty) {
@@ -491,22 +488,12 @@ $window.Add_Loaded({
         }
         
         # Activate the parent window so it comes back to the foreground
-        if ($capturedParent) {
-            $capturedParent.Activate()
-        }
+        if ($capturedParent) { $capturedParent.Activate() }
     }.GetNewClosure())
 
-    if ($WPFProperties) {
-        Set-UiProperties -Control $window -Properties $WPFProperties
-    }
+    if ($WPFProperties) {  Set-UiProperties -Control $window -Properties $WPFProperties }
 
-    if ($PassThru) {
-        return $window
-    }
-    elseif ($Modal) {
-        return $window.ShowDialog()
-    }
-    else {
-        [void]$window.Show()
-    }
+    if ($PassThru) {  return $window }
+    elseif ($Modal) { return $window.ShowDialog() }
+    else { [void]$window.Show() }
 }
