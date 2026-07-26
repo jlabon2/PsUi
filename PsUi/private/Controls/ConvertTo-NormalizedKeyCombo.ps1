@@ -9,8 +9,14 @@ function ConvertTo-NormalizedKeyCombo {
         [string]$KeyCombo
     )
 
-    # Parse modifiers and key (seperate by +)
-    $parts    = $KeyCombo.Trim() -split '\+'
+    $parts = $KeyCombo.Trim() -split '\+'
+
+    $parts = $parts | Where-Object { $_ -ne '' }
+    if (!$parts -or @($parts).Count -eq 0) {
+        Write-Warning "Cannot normalize '$KeyCombo'; the literal '+' key can't be expressed in this format."
+        return $null
+    }
+
     $hasCtrl  = $false
     $hasAlt   = $false
     $hasShift = $false
@@ -23,11 +29,10 @@ function ConvertTo-NormalizedKeyCombo {
             '^Alt$'            { $hasAlt = $true }
             '^Shift$'          { $hasShift = $true }
             default {
+
                 # This is the main key - validate it maps to a WPF key
                 $wpfKey = ConvertTo-WpfKey -KeyName $cleaned
-                if ($wpfKey) {
-                    $mainKey = $wpfKey.ToString()
-                }
+                if ($wpfKey) { $mainKey = $wpfKey.ToString() }
                 else {
                     Write-Warning "Unknown key: '$cleaned'"
                     return $null
@@ -48,38 +53,5 @@ function ConvertTo-NormalizedKeyCombo {
     if ($hasShift) { [void]$result.Add('Shift') }
     [void]$result.Add($mainKey)
 
-    return ($result -join '+').ToUpperInvariant()
-}
-
-function ConvertTo-WpfKey {
-    <#
-    .SYNOPSIS
-        Converts a key name string to a WPF Key enum value.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$KeyName
-    )
-
-    # Handle common aliases
-    $mapped = switch -Regex ($KeyName) {
-        '^Esc(ape)?$' { 'Escape' }
-        '^Enter$'     { 'Return' }
-        '^Del(ete)?$' { 'Delete' }
-        '^Ins(ert)?$' { 'Insert' }
-        '^PgUp$'      { 'PageUp' }
-        '^PgDown$'    { 'PageDown' }
-        '^PgDn$'      { 'PageDown' }
-        default       { $KeyName }
-    }
-
-    # Try to parse as WPF Key enum
-    try {
-        $key = [System.Windows.Input.Key]$mapped
-        return $key
-    }
-    catch {
-        return $null
-    }
+    return $result -join '+'
 }

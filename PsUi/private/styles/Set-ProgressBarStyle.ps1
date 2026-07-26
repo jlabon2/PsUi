@@ -9,9 +9,8 @@ function Set-ProgressBarStyle {
         [System.Windows.Controls.ProgressBar]$ProgressBar
     )
 
-    # Indeterminate skips the custom template - WPF's native marquee is fine and
-    # honestly nicer than anything we'd be able to come up with. Use DynamicResource so theme
-    # switches still repaint, and honor a severity brush via Tag.
+    # Indeterminate skips the custom template - WPF's native indeterminate animation is fine and honestly nicer than anything hand-rolled here.
+    # Use DynamicResource so theme switches still redraw, and honor a severity brush via Tag.
     if ($ProgressBar.IsIndeterminate) {
   
         $fgKey = 'AccentBrush'

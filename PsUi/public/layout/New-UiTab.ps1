@@ -20,7 +20,7 @@ function New-UiTab {
         New-UiTab -Header "Settings" -EnabledWhen 'isConnected' -Content {
             New-UiInput -Label "Server" -Variable "server"
         }
-        
+
         Creates a tab that is disabled until the 'isConnected' variable is truthy.
     .EXAMPLE
         New-UiTab -Header "Tab" -Content { } -WPFProperties @{
@@ -33,7 +33,7 @@ function New-UiTab {
     param(
         [Parameter(Mandatory)]
         [string]$Header,
-        
+
         [Parameter(Mandatory)]
         [scriptblock]$Content,
 
@@ -58,7 +58,6 @@ function New-UiTab {
     $parent  = $session.CurrentParent
     Write-Debug "Header: '$Header', Parent: $($parent.GetType().Name)"
 
-    # logic to find or create TabControl with null safety
     $targetTabControl = $null
     if ($parent -is [System.Windows.Controls.TabControl]) {
         $targetTabControl = $parent
@@ -152,8 +151,7 @@ function New-UiTab {
     }
 
     # Wrap tab content in ScrollViewer so overflow is scrollable.
-    # In AutoSize mode the ScrollViewer reports its full content height (window grows),
-    # but if MaxHeight caps the window, the ScrollViewer constrains and scrolls.
+    # In AutoSize mode the ScrollViewer reports its full content height (window grows), but if MaxHeight caps the window, the ScrollViewer constrains and scrolls.
     $tabScrollViewer = [System.Windows.Controls.ScrollViewer]@{
         VerticalScrollBarVisibility   = 'Auto'
         HorizontalScrollBarVisibility = 'Disabled'
@@ -161,18 +159,34 @@ function New-UiTab {
     }
     $tabScrollViewer.Content = $contentPanel
 
-    # When inner ScrollViewer has nothing to scroll (or is at the edge),
-    # bubble mouse wheel events to the outer ScrollViewer so it can scroll instead.
+    # Nothing to scroll (or at the edge): re-raise the wheel at the outer ScrollViewer. Skip when the cursor sits over a CaptureScrollWheel DataGrid.
     $tabScrollViewer.Add_PreviewMouseWheel({
-        param($sender, $e)
-        $atTop    = ($e.Delta -gt 0) -and ($sender.VerticalOffset -eq 0)
-        $atBottom = ($e.Delta -lt 0) -and ($sender.VerticalOffset -ge $sender.ScrollableHeight)
+        param($sender, $eventArgs)
+
+        # Walk up from the hit tested thing to see if a CaptureScrollWheel DataGrid owns it
+        $hit = $eventArgs.OriginalSource -as [System.Windows.DependencyObject]
+        while ($hit) {
+            if ($hit -is [System.Windows.Controls.DataGrid] -and
+                $hit.Tag -is [hashtable] -and
+                $hit.Tag.CaptureScrollWheel) {
+                # let WPF native routing scroll the grid
+                return
+            }
+            # OriginalSource can be a ContentElement (WPF Run or a Hyperlink), VisualTreeHelper.GetParent throws on those, so hop to the tree until a Visual shows up
+            $hit = if ($hit -is [System.Windows.Media.Visual] -or $hit -is [System.Windows.Media.Media3D.Visual3D]) {
+                [System.Windows.Media.VisualTreeHelper]::GetParent($hit)
+            }
+            else { [System.Windows.LogicalTreeHelper]::GetParent($hit) }
+        }
+
+        $atTop    = ($eventArgs.Delta -gt 0) -and ($sender.VerticalOffset -eq 0)
+        $atBottom = ($eventArgs.Delta -lt 0) -and ($sender.VerticalOffset -ge $sender.ScrollableHeight)
         $noScroll = $sender.ScrollableHeight -eq 0
 
         if ($atTop -or $atBottom -or $noScroll) {
-            $e.Handled = $true
+            $eventArgs.Handled = $true
             $newArgs = [System.Windows.Input.MouseWheelEventArgs]::new(
-                $e.MouseDevice, $e.Timestamp, $e.Delta)
+                $eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
             $newArgs.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
             $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($sender)
             if ($parent) { $parent.RaiseEvent($newArgs) }
@@ -193,20 +207,15 @@ function New-UiTab {
         $session.CurrentParent = $oldParent
         throw
     }
-    
+
     # Restore parent after successful content execution
     $session.CurrentParent = $oldParent
     Write-Debug "Content block complete"
 
     # Apply custom WPF properties if specified
-    if ($WPFProperties) {
-        Set-UiProperties -Control $tabItem -Properties $WPFProperties
-    }
+    if ($WPFProperties) { Set-UiProperties -Control $tabItem -Properties $WPFProperties }
 
-    # Wire up conditional enabling if specified
-    if ($EnabledWhen) {
-        Register-UiCondition -TargetControl $tabItem -Condition $EnabledWhen
-    }
+    if ($EnabledWhen) { Register-UiCondition -TargetControl $tabItem -Condition $EnabledWhen }
 
     [void]$targetTabControl.Items.Add($tabItem)
     Write-Debug "Tab added to TabControl"

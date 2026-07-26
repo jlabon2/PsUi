@@ -11,12 +11,22 @@ Add-Type -AssemblyName System.Windows.Forms
 # Load the pre-compiled C# backend DLL (framework-specific)
 $dllLoaded = $false
 
-# Determine the correct lib folder based on PowerShell edition
+# Core loads lib\core, Desktop lib\desktop (net472). Boxes without 4.7.2 (WinPE, pre 1803 Server) drop to lib\net452. Release 461808 is 4.7.2.
 if ($PSVersionTable.PSEdition -eq 'Core') {
     $libPath = Join-Path $PSScriptRoot 'lib\core'
 }
 else {
-    $libPath = Join-Path $PSScriptRoot 'lib\desktop'
+    $useNet452 = $false
+    try {
+        $ndpKey = 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full'
+        $release = (Get-ItemProperty -Path $ndpKey -ErrorAction Stop).Release
+        if ($release -lt 461808) { $useNet452 = $true }
+    }
+    catch {
+        # Registry probe failed (no NDP key, no permission). Assume modern .NET - lib\desktop.
+    }
+    $libPath = if ($useNet452) { Join-Path $PSScriptRoot 'lib\net452' }
+    else { Join-Path $PSScriptRoot 'lib\desktop' }
 }
 
 $dllPath = Join-Path $libPath 'PsUi.dll'
@@ -27,37 +37,27 @@ if (Test-Path $dllPath) {
         $webView2Core = Join-Path $libPath 'Microsoft.Web.WebView2.Core.dll'
         $webView2Wpf  = Join-Path $libPath 'Microsoft.Web.WebView2.Wpf.dll'
         
-        if (Test-Path $webView2Core) {
-            [System.Reflection.Assembly]::LoadFrom($webView2Core) | Out-Null
-        }
-        if (Test-Path $webView2Wpf) {
-            [System.Reflection.Assembly]::LoadFrom($webView2Wpf) | Out-Null
-        }
+        if (Test-Path $webView2Core) { [System.Reflection.Assembly]::LoadFrom($webView2Core) | Out-Null }
+        if (Test-Path $webView2Wpf) {  [System.Reflection.Assembly]::LoadFrom($webView2Wpf) | Out-Null }
         
         # Import the main module DLL
         Import-Module $dllPath -Global -DisableNameChecking -Force
         $dllLoaded = $true
         Write-Verbose "Loaded PsUi backend from: $dllPath"
     }
-    catch {
-        Write-Warning "Failed to load PsUi backend DLL: $_"
-    }
+    catch {  Write-Warning "Failed to load PsUi backend DLL: $_"  }
 }
 else {
     Write-Warning "PsUi backend DLL not found at: $dllPath"
     Write-Warning "Run Build-PsUi.ps1 from the repository root to compile the C# backend."
 }
 
-# Wire up module context now that the DLL is loaded
+# Hook up module context now that the DLL is loaded
 if ($dllLoaded) {
     [PsUi.ModuleContext]::IsInitialized = $true
     [PsUi.ModuleContext]::ModulePath = $PSScriptRoot
-    try {
-        [PsUi.ThemeEngine]::SetModulePath($PSScriptRoot)
-    }
-    catch {
-        Write-Verbose "ThemeEngine module path not set: $_"
-    }
+    try { [PsUi.ThemeEngine]::SetModulePath($PSScriptRoot) }
+    catch {  Write-Verbose "ThemeEngine module path not set: $_" }
     
     # Clean up orphaned WebView2 temp folders from previous sessions
     try { [PsUi.WebViewHelper]::CleanupOldUserDataFolders() } catch { }
@@ -82,19 +82,12 @@ if (Test-Path $iconPath) {
             Write-Warning "No icon font found (Segoe MDL2 Assets or Segoe Fluent Icons). Icons will not render correctly."
         }
     }
-    catch {
-        Write-Warning "Failed to load icons: $_"
-    }
+    catch {  Write-Warning "Failed to load icons: $_"   }
 }
 
 # Load all PowerShell function files from private and public folders.
-# Concatenating every .ps1 into a single script block (parsed and executed once)
-# is ~10x faster than dot-sourcing each file individually. The speedup is
-# dramatic on slow/high-latency filesystems (OneDrive reparse points, UNC
-# shares) where 190+ separate file opens dominate module import time.
-# Behaviour is identical: these files only define functions at module scope,
-# and the concatenation order matches the previous Get-ChildItem -Recurse
-# enumeration order.
+# Concatenating every .ps1 into a single script block (parsed and executed once) is ~10x faster than dot sourcing each file individually. The speedup is dramatic on slow/high latency filesystems (OneDrive reparse points, UNC shares) where 190+ separate file opens dominate module import time.
+# Behaviour is identical: these files only define functions at module scope, and the concatenation order matches the previous Get-ChildItem -Recurse enumeration order.
 $loaderSb = [System.Text.StringBuilder]::new(524288)
 foreach ($folder in @('private', 'public')) {
     $path = Join-Path $PSScriptRoot $folder
@@ -113,9 +106,7 @@ if ($loaderSb.Length -gt 0) {
 Remove-Variable -Name loaderSb, loaderBlock -ErrorAction SilentlyContinue
 
 # Register private functions in ModuleContext for injection into async runspaces.
-# Private functions work inside button actions because they're injected into each async
-# runspace by AsyncExecutor.Setup.cs. They're NOT exported to the user's console, but
-# ARE available inside -Action scriptblocks.
+# Private functions work inside button actions because they're injected into each async runspace by AsyncExecutor.Setup.cs. They're NOT exported to the user's console, but ARE available inside -Action scriptblocks.
 $privatePath = Join-Path $PSScriptRoot 'private'
 $publicPath  = Join-Path $PSScriptRoot 'public'
 
@@ -126,9 +117,7 @@ if (Test-Path $privatePath) {
     Get-ChildItem $privatePath -Filter '*.ps1' -File -Recurse | ForEach-Object {
         $funcName = $_.BaseName
         $cmd = Get-Command -Name $funcName -CommandType Function -ErrorAction SilentlyContinue
-        if ($cmd) {
-            $privateFuncs[$funcName] = $cmd.Definition
-        }
+        if ($cmd) {  $privateFuncs[$funcName] = $cmd.Definition  }
     }
 }
 
@@ -142,6 +131,9 @@ $asyncPublicFuncs = @(
     'Clear-UiList'
     'Clear-UiStatus'
     'Get-UiListItems'
+    'Add-UiDataGridItem'
+    'Clear-UiDataGridItems'
+    'Set-UiDataGridItems'
     'Set-UiProgress'
     'Set-UiStatusBar'
     'Hide-UiStatusBar'
@@ -155,14 +147,9 @@ $asyncPublicFuncs = @(
 $publicFuncs = @{}
 foreach ($funcName in $asyncPublicFuncs) {
     $cmd = Get-Command -Name $funcName -CommandType Function -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $publicFuncs[$funcName] = $cmd.Definition
-    }
+    if ($cmd) {  $publicFuncs[$funcName] = $cmd.Definition  }
 }
 [PsUi.ModuleContext]::PublicFunctions = $publicFuncs
-
-# Store module path for async runspace Import-Module
-[PsUi.ModuleContext]::ModulePath = $PSScriptRoot
 
 # OnRemove also fires on Import-Module -Force, because of course it does.
 # Skip the static-state nuke if windows are still alive or we yank the rug out from under them.

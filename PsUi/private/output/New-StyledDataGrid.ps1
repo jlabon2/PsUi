@@ -11,7 +11,9 @@ function New-StyledDataGrid {
 
         [switch]$NoSort,
 
-        [switch]$NoContextMenu
+        [switch]$NoContextMenu,
+
+        [switch]$NoStarResizeUnlock
     )
 
     $dataGrid = [System.Windows.Controls.DataGrid]::new()
@@ -24,7 +26,7 @@ function New-StyledDataGrid {
         New-DataGridContextMenu -DataGrid $dataGrid
     }
 
-    # Standard configuration
+    # Standard config
     $dataGrid.AutoGenerateColumns      = [bool]$AutoGenerateColumns
     $dataGrid.HorizontalScrollBarVisibility = 'Auto'
     $dataGrid.VerticalScrollBarVisibility   = 'Auto'
@@ -38,6 +40,9 @@ function New-StyledDataGrid {
     else {
         $dataGrid.SelectionMode = 'Extended'
     }
+
+    # If the last column ends up starred, WPF locks column resizing once the grid overflows. Unlock it here unless the star was suppressed.
+    if (!$NoStarResizeUnlock) { Add-UiDataGridStarResizeUnlock -DataGrid $dataGrid }
 
     return $dataGrid
 }

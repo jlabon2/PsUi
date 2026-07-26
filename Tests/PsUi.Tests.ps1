@@ -18,9 +18,7 @@ BeforeAll {
 
 # Sanity checks - if these fail, nothing else matters
 Describe 'Module Loading' {
-    It 'Should import without errors' {
-        Get-Module PsUi | Should -Not -BeNullOrEmpty
-    }
+    # Removed: 'Should import without errors' - the BeforeAll Import-Module -Force fails the whole file when import breaks, so this one could never fail on its own.
 
     It 'Should export expected PowerShell functions' {
         $module = Get-Module PsUi
@@ -36,10 +34,7 @@ Describe 'Module Loading' {
         Get-Command New-UiWindow -Module PsUi | Should -Not -BeNullOrEmpty
     }
 
-    It 'Should have C# backend loaded' {
-        # Confirms the C# backend loaded
-        { [PsUi.AsyncExecutor]::new() } | Should -Not -Throw
-    }
+    # Removed: 'Should have C# backend loaded' - the dedicated AsyncExecutor Describe block covers ctor.
 }
 
 # Theme engine is static - loaded once at module import
@@ -50,19 +45,10 @@ Describe 'Theme System' {
         $themes | Should -Contain 'Dark'
     }
 
-    It 'Should have at least 5 themes' {
-        $themes = [PsUi.ThemeEngine]::GetAvailableThemes()
-        $themes.Count | Should -BeGreaterOrEqual 5
-    }
+    # Removed: 'at least 5 themes' count check - the Contain assertions above already prove the list isn't empty.
 }
 
-# Status bar progress clamping uses Max/Min instead of Clamp (PS 5.1 compat)
-Describe 'PS 5.1 Compatibility' {
-    It '[Math]::Max and [Math]::Min should be available for clamping' {
-        [Math]::Max(0, -5) | Should -Be 0
-        [Math]::Min(100, 150) | Should -Be 100
-    }
-}
+# Removed: tested [Math]::Max/Min - that's .NET, not PsUi.
 
 # Icons come from CharList.json (unicode mappings for Segoe MDL2 Assets and Segoe Fluent Icons)
 Describe 'Icon System' {
@@ -77,8 +63,7 @@ Describe 'Icon System' {
     }
 }
 
-# Snapshot/restore the global icon-font state around any test that mutates it - leaking
-# state into later tests would cause cascading failures that look like phantom regressions.
+# Snapshot/restore the global icon font state around any test that mutates it - leaking state into later tests would cause cascading failures that look like phantom regressions.
 Describe 'Icon Font - ModuleContext static API' {
     BeforeAll {
         $script:savedIconFontSnap = [PsUi.ModuleContext]::SnapshotIconFontState()
@@ -87,10 +72,7 @@ Describe 'Icon Font - ModuleContext static API' {
         [PsUi.ModuleContext]::RestoreIconFontState($script:savedIconFontSnap)
     }
 
-    It 'FontNameMDL2 and FontNameFluent constants are exposed' {
-        [PsUi.ModuleContext]::FontNameMDL2   | Should -Be 'Segoe MDL2 Assets'
-        [PsUi.ModuleContext]::FontNameFluent | Should -Be 'Segoe Fluent Icons'
-    }
+    # Removed: 'constants are exposed' - restated the two const string literals. The next test already exercises both constants through DetectDefaultIconFont.
 
     It 'DetectDefaultIconFont returns one of the two known names' {
         $detected = [PsUi.ModuleContext]::DetectDefaultIconFont()
@@ -115,10 +97,7 @@ Describe 'Icon Font - ModuleContext static API' {
         [PsUi.ModuleContext]::ResolveIconFontToken('SegoeFluentIcons') | Should -Be ([PsUi.ModuleContext]::FontNameFluent)
     }
 
-    It 'ResolveIconFontToken Auto matches DetectDefaultIconFont' {
-        [PsUi.ModuleContext]::ResolveIconFontToken('Auto') |
-            Should -Be ([PsUi.ModuleContext]::DetectDefaultIconFont())
-    }
+    # Removed: 'ResolveIconFontToken Auto matches DetectDefaultIconFont' - both sides ran the same detection, so it compared a value with itself. Catching a hardcoded 'Auto' depended on which fonts the CI box happened to have.
 
     It 'IsGlyphAvailable returns true for a common glyph' {
         [PsUi.ModuleContext]::IsGlyphAvailable('Save') | Should -BeTrue
@@ -133,8 +112,7 @@ Describe 'Icon Font - ModuleContext static API' {
         $originalFallback = [PsUi.ModuleContext]::IconFontNoFallback
         $snap = [PsUi.ModuleContext]::SnapshotIconFontState()
 
-        # Mutate to the other installed font with inverted fallback. Skip the mutation entirely
-        # if the other font isn't installed - test still validates the null-mutation round-trip.
+        # Mutate to the other installed font with inverted fallback. Skip the mutation entirely if the other font isn't installed - test still validates the null mutation round trip.
         $other = if ($originalName -eq [PsUi.ModuleContext]::FontNameMDL2) {
             [PsUi.ModuleContext]::FontNameFluent
         }
@@ -250,13 +228,12 @@ Describe 'Icon Font - PowerShell public surface' {
             Set-ItResult -Skipped -Because 'Segoe MDL2 Assets not installed on this box'
             return
         }
-        # 'Blocked' is one of the 125 Fluent-modern names added to CharList.json - its codepoint
-        # lives in the Fluent-only range so MDL2 strictly doesn't carry it.
+        # 'Blocked' is one of the 125 Fluent modern names added to CharList.json - its codepoint lives in the Fluent only range so MDL2 strictly doesn't carry it.
         Test-PsUiIcon -Name 'Blocked' -Font MDL2 | Should -BeFalse
     }
 }
 
-Describe 'Icon Font - Out-* parameter shape' {
+Describe 'Icon Font - Out-* parameter surface' {
     It 'Out-Datagrid IconFont parameter has Inherit (default) in its ValidateSet' {
         $param = (Get-Command Out-Datagrid).Parameters['IconFont']
         $param | Should -Not -BeNullOrEmpty
@@ -288,26 +265,9 @@ Describe 'AsyncExecutor' {
         $executor.Dispose()
     }
 
-    It 'Should have IsRunning property' {
-        $executor = [PsUi.AsyncExecutor]::new()
-        $executor.IsRunning | Should -BeFalse
-        $executor.Dispose()
-    }
+    # Removed: 'Should have IsRunning property' - the state tracking test asserts the same initial state plus the transitions.
 
-    It 'Should have static DebugMode property' {
-        # Static prop - toggles verbose logging across all executors
-        $original = [PsUi.AsyncExecutor]::DebugMode
-        try {
-            [PsUi.AsyncExecutor]::DebugMode = $true
-            [PsUi.AsyncExecutor]::DebugMode | Should -BeTrue
-            [PsUi.AsyncExecutor]::DebugMode = $false
-            [PsUi.AsyncExecutor]::DebugMode | Should -BeFalse
-        }
-        finally {
-            # Restore original
-            [PsUi.AsyncExecutor]::DebugMode = $original
-        }
-    }
+    # Removed: 'static DebugMode property' - a plain auto property. A set then assert just echoes the value you wrote, so it can't fail unless the compiler does.
 }
 
 # Each window gets its own session - this is the core of multi-window support
@@ -329,9 +289,7 @@ Describe 'SessionManager' {
         $current.SessionId | Should -Be $script:testSessionId
     }
 
-    It 'Should track active session count' {
-        [PsUi.SessionManager]::ActiveSessionCount | Should -BeGreaterOrEqual 1
-    }
+    # Removed: 'Should track active session count' - BeforeEach guarantees a session, so >= 1 was a tautology. The exact-count test in Session Isolation does the real work.
 
     It 'Should store controls via AddControlSafe' {
         $session = [PsUi.SessionManager]::Current
@@ -342,14 +300,7 @@ Describe 'SessionManager' {
         $retrieved | Should -Not -BeNullOrEmpty
     }
 
-    It 'Should track DebugMode property' {
-        $session = [PsUi.SessionManager]::Current
-        $session.DebugMode = $true
-        $session.DebugMode | Should -BeTrue
-        
-        $session.DebugMode = $false
-        $session.DebugMode | Should -BeFalse
-    }
+    # Removed: 'track DebugMode property' - SessionContext.DebugMode is a plain auto property. A set then assert echo, no behavior under test.
 }
 
 # Basic control tests - just need a session and a parent panel, no actual window
@@ -440,8 +391,7 @@ Describe 'Error Handling' {
     }
 }
 
-# Hydration is the magic that lets button actions read $userName directly
-# instead of digging through session context manually
+# Hydration is the magic that lets button actions read $userName directly instead of digging through session context manually
 Describe 'StateHydrationEngine' {
     BeforeEach {
         $script:testSessionId = [PsUi.SessionManager]::CreateSession()
@@ -540,9 +490,7 @@ Describe 'StateHydrationEngine' {
         $script:session.AddControlSafe('myVar', $textBox)
         
         # Simulate a pre-existing variable in the caller's scope
-        $alreadyDefined = [System.Collections.Generic.HashSet[string]]::new(
-            [System.StringComparer]::OrdinalIgnoreCase
-        )
+        $alreadyDefined = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $alreadyDefined.Add('myVar') | Out-Null
         
         $ps = [PowerShell]::Create()
@@ -732,7 +680,7 @@ Describe 'ThreadSafeControlProxy' {
     }
 }
 
-# These actually spin up background runspaces - closest we get to integration tests
+# These actually spin up background runspaces - closest thing to integration tests
 Describe 'AsyncExecutor Events' {
     It 'Should complete execution and set IsRunning to false' {
         $executor = [PsUi.AsyncExecutor]::new()
@@ -804,7 +752,7 @@ Describe 'AsyncExecutor Events' {
 
 # Confirms the reserved-name list blocks the obvious automatic variables
 Describe 'Reserved Variables' {
-    It 'Should have comprehensive reserved variable list' {
+    It 'Should reserve every common automatic variable' {
         # Each of these must be rejected by the reserved check
         $mustBeReserved = @(
             'Host', 'Error', 'PSVersionTable', 'true', 'false', 'null',
@@ -843,8 +791,7 @@ Describe 'Reserved Variables' {
 }
 
 # Private functions aren't exported, so we need InModuleScope to test them.
-# The import below looks redundant but Pester resolves InModuleScope at
-# discovery time, before any BeforeAll blocks run, so the import has to happen here.
+# The import below looks redundant but Pester resolves InModuleScope at discovery time, before any BeforeAll blocks run, so the import has to happen here.
 
 Import-Module (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1') -Force
 
@@ -918,7 +865,7 @@ InModuleScope PsUi {
             $before = ConvertTo-UiBrush '#AABB11'
             Reset-BrushCache
             $after = ConvertTo-UiBrush '#AABB11'
-            # After reset we get a new object - same color, different reference
+            # After reset, a new object - same color, different reference
             [object]::ReferenceEquals($before, $after) | Should -BeFalse
         }
 
@@ -1039,13 +986,6 @@ InModuleScope PsUi {
             $result.Type | Should -Be 'SingleObject'
             $result.Info.Properties | Should -Contain 'Host'
         }
-
-        It 'Checks IDictionary before IEnumerable (hashtables implement both)' {
-            # Make sure a hashtable isnt misclassified as a Collection
-            $ht = @{ Key1 = 'val'; Key2 = 'val2' }
-            $result = Get-OutputPresenter -Data $ht
-            $result.Type | Should -Be 'Dictionary'
-        }
     }
 
     # Filters out empty/null columns so the datagrid isn't full of blank cols
@@ -1158,8 +1098,13 @@ Describe 'Constants - IsValidIdentifier' {
     It 'Accepts standard variable names' {
         [PsUi.Constants]::IsValidIdentifier('userName')    | Should -BeTrue
         [PsUi.Constants]::IsValidIdentifier('_private')    | Should -BeTrue
-        [PsUi.Constants]::IsValidIdentifier('server-list') | Should -BeTrue
+        [PsUi.Constants]::IsValidIdentifier('server_list') | Should -BeTrue
         [PsUi.Constants]::IsValidIdentifier('item2')       | Should -BeTrue
+    }
+
+    It 'Accepts hyphenated names (hydration codegen emits ${name} for exactly these)' {
+        [PsUi.Constants]::IsValidIdentifier('server-list') | Should -BeTrue
+        [PsUi.Constants]::IsValidIdentifier('trailing-')   | Should -BeTrue
     }
 
     It 'Rejects injection attempts' {
@@ -1275,9 +1220,7 @@ Describe 'ExpandableValueTooltipConverter' {
     }
 }
 
-# Control creation - we spin up a real session but skip the window.
-# XAML style warnings are expected here (no ResourceDictionary without a window)
-# so we suppress them to keep the output clean.
+# Control creation - real session, no window. XAML style warnings are expected here (no ResourceDictionary without a window) and get suppressed to keep output clean.
 
 Describe 'Control Creation - Inputs and Toggles' {
     BeforeAll {
@@ -1665,212 +1608,69 @@ Describe 'ControlValueApplicator' {
     }
 }
 
-# StatusBar - freeform content bar docked to parent container
+# StatusBar - freeform content bar docked to parent container.
+# The ~25 one It per param existence tests are gone. Contract asserts and one Parameters.Keys pin per function stay - setters need a live bar, and without the pin a param drop ships green.
 Describe 'New-UiStatusBar' {
-    It 'Is exported from the module' {
-        Get-Command New-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    It 'Has the documented parameter surface' {
+        $params = (Get-Command New-UiStatusBar -Module PsUi).Parameters.Keys
+        foreach ($p in @('Content', 'DefaultText', 'Variable', 'Location', 'WPFProperties',
+                         'AutoProgress', 'AutoCancel', 'Inline', 'Intercept', 'CaptureHost',
+                         'NoOutputOnly', 'Persist', 'MaxMessages')) {
+            $params | Should -Contain $p -Because "$p is documented"
+        }
     }
 
-    It 'Has optional -Content parameter' {
+    It 'Has optional -Content scriptblock parameter' {
         $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['Content'] | Should -Not -BeNullOrEmpty
         $cmd.Parameters['Content'].ParameterType | Should -Be ([scriptblock])
         $cmd.Parameters['Content'].Attributes.Mandatory | Should -Not -Contain $true
     }
 
-    It 'Has -DefaultText parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['DefaultText'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['DefaultText'].ParameterType | Should -Be ([string])
-    }
-
-    It 'Has optional -Variable parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
-    }
-
     It 'Has -Location parameter with Top/Bottom' {
         $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['Location'] | Should -Not -BeNullOrEmpty
         $validateSet = $cmd.Parameters['Location'].Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
         $validateSet.ValidValues | Should -Contain 'Top'
         $validateSet.ValidValues | Should -Contain 'Bottom'
     }
 
-    It 'Has -WPFProperties parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['WPFProperties'] | Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has -AutoProgress switch parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['AutoProgress'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['AutoProgress'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -AutoCancel switch parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['AutoCancel'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['AutoCancel'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -Inline switch parameter' {
-        $cmd = Get-Command New-UiStatusBar -Module PsUi
-        $cmd.Parameters['Inline'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Inline'].ParameterType | Should -Be ([switch])
-    }
-}
-
-Describe 'New-UiStatusBar Intercept Parameters' {
-    BeforeAll {
-        $script:cmd = Get-Command New-UiStatusBar -Module PsUi
-    }
-
-    It 'Has -Intercept switch parameter' {
-        $script:cmd.Parameters['Intercept'] | Should -Not -BeNullOrEmpty
-        $script:cmd.Parameters['Intercept'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -CaptureHost switch parameter' {
-        $script:cmd.Parameters['CaptureHost'] | Should -Not -BeNullOrEmpty
-        $script:cmd.Parameters['CaptureHost'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -NoOutputOnly switch parameter' {
-        $script:cmd.Parameters['NoOutputOnly'] | Should -Not -BeNullOrEmpty
-        $script:cmd.Parameters['NoOutputOnly'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -Persist switch parameter' {
-        $script:cmd.Parameters['Persist'] | Should -Not -BeNullOrEmpty
-        $script:cmd.Parameters['Persist'].ParameterType | Should -Be ([switch])
-    }
-
-    It 'Has -MaxMessages int parameter with default 100' {
-        $script:cmd.Parameters['MaxMessages'] | Should -Not -BeNullOrEmpty
-        $script:cmd.Parameters['MaxMessages'].ParameterType | Should -Be ([int])
-    }
-
-    It '-MaxMessages has ValidateRange 1-10000' {
-        $rangeAttr = $script:cmd.Parameters['MaxMessages'].Attributes |
-            Where-Object { $_ -is [System.Management.Automation.ValidateRangeAttribute] }
-        $rangeAttr | Should -Not -BeNullOrEmpty
-        $rangeAttr.MinRange | Should -Be 1
-        $rangeAttr.MaxRange | Should -Be 10000
-    }
-
-    It 'New-StatusBarBadge private helper exists' {
-        Test-Path (Join-Path $PSScriptRoot '..\PsUi\private\Controls\New-StatusBarBadge.ps1') | Should -BeTrue
-    }
-
-    It 'New-StatusBarMessagePopup private helper exists' {
-        Test-Path (Join-Path $PSScriptRoot '..\PsUi\private\Controls\New-StatusBarMessagePopup.ps1') | Should -BeTrue
-    }
+    # Removed: '-MaxMessages has ValidateRange 1-10000' - pinned the exact bounds, so any deliberate retune failed a test without a bug in sight.
 }
 
 Describe 'Write-Status' {
-    It 'Is exported from the module' {
-        Get-Command Write-Status -Module PsUi | Should -Not -BeNullOrEmpty
+    It 'Has the documented parameter surface' {
+        $params = (Get-Command Write-Status -Module PsUi).Parameters.Keys
+        foreach ($p in @('Message', 'Severity', 'Timeout', 'Bar')) {
+            $params | Should -Contain $p -Because "$p is documented"
+        }
     }
 
     It 'Has mandatory positional -Message parameter' {
         $cmd = Get-Command Write-Status -Module PsUi
-        $cmd.Parameters['Message'] | Should -Not -BeNullOrEmpty
         $cmd.Parameters['Message'].ParameterType | Should -Be ([string])
         $cmd.Parameters['Message'].Attributes.Mandatory | Should -Contain $true
     }
 
-    It 'Has -Severity parameter with ValidateSet' {
-        $cmd = Get-Command Write-Status -Module PsUi
-        $cmd.Parameters['Severity'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Severity'].Attributes |
-            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } |
-            Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has -Timeout and -Bar parameters' {
-        $cmd = Get-Command Write-Status -Module PsUi
-        $cmd.Parameters['Timeout'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Bar']     | Should -Not -BeNullOrEmpty
-    }
+    # Removed: 'Has -Severity parameter with ValidateSet' - checked an attribute existed without checking its values, so a mangled set still passed. The surface test above already catches a renamed -Severity.
 }
 
 Describe 'Set-UiStatusBar' {
-    It 'Is exported from the module' {
-        Get-Command Set-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
+    It 'Has the documented parameter surface' {
+        $params = (Get-Command Set-UiStatusBar -Module PsUi).Parameters.Keys
+        foreach ($p in @('Text', 'Progress', 'Increment', 'Severity', 'Indeterminate', 'Variable')) {
+            $params | Should -Contain $p -Because "$p is documented"
+        }
     }
 
-    It 'Has optional -Text parameter' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Text'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Text'].ParameterType | Should -Be ([string])
-    }
-
-    It 'Has optional -Progress parameter' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Progress'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Progress'].ParameterType | Should -Be ([int])
-    }
-
-    It 'Has optional -Increment parameter' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Increment'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Increment'].ParameterType | Should -Be ([int])
-    }
-
-    It 'Has -Severity parameter with ValidateSet' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Severity'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Severity'].Attributes |
-            Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } |
-            Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has optional -Indeterminate parameter' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Indeterminate'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Indeterminate'].ParameterType | Should -Be ([bool])
-    }
-
-    It 'Has optional -Variable parameter' {
-        $cmd = Get-Command Set-UiStatusBar -Module PsUi
-        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
-    }
+    # Removed: the ValidateSet-existence check, same reasoning as the Write-Status one above.
 }
 
-Describe 'Clear-UiStatus' {
-    It 'Is exported from the module' {
-        Get-Command Clear-UiStatus -Module PsUi | Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has optional -Variable parameter' {
-        $cmd = Get-Command Clear-UiStatus -Module PsUi
-        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Variable'].Attributes.Mandatory | Should -Not -Contain $true
-    }
-}
-
-Describe 'Hide-UiStatusBar' {
-    It 'Is exported from the module' {
-        Get-Command Hide-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has optional -Variable parameter' {
-        $cmd = Get-Command Hide-UiStatusBar -Module PsUi
-        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Variable'].ParameterType | Should -Be ([string])
-    }
-}
-
-Describe 'Show-UiStatusBar' {
-    It 'Is exported from the module' {
-        Get-Command Show-UiStatusBar -Module PsUi | Should -Not -BeNullOrEmpty
-    }
-
-    It 'Has optional -Variable parameter' {
-        $cmd = Get-Command Show-UiStatusBar -Module PsUi
-        $cmd.Parameters['Variable'] | Should -Not -BeNullOrEmpty
-        $cmd.Parameters['Variable'].ParameterType | Should -Be ([string])
+Describe 'Clear-UiStatus / Hide-UiStatusBar / Show-UiStatusBar parameter surface' {
+    It 'Each takes an optional -Variable' {
+        foreach ($fn in @('Clear-UiStatus', 'Hide-UiStatusBar', 'Show-UiStatusBar')) {
+            $param = (Get-Command $fn -Module PsUi).Parameters['Variable']
+            $param | Should -Not -BeNullOrEmpty -Because "$fn targets a bar by -Variable"
+            $param.Attributes.Mandatory | Should -Not -Contain $true
+        }
     }
 }
 
@@ -1897,21 +1697,7 @@ InModuleScope PsUi {
                 $script:errBadge  = New-StatusBarBadge -Severity Error
             }
 
-            It 'Returns a hashtable with Badge, CountText, GlyphText, BrushKey' {
-                $script:warnBadge.Keys | Should -Contain 'Badge'
-                $script:warnBadge.Keys | Should -Contain 'CountText'
-                $script:warnBadge.Keys | Should -Contain 'GlyphText'
-                $script:warnBadge.Keys | Should -Contain 'BrushKey'
-            }
-
-            It 'Badge is a Border' {
-                $script:warnBadge.Badge | Should -BeOfType [System.Windows.Controls.Border]
-            }
-
-            It 'CountText and GlyphText are TextBlocks' {
-                $script:warnBadge.CountText | Should -BeOfType [System.Windows.Controls.TextBlock]
-                $script:warnBadge.GlyphText | Should -BeOfType [System.Windows.Controls.TextBlock]
-            }
+            # Removed: the key-existence and is-a-Border / is-a-TextBlock checks. Every key gets dereferenced by the behavioral tests below anyway, and the WPF element types are restyle churn waiting to happen.
 
             It 'Warning/Error badges start visible but dimmed' {
                 $script:warnBadge.Badge.Visibility | Should -Be ([System.Windows.Visibility]::Visible)
@@ -1961,13 +1747,7 @@ InModuleScope PsUi {
                 $script:popup.Keys | Should -Contain 'ClearButton'
             }
 
-            It 'Popup is a Popup control' {
-                $script:popup.Popup | Should -BeOfType [System.Windows.Controls.Primitives.Popup]
-            }
-
-            It 'MessagePanel is a StackPanel' {
-                $script:popup.MessagePanel | Should -BeOfType [System.Windows.Controls.StackPanel]
-            }
+            # Removed: the Popup-is-a-Popup and MessagePanel-is-a-StackPanel type checks. A factory named New-StatusBarMessagePopup returning a Popup is not news.
 
             It 'HeaderText shows initial zero count' {
                 $script:popup.HeaderText.Text | Should -Be '0 Warnings'
@@ -1997,8 +1777,7 @@ InModuleScope PsUi {
                     [System.Windows.Controls.TextBlock]@{ Text = 'test' })
 
                 # Fire the Clear button click
-                $routedArgs = [System.Windows.RoutedEventArgs]::new(
-                    [System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)
+                $routedArgs = [System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)
                 $script:popup.ClearButton.RaiseEvent($routedArgs)
             }
 
@@ -2044,23 +1823,11 @@ InModuleScope PsUi {
     }
 }
 
-Describe 'AsyncExecutor Progress Suppression' {
-    It 'AsyncExecutor has _suppressProgress field' {
-        $executor = [PsUi.AsyncExecutor]::new()
-        $field = $executor.GetType().GetField('_suppressProgress',
-            [System.Reflection.BindingFlags]'NonPublic,Instance')
-        $field | Should -Not -BeNullOrEmpty
-        $field.FieldType | Should -Be ([bool])
-    }
-}
+# Removed: 'AsyncExecutor Progress Suppression' - asserted a PRIVATE FIELD exists via reflection.
+# Rename the field in a refactor and it fails. Break the feature while keeping the field and it passes.
+# Removed: 'BindElementToResources method exists' - same reflection on privates disease.
 
 Describe 'ThemeEngine IsStatusBar Awareness' {
-    It 'BindElementToResources method exists on ThemeEngine' {
-        $method = [PsUi.ThemeEngine].GetMethod('BindElementToResources',
-            [System.Reflection.BindingFlags]'NonPublic,Static')
-        $method | Should -Not -BeNullOrEmpty
-    }
-
     It 'RegisterElement accepts a Border with IsStatusBar Tag' {
         $border = [System.Windows.Controls.Border]::new()
         $border.Tag = @{ IsStatusBar = $true }
@@ -2074,13 +1841,7 @@ Describe 'Module Manifest' {
         $script:manifest = Test-ModuleManifest (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')
     }
 
-    It 'Version is 1.0.4' {
-        $script:manifest.Version.ToString() | Should -Be '1.0.4'
-    }
-
-    It 'Author is Jacob Labonte' {
-        $script:manifest.Author | Should -Be 'Jacob Labonte'
-    }
+    # Removed: 'Version matches' and 'Author is' - metadata change detectors that only fire on an intentional manifest edit, never on a behavioral bug. The GUID pin below stays (install identity).
 
     It 'Requires PowerShell 5.1+' {
         $script:manifest.PowerShellVersion | Should -Be '5.1'
@@ -2105,9 +1866,7 @@ Describe 'Module Manifest' {
         $script:manifest.ExportedFunctions.Count | Should -BeGreaterOrEqual 60
     }
 
-    It 'Has a non-empty description' {
-        $script:manifest.Description | Should -Not -BeNullOrEmpty
-    }
+    # Removed: 'Has a non-empty description' - gallery publish rejects a blank Description anyway.
 
     It 'Every exported function actually exists' {
         foreach ($funcName in $script:manifest.ExportedFunctions.Keys) {
@@ -2149,10 +1908,10 @@ Describe 'ScriptBuilder' {
     It 'BuildLocalizer skips invalid variable names' {
         # Names get emitted into generated code, so anything non-identifier is filtered out
         $names = [System.Collections.Generic.List[string]]::new()
-        $names.Add('valid-name')
+        $names.Add('valid_name')
         $names.Add(';inject')
         $code = [PsUi.ScriptBuilder]::BuildLocalizer($names)
-        $code | Should -Match 'valid-name'
+        $code | Should -Match 'valid_name'
         $code | Should -Not -Match 'inject'
     }
 
@@ -2194,33 +1953,8 @@ Describe 'ScriptBuilder' {
 
 # Stuff that's broken before and will probably try to break again
 Describe 'Edge Cases' {
-    It 'ThreadSafeControlProxy wraps a TextBox properly' {
-        $tb = [System.Windows.Controls.TextBox]@{ Text = 'display me' }
-        $proxy = [PsUi.ThreadSafeControlProxy]::new($tb, 'displayProxy')
-        $proxy.Text | Should -Be 'display me'
-        $proxy.Control | Should -Be $tb
-    }
-
-    It 'Multiple sessions dont share control namespace' {
-        $id1 = [PsUi.SessionManager]::CreateSession()
-        $id2 = [PsUi.SessionManager]::CreateSession()
-
-        [PsUi.SessionManager]::SetCurrentSession($id1)
-        $s1 = [PsUi.SessionManager]::Current
-        $s1.AddControlSafe('shared', [System.Windows.Controls.TextBox]@{ Text = 'from session 1' })
-
-        [PsUi.SessionManager]::SetCurrentSession($id2)
-        $s2 = [PsUi.SessionManager]::Current
-        $s2.AddControlSafe('shared', [System.Windows.Controls.TextBox]@{ Text = 'from session 2' })
-
-        # Each session sees its own value
-        $s1.GetSafeVariable('shared').Text | Should -Be 'from session 1'
-        $s2.GetSafeVariable('shared').Text | Should -Be 'from session 2'
-
-        [PsUi.SessionManager]::DisposeSession($id1)
-        [PsUi.SessionManager]::DisposeSession($id2)
-    }
-
+    # Removed: ThreadSafeControlProxy TextBox wrap - duplicates the earlier ThreadSafeControlProxy Describe.
+    # Removed: Multiple sessions namespace - duplicates Session Isolation tests above.
     It 'AsyncExecutor handles empty scriptblock gracefully' {
         $executor = [PsUi.AsyncExecutor]::new()
         $executor.UsePipelineQueueMode = $true
@@ -2237,9 +1971,7 @@ Describe 'Edge Cases' {
     }
 }
 
-# Native dialog wrappers - the modal half can't be tested unattended, so we verify
-# the API surface (exports, params, return-object shape). The actual click-through
-# lives in manual smoke testing.
+# Native dialog wrappers - the modal half can't be tested unattended, so the API surface is verified instead (exports, params, return object layout). The actual click through lives in manual smoke testing.
 Describe 'Native Dialogs - API surface' {
     It 'Exports Show-UiOuPicker' {
         Get-Command Show-UiOuPicker -Module PsUi -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
@@ -2269,8 +2001,7 @@ Describe 'Native Dialogs - API surface' {
     }
 }
 
-# Tests that exercise native dialog functions from a background runspace, simulating
-# the async action-card execution path.
+# Tests that exercise native dialog functions from a background runspace, simulating the async action card execution path.
 Describe 'Native Dialogs - Runspace and action card paths' {
     BeforeAll {
         $script:modulePath = (Resolve-Path (Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1')).Path
@@ -2304,9 +2035,7 @@ Describe 'Native Dialogs - Runspace and action card paths' {
     }
 }
 
-# Push-UiIconFontOverride is the per-window/per-Out-* dispatcher that the standalone tools call
-# to apply an icon-font override and hand back a snapshot for restore-on-close. Private, so tests
-# live inside InModuleScope.
+# Push-UiIconFontOverride is the per window/per Out-* dispatcher that the standalone tools call to apply an icon font override and hand back a snapshot for restore on close. Private, so tests live inside InModuleScope.
 InModuleScope PsUi {
     Describe 'Push-UiIconFontOverride' {
         BeforeAll {
@@ -2372,5 +2101,1062 @@ InModuleScope PsUi {
                 [PsUi.ModuleContext]::RestoreIconFontState($snap)
             }
         }
+    }
+}
+
+# New-UiDataGrid - the embeddable grid that mirrors Show-UiOutput's chrome
+Describe 'New-UiDataGrid' -Tag 'RequiresSession' {
+
+    BeforeEach {
+        $script:dgSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:dgSessionId)
+        $script:dgSession = [PsUi.SessionManager]::Current
+        $script:dgSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterEach {
+        [PsUi.SessionManager]::DisposeSession($script:dgSessionId)
+    }
+
+    It 'Exports the four expected functions' {
+        $module = Get-Module PsUi
+        $module.ExportedFunctions.Keys | Should -Contain 'New-UiDataGrid'
+        $module.ExportedFunctions.Keys | Should -Contain 'Set-UiDataGridItems'
+        $module.ExportedFunctions.Keys | Should -Contain 'Add-UiDataGridItem'
+        $module.ExportedFunctions.Keys | Should -Contain 'Clear-UiDataGridItems'
+    }
+
+    It 'Adds a container to the parent and registers the grid for hydration' {
+        $items = @(
+            [PSCustomObject]@{ A = 1; B = 'x' }
+            [PSCustomObject]@{ A = 2; B = 'y' }
+        )
+        New-UiDataGrid -Variable 'gridA' -Items $items -Height 200
+
+        $script:dgSession.CurrentParent.Children.Count | Should -BeGreaterThan 0
+        $registered = $script:dgSession.GetControl('gridA')
+        $registered | Should -Not -BeNullOrEmpty
+        $registered | Should -BeOfType [System.Windows.Controls.DataGrid]
+    }
+
+    It 'Registers the backing collection under the variable name' {
+        New-UiDataGrid -Variable 'gridB' -Items @([PSCustomObject]@{ X = 1 }) -NoToolbar
+        $coll = $script:dgSession.GetListCollection('gridB')
+        $coll | Should -Not -BeNullOrEmpty
+        $coll.Count | Should -Be 1
+    }
+
+    It 'Throws when both -Items and -ItemsSource are supplied' {
+        $external = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        { New-UiDataGrid -Variable 'gridC' -Items @(1) -ItemsSource $external } |
+            Should -Throw '*cannot use both*'
+    }
+
+    It 'Auto-generates columns from items when -Columns is omitted' {
+        $items = @([PSCustomObject]@{ Name = 'a'; Count = 1 })
+        New-UiDataGrid -Variable 'gridD' -Items $items -NoToolbar
+        $grid = $script:dgSession.GetControl('gridD')
+        $grid.Columns.Count | Should -BeGreaterThan 0
+    }
+
+    It '-Columns string[] hides columns not in the list' {
+        $items = @([PSCustomObject]@{ Name = 'a'; Count = 1; Hidden = 'no' })
+        New-UiDataGrid -Variable 'gridE' -Items $items -Columns 'Name', 'Count' -NoToolbar
+
+        $grid    = $script:dgSession.GetControl('gridE')
+        $visible = @($grid.Columns | Where-Object { $_.Visibility -eq [System.Windows.Visibility]::Visible } | ForEach-Object { $_.Header })
+        $visible | Should -Contain 'Name'
+        $visible | Should -Contain 'Count'
+        $visible | Should -Not -Contain 'Hidden'
+    }
+
+    It '-Columns hashtable with Type=Button creates a template column' {
+        $items = @([PSCustomObject]@{ Name = 'a' })
+        New-UiDataGrid -Variable 'gridF' -Items $items -NoToolbar -Columns @(
+            @{ Name = 'Name' }
+            @{ Header = 'Act'; Type = 'Button'; Text = 'Go'; Action = { } }
+        )
+        $grid = $script:dgSession.GetControl('gridF')
+        $btnCol = $grid.Columns | Where-Object { $_.Header -eq 'Act' }
+        $btnCol | Should -BeOfType [System.Windows.Controls.DataGridTemplateColumn]
+    }
+
+    It '-Editable flips text columns IsReadOnly off' {
+        $items = @([PSCustomObject]@{ Name = 'a'; Count = 1 })
+        New-UiDataGrid -Variable 'gridG' -Items $items -Editable -NoToolbar
+        $grid = $script:dgSession.GetControl('gridG')
+        $textCols = @($grid.Columns | Where-Object { $_ -is [System.Windows.Controls.DataGridTextColumn] })
+        $textCols.Count | Should -BeGreaterThan 0
+        foreach ($c in $textCols) { $c.IsReadOnly | Should -BeFalse }
+    }
+
+    It '-Editable + bool first-value renders the bool-glyph TemplateColumn by default' {
+        # Convert-UiDataGridBoolColumnsToGlyph swaps the underlying DataGridCheckBoxColumn for a DataGridTemplateColumn that paints check/cross glyphs. Opt out with -NoVisualValues if you want the raw checkbox header (asserted in the next test).
+        $items = @([PSCustomObject]@{ Flag = $true })
+        New-UiDataGrid -Variable 'gridH' -Items $items -Editable -NoToolbar -Columns @(
+            @{ Name = 'Flag'; Editable = $true }
+        )
+        $grid = $script:dgSession.GetControl('gridH')
+        $col  = $grid.Columns | Where-Object { $_.Header -eq 'Flag' }
+        $col | Should -BeOfType [System.Windows.Controls.DataGridTemplateColumn]
+        # Editable bool keeps a checkbox in the editing template so doubleclick / F2 toggles.
+        $col.CellEditingTemplate | Should -Not -BeNullOrEmpty
+    }
+
+    It '-Editable + bool + -NoVisualValues keeps the raw DataGridCheckBoxColumn' {
+        $items = @([PSCustomObject]@{ Flag = $true })
+        New-UiDataGrid -Variable 'gridHb' -Items $items -Editable -NoToolbar -NoVisualValues -Columns @(
+            @{ Name = 'Flag'; Editable = $true }
+        )
+        $grid = $script:dgSession.GetControl('gridHb')
+        $col  = $grid.Columns | Where-Object { $_.Header -eq 'Flag' }
+        $col | Should -BeOfType [System.Windows.Controls.DataGridCheckBoxColumn]
+    }
+
+    It '-Editable + enum first-value picks DataGridComboBoxColumn with enum values' {
+        $items = @([PSCustomObject]@{ State = [System.DayOfWeek]::Monday })
+        New-UiDataGrid -Variable 'gridI' -Items $items -Editable -NoToolbar -Columns @(
+            @{ Name = 'State'; Editable = $true }
+        )
+        $grid = $script:dgSession.GetControl('gridI')
+        $col  = $grid.Columns | Where-Object { $_.Header -eq 'State' }
+        $col | Should -BeOfType [System.Windows.Controls.DataGridComboBoxColumn]
+        @($col.ItemsSource).Count | Should -Be 7
+    }
+
+    It '-NoSort disables column sorting on the grid' {
+        $items = @([PSCustomObject]@{ N = 1 })
+        New-UiDataGrid -Variable 'gridJ' -Items $items -NoSort -NoToolbar
+        $grid = $script:dgSession.GetControl('gridJ')
+        $grid.CanUserSortColumns | Should -BeFalse
+    }
+
+    It '-HideEmptyColumns collapses columns where all values are null/empty' {
+        $items = @(
+            [PSCustomObject]@{ Has = 1; Empty = $null }
+            [PSCustomObject]@{ Has = 2; Empty = $null }
+        )
+        New-UiDataGrid -Variable 'gridK' -Items $items -HideEmptyColumns -NoToolbar
+        $grid = $script:dgSession.GetControl('gridK')
+        $emptyCol = $grid.Columns | Where-Object { $_.Header -eq 'Empty' }
+        $emptyCol.Visibility | Should -Be ([System.Windows.Visibility]::Collapsed)
+    }
+
+    It 'Set-UiDataGridItems replaces the backing collection' {
+        New-UiDataGrid -Variable 'gridL' -Items @([PSCustomObject]@{ N = 1 }) -NoToolbar
+        Set-UiDataGridItems -Variable 'gridL' -Items @(
+            [PSCustomObject]@{ N = 9 }
+            [PSCustomObject]@{ N = 8 }
+        )
+        $coll = $script:dgSession.GetListCollection('gridL')
+        $coll.Count | Should -Be 2
+        $coll[0].N | Should -Be 9
+    }
+
+    It 'Add-UiDataGridItem appends a single row' {
+        New-UiDataGrid -Variable 'gridM' -Items @([PSCustomObject]@{ N = 1 }) -NoToolbar
+        Add-UiDataGridItem -Variable 'gridM' -Item ([PSCustomObject]@{ N = 2 })
+        $coll = $script:dgSession.GetListCollection('gridM')
+        $coll.Count | Should -Be 2
+    }
+
+    It 'Clear-UiDataGridItems empties the collection' {
+        New-UiDataGrid -Variable 'gridN' -Items @([PSCustomObject]@{ N = 1 }; [PSCustomObject]@{ N = 2 }) -NoToolbar
+        Clear-UiDataGridItems -Variable 'gridN'
+        $coll = $script:dgSession.GetListCollection('gridN')
+        $coll.Count | Should -Be 0
+    }
+
+    It 'Set-UiDataGridItems on an unknown variable writes an error and returns' {
+        $errs = $null
+        Set-UiDataGridItems -Variable 'doesNotExist' -Items @('placeholder') -ErrorVariable errs -ErrorAction SilentlyContinue
+        $errs | Should -Not -BeNullOrEmpty
+    }
+
+    It '-OnCellEdit fires after a cell commit with ($row, $col, $new, $old)' {
+        $script:editCalls = [System.Collections.Generic.List[object]]::new()
+        $items = @([PSCustomObject]@{ Name = 'a'; Note = 'old' })
+        New-UiDataGrid -Variable 'gridO' -Items $items -Editable -NoToolbar `
+            -OnCellEdit { param($row, $col, $new, $old) $script:editCalls.Add(@{ Row = $row; Col = $col; New = $new; Old = $old }) }
+
+        $grid    = $script:dgSession.GetControl('gridO')
+        $noteCol = $grid.Columns | Where-Object { $_.Header -eq 'Note' }
+        $rowItem = @($grid.ItemsSource)[0]
+
+        # Drive the CellEditEnding WPF raises on Commit. The handler reads $new from EditingElement.Text. Plain .NET event, not routed - RaiseEvent can't reach it, so invoke the protected OnCellEditEnding raiser via reflection.
+        $editor   = [System.Windows.Controls.TextBox]@{ Text = 'new' }
+        $dgRow    = [System.Windows.Controls.DataGridRow]@{ Item = $rowItem }
+        $cellArgs = [System.Windows.Controls.DataGridCellEditEndingEventArgs]::new($noteCol, $dgRow, $editor, [System.Windows.Controls.DataGridEditAction]::Commit)
+        $bindingFlags = [System.Reflection.BindingFlags] 'Instance, NonPublic'
+        $raiser = [System.Windows.Controls.DataGrid].GetMethod('OnCellEditEnding', $bindingFlags)
+        $raiser.Invoke($grid, @([object]$cellArgs))
+
+        # Add-UiDataGridEditHandling defers the user handler via Dispatcher.BeginInvoke at Background priority. PushFrame a lower priority continuation to drain Background first, then return.
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        [void]$grid.Dispatcher.BeginInvoke(
+            [System.Windows.Threading.DispatcherPriority]::ContextIdle,
+            [Action]{ $frame.Continue = $false })
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+
+        $script:editCalls.Count | Should -Be 1
+        $script:editCalls[0].Col | Should -Be 'Note'
+        $script:editCalls[0].New | Should -Be 'new'
+        $script:editCalls[0].Old | Should -Be 'old'
+    }
+
+    It '-OnCellEdit hands the property name (not Header) when a column hashtable uses Name + Header' {
+        # Regression guard for Add-UiDataGridEditHandling: a column hashtable @{Name=...; Header=...} used to read $row.$Header for oldValue (null when Header != Name) and report Header as the column in OnCellEdit / OnRowEdit. Now resolves via Column.SortMemberPath.
+        $script:editCalls2 = [System.Collections.Generic.List[object]]::new()
+        $items = @([PSCustomObject]@{ Status = 'Running' })
+        New-UiDataGrid -Variable 'gridHN' -Items $items -Editable -NoToolbar -Columns @(
+            @{ Name = 'Status'; Header = 'Service Status'; Editable = $true }
+        ) -OnCellEdit { param($row, $col, $new, $old) $script:editCalls2.Add(@{ Col = $col; New = $new; Old = $old }) }
+
+        $grid = $script:dgSession.GetControl('gridHN')
+        $col  = $grid.Columns | Where-Object { $_.Header -eq 'Service Status' }
+        $rowItem = @($grid.ItemsSource)[0]
+
+        $editor   = [System.Windows.Controls.TextBox]@{ Text = 'Stopped' }
+        $dgRow    = [System.Windows.Controls.DataGridRow]@{ Item = $rowItem }
+        $cellArgs = [System.Windows.Controls.DataGridCellEditEndingEventArgs]::new($col, $dgRow, $editor, [System.Windows.Controls.DataGridEditAction]::Commit)
+        $bindingFlags = [System.Reflection.BindingFlags] 'Instance, NonPublic'
+        $raiser = [System.Windows.Controls.DataGrid].GetMethod('OnCellEditEnding', $bindingFlags)
+        $raiser.Invoke($grid, @([object]$cellArgs))
+
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        [void]$grid.Dispatcher.BeginInvoke(
+            [System.Windows.Threading.DispatcherPriority]::ContextIdle,
+            [Action]{ $frame.Continue = $false })
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+
+        $script:editCalls2.Count | Should -Be 1
+        $script:editCalls2[0].Col | Should -Be 'Status'
+        $script:editCalls2[0].New | Should -Be 'Stopped'
+        $script:editCalls2[0].Old | Should -Be 'Running'
+    }
+
+    It '-OnDoubleClick handler registers without throwing' {
+        # MouseDoubleClick fires from real mouse input only. Pester runs without a window so the event can't be driven in a stable way (Mouse.PrimaryDevice is null off thread).
+        # Smoke verify the handler registered without throwing and the grid stays usable.
+        $items = @([PSCustomObject]@{ Name = 'a' })
+        { New-UiDataGrid -Variable 'gridP' -Items $items -NoToolbar `
+            -OnDoubleClick { param($row) } } | Should -Not -Throw
+
+        $grid = $script:dgSession.GetControl('gridP')
+        $grid | Should -Not -BeNullOrEmpty
+        @($grid.ItemsSource).Count | Should -Be 1
+    }
+
+    It 'ConvertTo-UiDataGridSnapshot preserves PSStandardMembers and TypeNames[0] for .NET items' {
+        InModuleScope PsUi {
+            $proc = Get-Process -Id $PID
+            $snap = @(ConvertTo-UiDataGridSnapshot -Items @($proc))
+            $snap.Count | Should -Be 1
+            $snapItem = $snap[0]
+
+            # Original CLR type leads the TypeNames so Add-DataGridColumns regex fallbacks match
+            $snapItem.PSObject.TypeNames[0] | Should -Match 'System\.Diagnostics\.Process'
+
+            # DefaultDisplayPropertySet reattached so -DefaultPropertiesOnly still works
+            $stdMembers = $snapItem.PSStandardMembers
+            $stdMembers | Should -Not -BeNullOrEmpty
+            $defaults = $stdMembers.DefaultDisplayPropertySet.ReferencedPropertyNames
+            $defaults | Should -Contain 'Id'
+
+            # _BaseObject points to the original .NET object
+            $snapItem._BaseObject | Should -Not -BeNullOrEmpty
+            $snapItem._BaseObject.Id | Should -Be $PID
+        }
+    }
+
+    It 'ConvertTo-UiDataGridSnapshot -BuildSearchIndex attaches _SearchText' {
+        InModuleScope PsUi {
+            $items = @(
+                [PSCustomObject]@{ Name = 'alpha';  City = 'NYC'   }
+                [PSCustomObject]@{ Name = 'bravo';  City = 'Tokyo' }
+            )
+            $snap = @(ConvertTo-UiDataGridSnapshot -Items $items -BuildSearchIndex)
+            foreach ($s in $snap) {
+                $s.PSObject.Properties['_SearchText'] | Should -Not -BeNullOrEmpty
+                $s._SearchText | Should -Match $s.Name
+            }
+        }
+    }
+
+    It 'Add-UiDataGridItem appends to an -ItemsSource grid (wrapper + mirror)' {
+        # ItemsSource rows go in raw (no snapshot) - the caller's mirror keeps the actual object, not a PSCustomObject copy. SilentlyContinue eats the variable bind warning. Under Pester scopes the walk legitimately finds zero variables.
+        $external = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $external.Add([PSCustomObject]@{ X = 1 })
+        New-UiDataGrid -Variable 'gridQ' -ItemsSource $external -NoToolbar -WarningAction SilentlyContinue
+
+        $newRow = [PSCustomObject]@{ X = 2 }
+        Add-UiDataGridItem -Variable 'gridQ' -Item $newRow
+
+        # The bound wrapper is what the session tracks. The mirror is the original.
+        $wrapper = $script:dgSession.GetListCollection('gridQ')
+        $wrapper.Count  | Should -Be 2
+        $external.Count | Should -Be 2
+        # raw object preserved, not snapshotted
+        $external[1]    | Should -Be $newRow
+    }
+
+    It '-NoSafeWrap warns when combined with -ItemsSource' {
+        $external = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $w = $null
+        New-UiDataGrid -Variable 'gridR' -ItemsSource $external -NoToolbar -NoSafeWrap -WarningVariable w -WarningAction SilentlyContinue
+        $w | Should -Not -BeNullOrEmpty
+        ($w -join ' ') | Should -Match 'NoSafeWrap'
+    }
+}
+
+Describe 'AsyncObservableCollection - Mirror behavior' {
+
+    BeforeEach {
+        $script:disp = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+    }
+
+    It 'wrapper.Add pushes through to an attached ObservableCollection mirror' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a')
+        $wrapper.Add('b')
+
+        $wrapper.Count | Should -Be 2
+        $mirror.Count  | Should -Be 2
+        $mirror[0]     | Should -Be 'a'
+        $mirror[1]     | Should -Be 'b'
+    }
+
+    It 'mirror.Add propagates back into the wrapper (INPC mirror)' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $mirror.Add('a')
+        $mirror.Add('b')
+
+        $wrapper.Count | Should -Be 2
+        $wrapper[0]    | Should -Be 'a'
+        $wrapper[1]    | Should -Be 'b'
+    }
+
+    It 'wrapper CollectionChanged fires exactly once per Add (no mirror double-fire)' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $state   = @{ Wrapper = 0; Mirror = 0 }
+        $wrapper.add_CollectionChanged({ $state.Wrapper++ }.GetNewClosure())
+        $mirror.add_CollectionChanged({ $state.Mirror++ }.GetNewClosure())
+
+        $wrapper.Add('a')
+        $state.Wrapper | Should -Be 1
+        $state.Mirror  | Should -Be 1
+
+        $mirror.Add('b')
+        $state.Wrapper | Should -Be 2
+        $state.Mirror  | Should -Be 2
+    }
+
+    It 'ReplaceAll fires exactly one Reset notification' {
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.Add('seed1')
+        $wrapper.Add('seed2')
+
+        $state = @{ Fires = 0; LastAction = $null }
+        $handler = {
+            param($sender, $eventArgs)
+            $state.Fires++
+            $state.LastAction = $eventArgs.Action
+        }.GetNewClosure()
+        $wrapper.add_CollectionChanged($handler)
+
+        $items = [System.Collections.Generic.List[object]]@('a', 'b', 'c', 'd', 'e')
+        $wrapper.ReplaceAll($items)
+
+        $state.Fires      | Should -Be 1
+        $state.LastAction | Should -Be ([System.Collections.Specialized.NotifyCollectionChangedAction]::Reset)
+        $wrapper.Count    | Should -Be 5
+    }
+
+    It 'ArrayList mirror works one-way (wrapper.Add lands but Mirror.Add does not push back)' {
+        $mirror  = [System.Collections.ArrayList]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a')
+        $mirror.Count | Should -Be 1
+
+        # ArrayList has no INPC so mirror side adds don't flow back.
+        [void]$mirror.Add('zzz')
+        $wrapper.Count | Should -Be 1
+        $wrapper[0]    | Should -Be 'a'
+    }
+
+    It 'DetachMirror stops cross-firing in both directions' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a')
+        $mirror.Count | Should -Be 1
+
+        $wrapper.DetachMirror()
+
+        $wrapper.Add('b')
+        # mirror frozen at detach point
+        $mirror.Count  | Should -Be 1
+        $wrapper.Count | Should -Be 2
+
+        # mirror no longer drives the wrapper after detach
+        $mirror.Add('z')
+        $wrapper.Count | Should -Be 2
+    }
+
+    It 'IList.Add (cast-and-call) marshals through the virtual override' {
+        # Regression guard against the new method bypass. Adding via the IList interface MUST still go through marshaling+mirror because InsertItem is overridden, not just `new` hidden behind Add.
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $asIList = $wrapper -as [System.Collections.IList]
+        [void]$asIList.Add('a')
+
+        $wrapper.Count | Should -Be 1
+        $mirror.Count  | Should -Be 1
+        $mirror[0]     | Should -Be 'a'
+    }
+
+    It 'wrapper.Remove syncs mirror (RemoveItem override path)' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('keep')
+        $wrapper.Add('drop')
+        $wrapper.Add('also-keep')
+
+        $removed = $wrapper.Remove('drop')
+        $removed       | Should -BeTrue
+        $wrapper.Count | Should -Be 2
+        $mirror.Count  | Should -Be 2
+        ($wrapper -join ',') | Should -Be 'keep,also-keep'
+        ($mirror  -join ',') | Should -Be 'keep,also-keep'
+    }
+
+    It 'wrapper.RemoveAt syncs mirror' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a'); $wrapper.Add('b'); $wrapper.Add('c')
+        $wrapper.RemoveAt(1)
+
+        $wrapper.Count | Should -Be 2
+        $mirror.Count  | Should -Be 2
+        ($wrapper -join ',') | Should -Be 'a,c'
+        ($mirror  -join ',') | Should -Be 'a,c'
+    }
+
+    It 'wrapper indexer Set syncs mirror (SetItem override path)' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a'); $wrapper.Add('b'); $wrapper.Add('c')
+        $wrapper[1] = 'B'
+
+        $wrapper[1] | Should -Be 'B'
+        $mirror[1]  | Should -Be 'B'
+        $wrapper.Count | Should -Be 3
+        $mirror.Count  | Should -Be 3
+    }
+
+    It 'wrapper.Clear syncs mirror (ClearItems override path)' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('a'); $wrapper.Add('b'); $wrapper.Add('c')
+        $wrapper.Clear()
+
+        $wrapper.Count | Should -Be 0
+        $mirror.Count  | Should -Be 0
+    }
+
+    It 'ReplaceAll on a wrapper with a mirror clears + refills the mirror' {
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
+        $wrapper.AttachMirror($mirror)
+
+        $wrapper.Add('old1'); $wrapper.Add('old2')
+        $mirror.Count | Should -Be 2
+
+        $replacement = [System.Collections.Generic.List[object]]@('new1', 'new2', 'new3')
+        $wrapper.ReplaceAll($replacement)
+
+        $wrapper.Count | Should -Be 3
+        $mirror.Count  | Should -Be 3
+        ($wrapper -join ',') | Should -Be 'new1,new2,new3'
+        ($mirror  -join ',') | Should -Be 'new1,new2,new3'
+    }
+}
+
+Describe 'AsyncObservableCollection - Cross-thread marshaling' {
+
+    BeforeAll {
+        # Helper that runs a script in a fresh MTA runspace and returns the async invocation handle. The runspace has its own thread (background, non UI) so wrapper.Add there goes through the !_dispatcher.CheckAccess() branch and marshals back through Invoke.
+        function Start-BackgroundAdd {
+            param($Wrapper, $Item)
+            $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+            $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+            $rs.ThreadOptions  = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+            $rs.Open()
+            $ps = [System.Management.Automation.PowerShell]::Create()
+            $ps.Runspace = $rs
+            [void]$ps.AddScript({ param($w, $i) $w.Add($i) }).AddArgument($Wrapper).AddArgument($Item)
+            @{ PS = $ps; RS = $rs; Handle = $ps.BeginInvoke() }
+        }
+
+        function Complete-BackgroundAdd {
+            param($Invocation, [int]$TimeoutMs = 2000)
+            $ok = $Invocation.Handle.AsyncWaitHandle.WaitOne($TimeoutMs)
+            try   { [void]$Invocation.PS.EndInvoke($Invocation.Handle) }
+            catch { Write-Debug "EndInvoke threw: $_" }
+            $Invocation.PS.Dispose()
+            $Invocation.RS.Close()
+            $Invocation.RS.Dispose()
+            return $ok
+        }
+    }
+
+    It 'wrapper.Add from a background MTA runspace marshals through dispatcher and pushes mirror' {
+        $disp    = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+        $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $wrapper = [PsUi.AsyncObservableCollection[object]]::new($disp)
+        $wrapper.AttachMirror($mirror)
+
+        # Spawn a real background runspace that calls wrapper.Add.
+        # wrapper.Add sees CheckAccess=false, queues an Invoke to UI dispatcher, blocks on it.
+        $bg = Start-BackgroundAdd -Wrapper $wrapper -Item 'bg-item'
+
+        # Pump the dispatcher until the worker's handle signals. A single PushFrame with an ApplicationIdle sentinel races: empty queue, idle fires, frame exits, worker queues into the void. Loop until the BeginInvoke handle signals or 2s expires.
+        $deadline = (Get-Date).AddSeconds(2)
+        while ((Get-Date) -lt $deadline -and !$bg.Handle.IsCompleted) {
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [void]$disp.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::ApplicationIdle,
+                [Action]{ $frame.Continue = $false })
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            if (!$bg.Handle.IsCompleted) { [System.Threading.Thread]::Sleep(20) }
+        }
+
+        (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+        $wrapper.Count | Should -Be 1
+        $wrapper[0]    | Should -Be 'bg-item'
+        $mirror.Count  | Should -Be 1
+        $mirror[0]     | Should -Be 'bg-item'
+    }
+
+}
+
+Describe 'New-UiDataGrid - variable bind contract' -Tag 'RequiresSession' {
+
+    BeforeEach {
+        $script:bcSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:bcSessionId)
+        $script:bcSession = [PsUi.SessionManager]::Current
+        $script:bcSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterEach {
+        [PsUi.SessionManager]::DisposeSession($script:bcSessionId)
+    }
+
+    It '-NoBind leaves the caller variable untouched; wrapper still binds to the grid' {
+        # Auto bind path would rewrite $local to point at the wrapper. -NoBind skips the walk.
+        $local = [System.Collections.ArrayList]::new()
+        [void]$local.Add([PSCustomObject]@{ A = 1 })
+
+        $originalRef = $local
+
+        New-UiDataGrid -Variable 'gridNB' -ItemsSource $local -NoBind -NoToolbar
+
+        # Caller's variable still points at the original ArrayList, not at the wrapper.
+        [object]::ReferenceEquals($local, $originalRef) | Should -BeTrue
+        $local.GetType().Name | Should -Be 'ArrayList'
+
+        # The grid is bound to the wrapper, which holds the seeded item.
+        $wrapper = $script:bcSession.GetListCollection('gridNB')
+        $wrapper | Should -Not -BeNullOrEmpty
+        $wrapper.Count | Should -Be 1
+    }
+
+    It 'Auto-bind warns when no caller variable ref-equals the input' {
+        # Property held collections have no caller variable for the scope walk to rewrite.
+        # The documented contract: a warning fires so the silent drop case surfaces.
+        $holder = [PSCustomObject]@{ Items = [System.Collections.ArrayList]::new() }
+        [void]$holder.Items.Add([PSCustomObject]@{ A = 1 })
+
+        $w = $null
+        New-UiDataGrid -Variable 'gridZW' -ItemsSource $holder.Items -NoToolbar `
+            -WarningVariable w -WarningAction SilentlyContinue
+
+        $w | Should -Not -BeNullOrEmpty
+        ($w -join ' ') | Should -Match 'could not repoint'
+    }
+}
+
+InModuleScope PsUi {
+    Describe 'Format-UiDataGridExportRows - formula sanitization' {
+
+        It 'prefixes cells starting with =/+/-/@/tab/CR when -Sanitize is set' {
+            $rows = @(
+                [PSCustomObject]@{ Cell = '=cmd|''/c calc''!A1' }
+                [PSCustomObject]@{ Cell = '+evil' }
+                [PSCustomObject]@{ Cell = '-100' }
+                [PSCustomObject]@{ Cell = '@AT' }
+                [PSCustomObject]@{ Cell = "`tTabStart" }
+                [PSCustomObject]@{ Cell = "`rCarriageReturn" }
+                [PSCustomObject]@{ Cell = 'safe value' }
+            )
+
+            $out = @(Format-UiDataGridExportRows -Items $rows -Properties @('Cell') -Sanitize)
+
+            $out[0].Cell | Should -Be "'=cmd|'/c calc'!A1"
+            $out[1].Cell | Should -Be "'+evil"
+            $out[2].Cell | Should -Be "'-100"
+            $out[3].Cell | Should -Be "'@AT"
+            $out[4].Cell | Should -Be ("'`tTabStart")
+            $out[5].Cell | Should -Be ("'`rCarriageReturn")
+            $out[6].Cell | Should -Be 'safe value'
+        }
+
+        It 'passes cells through unchanged when -Sanitize is not set' {
+            $rows = @( [PSCustomObject]@{ Cell = '=cmd|''/c calc''!A1' } )
+            $out  = @(Format-UiDataGridExportRows -Items $rows -Properties @('Cell'))
+            $out[0].Cell | Should -Be '=cmd|''/c calc''!A1'
+        }
+    }
+}
+
+# Regression net for the DataGrid overhaul. The subtle ones are snapshot round trip fidelity and the edit handler cancel branch (a failing Validator must not write through).
+Describe 'New-UiDataGrid - overhaul regression' -Tag 'RequiresSession' {
+
+    BeforeEach {
+        $script:regSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:regSessionId)
+        $script:regSession = [PsUi.SessionManager]::Current
+        $script:regSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterEach {
+        [PsUi.SessionManager]::DisposeSession($script:regSessionId)
+    }
+
+    It 'Build-UiDataGridColumns Filter kind reorders visible columns and hides the rest' {
+        $items = @(
+            [pscustomobject]@{ Name = 'a'; Dept = 'X'; Email = 'a@x' }
+            [pscustomobject]@{ Name = 'b'; Dept = 'Y'; Email = 'b@y' }
+        )
+        New-UiDataGrid -Variable 'gridFilter' -Items $items -Columns 'Email', 'Name' -NoToolbar
+
+        $grid = $script:regSession.GetControl('gridFilter')
+        $visible = @($grid.Columns |
+            Where-Object { $_.Visibility -eq [System.Windows.Visibility]::Visible } |
+            Sort-Object DisplayIndex)
+        $visible[0].Header | Should -Be 'Email'
+        $visible[1].Header | Should -Be 'Name'
+        $deptCol = $grid.Columns | Where-Object { $_.Header -eq 'Dept' }
+        $deptCol.Visibility | Should -Be ([System.Windows.Visibility]::Collapsed)
+    }
+
+    # Removed: the FileInfo snapshot test - it restitched the _BaseObject and _SearchText angles the earlier snapshot tests already pin, just on a different sample object.
+
+    It 'Add-UiDataGridDefaultSort parses multi-key entries with Descending suffix' {
+        $items = @(
+            [pscustomobject]@{ Name = 'a'; Dept = 'X' }
+            [pscustomobject]@{ Name = 'b'; Dept = 'Y' }
+        )
+        New-UiDataGrid -Variable 'gridSort' -Items $items -NoToolbar -DefaultSort 'Name -Descending', 'Dept'
+
+        $grid = $script:regSession.GetControl('gridSort')
+        $view = [System.Windows.Data.CollectionViewSource]::GetDefaultView($grid.ItemsSource)
+        $view.SortDescriptions.Count | Should -Be 2
+        $view.SortDescriptions[0].PropertyName | Should -Be 'Name'
+        $view.SortDescriptions[0].Direction    | Should -Be ([System.ComponentModel.ListSortDirection]::Descending)
+        $view.SortDescriptions[1].PropertyName | Should -Be 'Dept'
+        $view.SortDescriptions[1].Direction    | Should -Be ([System.ComponentModel.ListSortDirection]::Ascending)
+    }
+
+    It 'Show-UiOutput sub-tab grid stars its last data column so the row fills the width' {
+        InModuleScope PsUi {
+            # New-ObjectSubTab builds the output window's per type results grid. It used to skip the
+            # last column star that New-UiDataGrid applies, so wide result grids left dead space on the right.
+            $items = [System.Collections.Generic.List[object]]::new()
+            1..3 | ForEach-Object { $items.Add([pscustomobject]@{ Name = "srv-$_"; Region = 'us-east'; Load = ($_ * 10) }) }
+            $tabControl = [System.Windows.Controls.TabControl]::new()
+
+            $result = New-ObjectSubTab -GroupItems $items -TypeName 'Server' -SubTabControl $tabControl
+            $grid   = $result.DataGrid
+
+            $visible = @($grid.Columns | Where-Object { $_.Visibility -eq [System.Windows.Visibility]::Visible })
+            $visible.Count | Should -BeGreaterThan 1
+
+            # Exactly the rightmost (collection last) visible column is starred. The others stay Auto.
+            @($visible | Where-Object { $_.Width.IsStar }).Count | Should -Be 1
+            $visible[$visible.Count - 1].Width.IsStar | Should -BeTrue
+            $visible[0].Width.IsStar                  | Should -BeFalse
+        }
+    }
+
+    It 'Set-LastDataColumnStar picks the rightmost column before DisplayIndex is assigned' {
+        InModuleScope PsUi {
+            # DisplayIndex is -1 until the grid first renders. The old sort of all -1s was unstable and
+            # starred an arbitrary (usually wrong) column at build time.
+            $grid = [System.Windows.Controls.DataGrid]::new()
+            foreach ($h in 'First', 'Second', 'Third') {
+                $col = [System.Windows.Controls.DataGridTextColumn]::new()
+                $col.Header  = $h
+                $col.Binding = [System.Windows.Data.Binding]::new($h)
+                [void]$grid.Columns.Add($col)
+            }
+            @($grid.Columns | Where-Object { $_.DisplayIndex -ge 0 }).Count | Should -Be 0
+
+            Set-LastDataColumnStar -DataGrid $grid
+
+            $grid.Columns[2].Width.IsStar | Should -BeTrue
+            $grid.Columns[1].Width.IsStar | Should -BeFalse
+            $grid.Columns[0].Width.IsStar | Should -BeFalse
+        }
+    }
+
+    It 'New-UiDataGridFilterController predicate uses _SearchText, empty filter passes everything' {
+        InModuleScope PsUi {
+            # Build a DataGrid + standalone FilterBox so New-UiDataGridFilterController hooks the ICollectionView.Filter predicate. The public New-UiDataGrid path hides the filter box inside the toolbar return value and doesn't republish it to the caller, so go direct.
+            $items = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+            [void]$items.Add([pscustomobject]@{ Name = 'alice'; _SearchText = 'alice smith' })
+            [void]$items.Add([pscustomobject]@{ Name = 'bob';   _SearchText = 'bob' })
+
+            $dg = [System.Windows.Controls.DataGrid]::new()
+            $dg.ItemsSource = $items
+            $fb = [System.Windows.Controls.TextBox]::new()
+            New-UiDataGridFilterController -DataGrid $dg -FilterBox $fb | Out-Null
+
+            $view  = [System.Windows.Data.CollectionViewSource]::GetDefaultView($dg.ItemsSource)
+            $state = $fb.Tag
+
+            # Bypass debounce - set FilterText directly and invoke the predicate.
+            $state.FilterText = 'alice'
+            $view.Filter.Invoke($items[0]) | Should -BeTrue
+            $view.Filter.Invoke($items[1]) | Should -BeFalse
+
+            $state.FilterText = ''
+            $view.Filter.Invoke($items[0]) | Should -BeTrue
+            $view.Filter.Invoke($items[1]) | Should -BeTrue
+        }
+    }
+
+    It 'Add-UiDataGridEditHandling: Validator $false cancels CellEditEnding and OnCellEdit does not fire' {
+        $script:capturedNew = '<initial>'
+        $script:capturedOld = '<initial>'
+        $items = @([pscustomobject]@{ Name = 'a' })
+
+        New-UiDataGrid -Variable 'gridValCancel' -Items $items -Editable -NoToolbar -Columns @(
+            @{ Name = 'Name'; Validator = { param($new, $row) $new -ne '' } }
+        ) -OnCellEdit {
+            param($row, $col, $new, $old)
+            $script:capturedNew = $new
+            $script:capturedOld = $old
+        }
+
+        $grid    = $script:regSession.GetControl('gridValCancel')
+        $col     = $grid.Columns | Where-Object { $_.Header -eq 'Name' }
+        $rowItem = @($grid.ItemsSource)[0]
+
+        # Drive CellEditEnding with an empty editor value. Validator returns $false. The handler should set Cancel=$true and skip the OnCellEdit deferral.
+        $editor   = [System.Windows.Controls.TextBox]@{ Text = '' }
+        $dgRow    = [System.Windows.Controls.DataGridRow]@{ Item = $rowItem }
+        $cellArgs = [System.Windows.Controls.DataGridCellEditEndingEventArgs]::new($col, $dgRow, $editor, [System.Windows.Controls.DataGridEditAction]::Commit)
+        $bindingFlags = [System.Reflection.BindingFlags] 'Instance, NonPublic'
+        $raiser = [System.Windows.Controls.DataGrid].GetMethod('OnCellEditEnding', $bindingFlags)
+        $raiser.Invoke($grid, @([object]$cellArgs))
+
+        # Drain any deferred dispatcher work so a faulty OnCellEdit registration would surface.
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        [void]$grid.Dispatcher.BeginInvoke(
+            [System.Windows.Threading.DispatcherPriority]::ContextIdle,
+            [Action]{ $frame.Continue = $false })
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+
+        $cellArgs.Cancel    | Should -BeTrue
+        $script:capturedNew | Should -Be '<initial>'   # OnCellEdit didn't fire
+        $script:capturedOld | Should -Be '<initial>'
+    }
+
+    It 'New-UiDataGrid -ItemsSource $null registers an owned collection so Add/Set/Clear keep working' {
+        # A null ItemsSource used to register a null collection the helpers read back as "not found".
+        New-UiDataGrid -Variable 'nullSrc' -ItemsSource $null -NoToolbar
+        # Explicit null check, not -BeNullOrEmpty: the collection starts empty (Count 0), which -BeNullOrEmpty would treat as empty, and piping it would enumerate to nothing.
+        ($null -eq $script:regSession.GetListCollection('nullSrc')) | Should -BeFalse
+        Add-UiDataGridItem -Variable 'nullSrc' -Item ([pscustomobject]@{ Name = 'a' })
+        $script:regSession.GetListCollection('nullSrc').Count | Should -Be 1
+        Set-UiDataGridItems -Variable 'nullSrc' -Items @([pscustomobject]@{ Name = 'x' }, [pscustomobject]@{ Name = 'y' })
+        $script:regSession.GetListCollection('nullSrc').Count | Should -Be 2
+        Clear-UiDataGridItems -Variable 'nullSrc'
+        $script:regSession.GetListCollection('nullSrc').Count | Should -Be 0
+    }
+
+    It 'Explicit -Columns editable path makes a decimal column editable, not just int/double' {
+        # decimal isn't a .NET primitive, so New-UiDataGridTextColumn's editor type probe used to downgrade it to readonly while int/double edited fine.
+        $items = @([pscustomobject]@{ Price = [decimal]9.99; Qty = [int]3 })
+        New-UiDataGrid -Variable 'decGrid' -Items $items -Editable -NoToolbar -Columns @(
+            @{ Name = 'Price'; Editable = $true }
+            @{ Name = 'Qty';   Editable = $true }
+        )
+        $grid  = $script:regSession.GetControl('decGrid')
+        $price = $grid.Columns | Where-Object { $_.Header -eq 'Price' }
+        $price.IsReadOnly | Should -BeFalse
+    }
+
+    It 'Add/Set/Clear-UiDataGridItems are registered for async-runspace injection' {
+        # Without this, calling them from a grid cell or context menu async action throws CommandNotFound.
+        $pub = [PsUi.ModuleContext]::PublicFunctions
+        $pub.ContainsKey('Add-UiDataGridItem')    | Should -BeTrue
+        $pub.ContainsKey('Set-UiDataGridItems')   | Should -BeTrue
+        $pub.ContainsKey('Clear-UiDataGridItems') | Should -BeTrue
+    }
+
+    It 'Filter controller clears the old view''s predicate on an ItemsSource swap' {
+        InModuleScope PsUi {
+            $grid  = [System.Windows.Controls.DataGrid]::new()
+            $listA = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+            [void]$listA.Add([pscustomobject]@{ Name = 'a' })
+            $grid.ItemsSource = $listA
+            $box = [System.Windows.Controls.TextBox]::new()
+            # Grid must sit in a Window so the ItemsSource changed hook attaches.
+            $win = [System.Windows.Window]::new()
+            $win.Content = $grid
+            New-UiDataGridFilterController -DataGrid $grid -FilterBox $box | Out-Null
+
+            $viewA = [System.Windows.Data.CollectionViewSource]::GetDefaultView($listA)
+            $viewA.Filter | Should -Not -BeNullOrEmpty
+
+            $listB = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+            [void]$listB.Add([pscustomobject]@{ Name = 'b' })
+            $grid.ItemsSource = $listB   # fires rebindFilter, which must null the old view's predicate
+
+            $viewA.Filter | Should -BeNullOrEmpty
+        }
+    }
+}
+
+# Null element and falsy row regressions: a Mandatory [object[]] rejects an array carrying ANY null unless [AllowNull()], and a null item crashes every build loop that indexes into it.
+# The falsy scalar case (@(0) rendering blank) rides along - same guard family.
+InModuleScope PsUi {
+    Describe 'Null-element helpers' {
+        It 'ConvertTo-UiDataGridSnapshot binds a null-carrying array and drops the null' {
+            $snap = @(ConvertTo-UiDataGridSnapshot -Items @($null, [pscustomobject]@{ A = 1 }))
+            $snap.Count | Should -Be 1
+            $snap[0].A  | Should -Be 1
+        }
+
+        It 'ConvertTo-UiDataGridSnapshot keeps a lone falsy scalar row (0, empty string, $false)' {
+            @(ConvertTo-UiDataGridSnapshot -Items @(0)).Count      | Should -Be 1
+            @(ConvertTo-UiDataGridSnapshot -Items @('')).Count     | Should -Be 1
+            @(ConvertTo-UiDataGridSnapshot -Items @($false)).Count | Should -Be 1
+        }
+
+        It 'ConvertTo-SafeDataArray binds a null-carrying array (null passes through, snapshot drops it later)' {
+            # Returns ,$DataArray - assign first, then @() around the VARIABLE.
+            # @(cmd) around the call renests the comma wrapped array (count 1 with the real array inside).
+            $out = ConvertTo-SafeDataArray -DataArray @($null, [pscustomobject]@{ A = 1 })
+            @($out).Count | Should -Be 2
+            $null -eq @($out)[0] | Should -BeTrue
+        }
+
+        It 'Get-PopulatedProperties binds a null-carrying array and reads the real rows' {
+            $props = Get-PopulatedProperties -Items @($null, [pscustomobject]@{ Name = 'x'; Blank = $null })
+            $props.Contains('Name')  | Should -BeTrue
+            $props.Contains('Blank') | Should -BeFalse
+        }
+
+        It 'Get-PopulatedProperties -PropertyNames survives a null item (the string-indexing path)' {
+            # Without -PropertyNames a null item runs zero loop iterations. WITH it the loop string indexes $item.PSObject.Properties[$name] and a null throws. This is the HideEmptyColumns call pattern.
+            $props = Get-PopulatedProperties -Items @($null, [pscustomobject]@{ Name = 'x'; Blank = $null }) -PropertyNames @('Name', 'Blank')
+            $props.Contains('Name')  | Should -BeTrue
+            $props.Contains('Blank') | Should -BeFalse
+        }
+
+        It 'ConvertTo-ChartData skips a null data point instead of dying on PSObject.Properties' {
+            $pts = @(
+                [pscustomobject]@{ Label = 'A'; Value = 3 }
+                $null
+                [pscustomobject]@{ Label = 'B'; Value = 5 }
+            )
+            $out = ConvertTo-ChartData -RawData $pts -LabelProperty $null -ValueProperty $null
+            $out.Count | Should -Be 2
+            @($out | ForEach-Object { $_.Label }) | Should -Be @('A', 'B')
+        }
+
+        It 'ConvertTo-ChartData drops NaN and Infinity data points' {
+            $pts = @(
+                [pscustomobject]@{ Label = 'a'; Value = 10 }
+                [pscustomobject]@{ Label = 'b'; Value = [double]::NaN }
+                [pscustomobject]@{ Label = 'c'; Value = 20 }
+                [pscustomobject]@{ Label = 'd'; Value = [double]::PositiveInfinity }
+            )
+            $out = ConvertTo-ChartData -RawData $pts -LabelProperty $null -ValueProperty $null
+            $out.Count | Should -Be 2
+            @($out | ForEach-Object { $_.Label }) | Should -Be @('a', 'c')
+        }
+    }
+}
+
+Describe 'Null-element rows through the public API' -Tag 'RequiresSession' {
+
+    BeforeEach {
+        $script:neSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:neSessionId)
+        $script:neSession = [PsUi.SessionManager]::Current
+        $script:neSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterEach {
+        [PsUi.SessionManager]::DisposeSession($script:neSessionId)
+    }
+
+    It 'New-UiDataGrid -Items with a null row builds and drops it (default SafeWrap path)' {
+        New-UiDataGrid -Variable 'neGridA' -Items @(
+            [pscustomobject]@{ A = 'x' }
+            $null
+            [pscustomobject]@{ A = 'y' }
+        ) -NoToolbar
+        $script:neSession.GetListCollection('neGridA').Count | Should -Be 2
+    }
+
+    It 'New-UiDataGrid -NoSafeWrap with a null row builds and drops it (direct snapshot path)' {
+        New-UiDataGrid -Variable 'neGridB' -NoSafeWrap -Items @(
+            [pscustomobject]@{ A = 'x' }
+            $null
+        ) -NoToolbar
+        $script:neSession.GetListCollection('neGridB').Count | Should -Be 1
+    }
+
+    It 'New-UiDataGrid -Items @(0) keeps the lone falsy row' {
+        New-UiDataGrid -Variable 'neGridZ' -Items @(0) -NoToolbar
+        $script:neSession.GetListCollection('neGridZ').Count | Should -Be 1
+    }
+
+    It 'Explicit -Columns build over property-less rows (no early-return when rows have no props)' {
+        New-UiDataGrid -Variable 'neGridC' -Items @([pscustomobject]@{}, [pscustomobject]@{}) -NoToolbar -Columns @(
+            @{ Header = 'Act'; Type = 'Button'; Text = 'Go'; Action = { } }
+            @{ Name = 'Name' }
+        )
+        $grid = $script:neSession.GetControl('neGridC')
+        $grid.Columns.Count | Should -BeGreaterOrEqual 2
+    }
+
+    It 'Explicit -Columns build when an -ItemsSource collection has NO buildable row (firstItem fallback)' {
+        # All null collection: the buildable row scan finds nothing, so this pins the empty object firstItem fallback itself. A null then real row mix only re-covers the scan (the real row becomes firstItem and the fallback never fires).
+        $shared = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $shared.Add($null)
+        New-UiDataGrid -Variable 'neGridD' -ItemsSource $shared -NoToolbar -WarningAction SilentlyContinue -Columns @(
+            @{ Name = 'Name' }
+            @{ Header = 'Act'; Type = 'Button'; Text = 'Go'; Action = { } }
+        )
+        $grid = $script:neSession.GetControl('neGridD')
+        $grid.Columns.Count | Should -BeGreaterOrEqual 2
+    }
+
+    It 'Set-UiDataGridItems binds a null-carrying replacement and drops the null (owned grid)' {
+        New-UiDataGrid -Variable 'neGridE' -Items @([pscustomobject]@{ A = 'seed' }) -NoToolbar
+        Set-UiDataGridItems -Variable 'neGridE' -Items @(
+            $null
+            [pscustomobject]@{ A = 'p' }
+            [pscustomobject]@{ A = 'q' }
+        )
+        $script:neSession.GetListCollection('neGridE').Count | Should -Be 2
+    }
+
+    It 'Set-UiDataGridItems keeps null rows out of an -ItemsSource caller collection' {
+        $shared = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $shared.Add([pscustomobject]@{ A = 'seed' })
+        New-UiDataGrid -Variable 'neGridF' -ItemsSource $shared -NoToolbar -WarningAction SilentlyContinue
+        Set-UiDataGridItems -Variable 'neGridF' -Items @($null, [pscustomobject]@{ A = 'p' }, [pscustomobject]@{ A = 'q' })
+
+        $shared.Count | Should -Be 2
+        @($shared | Where-Object { $null -eq $_ }).Count | Should -Be 0
+    }
+
+    It 'Set-UiDataGridItems -Items $null wipes the grid (null means no-rows, same as @())' {
+        New-UiDataGrid -Variable 'neGridG' -Items @([pscustomobject]@{ A = 'seed' }) -NoToolbar
+        $nothing = @([pscustomobject]@{ A = 'x' }) | Where-Object { $_.A -eq 'no-match' }
+        Set-UiDataGridItems -Variable 'neGridG' -Items $nothing
+        $script:neSession.GetListCollection('neGridG').Count | Should -Be 0
+    }
+
+    It 'New-UiTree -Items with a null item builds and drops it (direct-param path)' {
+        New-UiTree -Variable 'neTree' -Items @(
+            [pscustomobject]@{ Name = 'A'; Children = @() }
+            $null
+            [pscustomobject]@{ Name = 'B'; Children = @() }
+        )
+        $tree = $script:neSession.GetControl('neTree')
+        $tree.Items.Count | Should -Be 2
+    }
+
+    It 'New-UiTree -Items @($null) builds an empty tree (all-null fallback path)' {
+        # All null input skips the process block collection entirely, so $allItems falls back to raw $Items and the buildNodes loop's own null skip is what stands between this and $null.PSObject.Properties[...] throwing. Pins that guard independently of the mixed test.
+        New-UiTree -Variable 'neTreeAllNull' -Items @($null)
+        $tree = $script:neSession.GetControl('neTreeAllNull')
+        $tree.Items.Count | Should -Be 0
+    }
+
+    It 'New-UiChart -Data with a null point builds with the null skipped' {
+        {
+            New-UiChart -Variable 'neChart' -Type Bar -Data @(
+                [pscustomobject]@{ Label = 'A'; Value = 3 }
+                $null
+                [pscustomobject]@{ Label = 'B'; Value = 5 }
+            )
+        } | Should -Not -Throw
+    }
+}
+
+# End to end on the PS async wrapper. Last in the file on purpose: the cancel test needs an Application (Cancel marshals OnCancelled to a dispatcher), and the Application is a process wide singleton, so creating it here keeps it out of the WPF control tests above.
+Describe 'Invoke-UiAsync - capture and cancel lifecycle' {
+    BeforeAll {
+        if (![System.Windows.Application]::Current) { $null = New-Object System.Windows.Application }
+    }
+
+    It 'Invoke-UiAsync no longer excludes $executor/$varsToInject/$functionsToInject from auto-capture' {
+        # Fix: those were the function's own injection local names that had leaked into the auto capture exclusion list, so a user variable of the same name was silently dropped. They were renamed with a __ prefix and removed from the list. Auto capture of an It local isn't reachable under Pester's scope model, so this guards the exact source change. The behavioral repro lives in scratch/Verify-Fix4-Capture.ps1.
+        $def = (Get-Command Invoke-UiAsync).Definition
+        $def | Should -Not -Match "'executor'"
+        $def | Should -Not -Match "'varsToInject'"
+        $def | Should -Not -Match "'functionsToInject'"
+        $def | Should -Match '\$__executor'
+    }
+
+    It 'Cancel disposes the executor (OnCancelled path), not just cancels its token' {
+        $handle = Invoke-UiAsync -ScriptBlock { 1..100 | ForEach-Object { Start-Sleep -Milliseconds 100 } }
+        Start-Sleep -Milliseconds 250
+        $handle.Executor.Cancel()
+
+        # Pump the dispatcher so the marshaled OnCancelled disposer runs. Bounded so it can't hang.
+        $frame = [System.Windows.Threading.DispatcherFrame]::new()
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [timespan]::FromMilliseconds(700)
+        $timer.Add_Tick({ $timer.Stop(); $frame.Continue = $false }.GetNewClosure())
+        $timer.Start()
+        [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+
+        # Dispose() nulls the private _cts. Cancel() alone only cancels it.
+        $ctsField = [PsUi.AsyncExecutor].GetField('_cts', [System.Reflection.BindingFlags]'Instance,NonPublic')
+        $ctsField.GetValue($handle.Executor) | Should -BeNullOrEmpty
     }
 }

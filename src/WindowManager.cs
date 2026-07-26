@@ -9,13 +9,11 @@ using System.Windows.Interop;
 namespace PsUi
 {
     // Win32 calls for the polish layer that WPF doesn't expose. This is kinda ugly.
-    // Without these tho, the console window visible behind UI, white titlebar in dark mode,
-    // window grouped with powershell.exe in taskbar. 
+    // Without these tho, the console window visible behind UI, white titlebar in dark mode, window grouped with powershell.exe in taskbar.
     public static class WindowManager
     {
         [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-        [DllImport("user32.dll")] private static extern int SetForegroundWindow(IntPtr hWnd);
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
         
         // Icon-related Win32 APIs
@@ -24,6 +22,15 @@ namespace PsUi
         
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr hIcon);
+
+        // SetWindowPos with SWP_FRAMECHANGED forces a non client redraw. Needed after WM_SETICON because native chrome caches the icon and ignores naked SendMessage.
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        private const uint SWP_NOSIZE       = 0x0001;
+        private const uint SWP_NOMOVE       = 0x0002;
+        private const uint SWP_NOZORDER     = 0x0004;
+        private const uint SWP_FRAMECHANGED = 0x0020;
         
         // AppUserModelID - allows window to have its own taskbar identity separate from PowerShell
         [DllImport("shell32.dll", SetLastError = true)]
@@ -65,10 +72,7 @@ namespace PsUi
         }
         
         private const uint FLASHW_STOP = 0;
-        private const uint FLASHW_CAPTION = 1;
-        private const uint FLASHW_TRAY = 2;
         private const uint FLASHW_ALL = 3;
-        private const uint FLASHW_TIMER = 4;
         private const uint FLASHW_TIMERNOFG = 12;
         
         // DWM Attributes
@@ -130,9 +134,6 @@ namespace PsUi
             public uint dwFlags;
         }
 
-        public static void HideConsole() { ShowWindow(GetConsoleWindow(), SW_HIDE); }
-        public static void ShowConsole() { ShowWindow(GetConsoleWindow(), SW_SHOW); SetForegroundWindow(GetConsoleWindow()); }
-        
         // Get the work area (excludes taskbar) for the monitor containing a specific window
         public static Rect GetWorkAreaForWindow(IntPtr hwnd)
         {
@@ -157,7 +158,7 @@ namespace PsUi
             return SystemParameters.WorkArea;
         }
 
-        // Own taskbar icon - without this, Windows groups us with pwsh.exe
+        // Own taskbar icon - without this, Windows groups the window under pwsh.exe
         // Call before Show() or the HWND won't exist yet
         public static void SetWindowAppId(Window window, string appId)
         {
@@ -256,7 +257,7 @@ namespace PsUi
             return luminance < 0.5;
         }
 
-        // Force taskbar to use our icon instead of PowerShell default
+        // Force taskbar to use the custom icon instead of the PowerShell default
         public static void SetTaskbarIcon(Window window, BitmapSource iconSource)
         {
             if (iconSource == null) return;
@@ -293,13 +294,16 @@ namespace PsUi
                 {
                     SendMessage(hWnd, WM_SETICON, (IntPtr)ICON_BIG, bigIcon);
                 }
+
+                // Kick the non client area into refreshing. WM_SETICON updates the cached HICON but the titlebar doesn't redraw on its own at runtime. SWP_FRAMECHANGED is the standard workaround.
+                SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
                 
                 // Track handles for cleanup on window close or repeated calls
                 var iconHandles = new IntPtr[] { smallIcon, bigIcon };
                 
                 // Register cleanup handler once (only on first call for this window).
-                // If the process crashes without firing Closed, we leak 2 icon handles. Big deal -
-                // that's 64 bytes per window. A weak-ref + finalizer pattern isn't worth the hassle.
+                // If the process crashes without firing Closed, 2 icon handles leak. Big deal - that's 64 bytes per window. A weak ref + finalizer pattern isn't worth the hassle.
                 bool isFirstCall = previousHandles == null;
                 _windowIconHandles[hWnd] = iconHandles;
                 
@@ -307,21 +311,16 @@ namespace PsUi
                 {
                     window.Closed += (sender, args) =>
                     {
-                        var closedWindow = sender as Window;
-                        if (closedWindow == null) return;
-                        
-                        var closedHelper = new WindowInteropHelper(closedWindow);
-                        IntPtr closedHwnd = closedHelper.Handle;
-                        
+                        // Capture hWnd - do NOT reread WindowInteropHelper.Handle here. WPF has already torn down the native window by the time Closed fires, so Handle hands back Zero and the lookup misses, leaking both HICONs every close.
                         IntPtr[] handles;
-                        if (_windowIconHandles.TryGetValue(closedHwnd, out handles))
+                        if (_windowIconHandles.TryGetValue(hWnd, out handles))
                         {
                             foreach (var handle in handles)
                             {
                                 if (handle != IntPtr.Zero) DestroyIcon(handle);
                             }
                             IntPtr[] removed;
-                            _windowIconHandles.TryRemove(closedHwnd, out removed);
+                            _windowIconHandles.TryRemove(hWnd, out removed);
                         }
                     };
                 }
@@ -358,11 +357,6 @@ namespace PsUi
             }
         }
 
-        public static void ClearTaskbarOverlay(Window window)
-        {
-            SetTaskbarOverlay(window, null, null);
-        }
-        
         private static IntPtr CreateHIcon(BitmapSource source, int width, int height)
         {
             if (source == null) return IntPtr.Zero;
@@ -410,50 +404,6 @@ namespace PsUi
                 System.Diagnostics.Debug.WriteLine("CreateHIcon failed: " + ex.Message);
                 return IntPtr.Zero;
             }
-        }
-
-        public static Window CreateWindow(WindowConfig config)
-        {
-            var window = new Window
-            {
-                Title = config.Title ?? "Script Menu",
-                Width = config.Width > 0 ? config.Width : 400,
-                Height = config.Height > 0 ? config.Height : 600,
-                MinWidth = config.MinWidth > 0 ? config.MinWidth : config.Width,
-                MinHeight = config.MinHeight > 0 ? config.MinHeight : config.Height,
-                FontFamily = new FontFamily("Segoe UI"),
-                WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                WindowState = WindowState.Minimized, 
-            };
-
-            if (config.NoResize) window.ResizeMode = ResizeMode.NoResize;
-            else window.ResizeMode = ResizeMode.CanResizeWithGrip;
-
-            if (config.SizeToContent) window.SizeToContent = SizeToContent.Height;
-
-            // Apply the theme immediately (which should also handle title bar logic now)
-            ApplyTheme(window, config.Theme ?? "Light");
-
-            var mainGrid = new Grid { Background = Brushes.Transparent };
-            window.Content = mainGrid;
-
-            window.Opacity = 0;
-
-            window.Loaded += (sender, e) =>
-            {
-                window.WindowState = WindowState.Normal;
-                CenterWindowOnCurrentScreen(window);
-                
-                var fadeIn = new System.Windows.Media.Animation.DoubleAnimation
-                {
-                    From = 0,
-                    To = 1,
-                    Duration = TimeSpan.FromMilliseconds(250)
-                };
-                window.BeginAnimation(Window.OpacityProperty, fadeIn);
-            };
-
-            return window;
         }
 
         // Hook WM_GETMINMAXINFO so borderless windows respect taskbar when maximized
@@ -519,13 +469,6 @@ namespace PsUi
                 handled = true;
             }
             return IntPtr.Zero;
-        }
-
-        public static void CenterWindowOnCurrentScreen(Window window)
-        {
-            var workArea = GetMonitorWorkArea(window);
-            window.Left = workArea.Left + (workArea.Width - window.Width) / 2;
-            window.Top = workArea.Top + (workArea.Height - window.Height) / 2;
         }
 
         // Get the work area of the monitor containing the specified window
@@ -607,7 +550,7 @@ namespace PsUi
             }
             catch
             {
-                // Parent dispatcher unavailable, fall back to screen center
+                // Parent UI thread unavailable, fall back to screen center
                 gotBounds = false;
             }
             
@@ -621,8 +564,7 @@ namespace PsUi
                 if (double.IsNaN(dialogWidth)) dialogWidth = 400;
                 if (double.IsNaN(dialogHeight)) dialogHeight = 200;
                 
-                // When parent is maximized, its Left/Top are often negative due to window chrome
-                // extending beyond the screen edge. Use the work area instead.
+                // When parent is maximized, its Left/Top are often negative due to window chrome extending beyond the screen edge. Use the work area instead.
                 if (parentIsMaximized)
                 {
                     // Use the work area of the monitor containing the parent window
@@ -632,8 +574,7 @@ namespace PsUi
                     parentWidth = workArea.Width;
                     parentHeight = workArea.Height;
                     
-                    // For maximized parent, there's no visible shadow margin, so center directly
-                    // but the dialog still has its own shadow margin
+                    // For maximized parent, there's no visible shadow margin, so center directly but the dialog still has its own shadow margin
                     const double dialogShadowMargin = 16.0;
                     double visibleDialogWidth = dialogWidth - (dialogShadowMargin * 2);
                     double visibleDialogHeight = dialogHeight - (dialogShadowMargin * 2);
@@ -685,34 +626,6 @@ namespace PsUi
             }
         }
 
-        public static void ApplyTheme(Window window, string themeName)
-        {
-            // Register the window with ThemeEngine so it gets updated on theme switch
-            ThemeEngine.RegisterElement(window);
-            
-            // Use SetResourceReference for dynamic theme binding
-            window.SetResourceReference(Window.BackgroundProperty, "WindowBackgroundBrush");
-            window.SetResourceReference(Window.ForegroundProperty, "WindowForegroundBrush");
-            
-            // For title bar colors, we need the actual color values
-            var headerBgBrush = Application.Current.Resources["HeaderBackgroundBrush"] as SolidColorBrush;
-            var headerFgBrush = Application.Current.Resources["HeaderForegroundBrush"] as SolidColorBrush;
-            if (headerBgBrush != null && headerFgBrush != null)
-            {
-                SetTitleBarColor(window, headerBgBrush.Color, headerFgBrush.Color);
-            }
-        }
-
-        public static bool? ShowDialogSafe(Window window)
-        {
-            HideConsole();
-            try
-            {
-                return window.Dispatcher.Invoke(new Func<bool?>(delegate { return window.ShowDialog(); }));
-            }
-            finally { ShowConsole(); }
-        }
-        
         // Flash the taskbar button to get user attention
         // Flashes until window receives focus or StopFlash is called
         public static void FlashTaskbar(Window window)
@@ -782,22 +695,4 @@ namespace PsUi
         }
     }
 
-    public class WindowConfig
-    {
-        public string Title { get; set; }
-        public double Width { get; set; }
-        public double Height { get; set; }
-        public double MinWidth { get; set; }
-        public double MinHeight { get; set; }
-        public bool NoResize { get; set; }
-        public bool SizeToContent { get; set; }
-        public string Theme { get; set; }
-        public string IconPath { get; set; }
-
-        public WindowConfig()
-        {
-            Title = null; Width = 400; Height = 600; MinWidth = 0; MinHeight = 0;
-            NoResize = false; SizeToContent = false; Theme = "Light"; IconPath = null;
-        }
-    }
 }

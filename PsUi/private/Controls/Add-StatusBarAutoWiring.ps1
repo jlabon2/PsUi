@@ -155,7 +155,7 @@ function Add-StatusBarAutoWiring {
                         $capturedProgress.Value = $pct
                     }
                     else {
-                        # Activity-only progress: marquee mode
+                        # Activity-only progress: indeterminate mode
                         $capturedProgress.IsIndeterminate = $true
                     }
                 }

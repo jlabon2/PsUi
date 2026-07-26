@@ -2,8 +2,8 @@ function Invoke-OnCompleteHandler {
     <#
     .SYNOPSIS
         Finalizes async output - builds Results tab, updates console, hides loading spinner.
-        TO-DO: This does quite a bit, and probably needs to be refactored into smaller pieces in the future?
     #>
+    # Does a lot. Wants breaking into smaller pieces.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -56,7 +56,7 @@ function Invoke-OnCompleteHandler {
 
     try {
         if ($state.DebugEnabled) { 
-            $eCount = if ($errorsTabState.List) { $errorsTabState.List.Count } else { 0 }
+            $eCount = [int]$errorsTabState.TotalErrors
             [Console]::WriteLine("[DEBUG] OnComplete fired - Results: $($outputData.Count), Types: $($outputDataByType.Count), Errors: $eCount") 
         }
 
@@ -83,7 +83,8 @@ function Invoke-OnCompleteHandler {
                     & $ensureErrorsTab
                     $displayRecord = New-ErrorDisplayRecord -ErrorRecord $item
                     [void]$errorsTabState.List.Add($displayRecord)
-                    
+                    $errorsTabState.TotalErrors = [int]$errorsTabState.TotalErrors + 1
+
                     if ($errorsTabState.Tab.Visibility -eq 'Collapsed') {
                         $errorsTabState.Tab.Visibility = 'Visible'
                     }
@@ -98,6 +99,11 @@ function Invoke-OnCompleteHandler {
                 [void]$outputDataByType[$displayName].Add($item)
                 [void]$outputData.Add([psobject]$item)
             }
+        }
+
+        # Errors picked up by this never went through the tick handler, so the header count has to refresh here too.
+        if ($errorsTabState.Tab -and [int]$errorsTabState.TotalErrors -gt 0) {
+            $errorsTabState.Tab.Header = "Errors ($([int]$errorsTabState.TotalErrors))"
         }
 
         if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Final drain - Results: $($outputData.Count), Types: $($outputDataByType.Count)") }
@@ -116,7 +122,7 @@ function Invoke-OnCompleteHandler {
             }
         }
 
-        # Make Console tab visible if we drained any host records
+        # Make Console tab visible if any host records drained
         if ($hostRecordsDrained -gt 0) {
             if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Making Console tab visible after draining " + $hostRecordsDrained + " records") }
             if ($consoleTab.Visibility -ne 'Visible') {
@@ -126,7 +132,7 @@ function Invoke-OnCompleteHandler {
             $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
         }
 
-        # Park the scroll where the caller asked for — top if requested, bottom if auto-scroll is on
+        # Park the scroll where requested - top if ScrollToTop, bottom if autoscroll is on
         if ($Context.ScrollToTop) {  $consoleTextBox.ScrollToHome() }
         elseif ($autoScrollCheckbox -and $autoScrollCheckbox.IsChecked) { $consoleTextBox.ScrollToEnd() }
         # Hide loading spinner on completion regardless
@@ -140,7 +146,7 @@ function Invoke-OnCompleteHandler {
             }
             else {
                 $hasConsoleOutput = $consoleParagraph.Inlines.Count -gt 0
-                $hasErrors = $errorsTabState.List -and $errorsTabState.List.Count -gt 0
+                $hasErrors = [int]$errorsTabState.TotalErrors -gt 0
                 $hasWarnings = $warningCount.Value -gt 0
                 $hasResults = $outputData.Count -gt 0
 
@@ -154,7 +160,7 @@ function Invoke-OnCompleteHandler {
                     return
                 }
 
-                # If we have content but window wasn't revealed yet, reveal it now
+                # Content exists but the window wasn't revealed yet - reveal it now
                 $state.WindowRevealed = $true
                 $window.Visibility = 'Visible'
             }
@@ -167,7 +173,7 @@ function Invoke-OnCompleteHandler {
 
         # Update status indicator - stop spinner, show success or warning
         $statusSpinner.Visibility = 'Collapsed'
-        $hasErrors = $errorsTabState.List -and $errorsTabState.List.Count -gt 0
+        $hasErrors = [int]$errorsTabState.TotalErrors -gt 0
         $hasWarnings = $warningCount.Value -gt 0
         if ($hasErrors -or $hasWarnings) {
             $statusWarning.Visibility = 'Visible'
@@ -228,6 +234,10 @@ function Invoke-OnCompleteHandler {
             if ($presenterInfo.Type -in @('Collection', 'SingleObject', 'Dictionary')) {
                 $singleSelectParam = if ($SingleSelect) { @{ SingleSelect = $true } } else { @{} }
                 $dataGrid = New-StyledDataGrid @singleSelectParam
+
+                # SingleObject/Dictionary grids autogenerate their Name/Value (or Key/Value) columns on first layout. Star the last one once it exists so Value fills the width like the object grids do. Function ref resolved ahead - the handler fires under the UI thread's session state, which can't see module private functions by name.
+                $starLastColumn = ${function:Set-LastDataColumnStar}
+                $dataGrid.add_AutoGeneratedColumns({ & $starLastColumn -DataGrid $dataGrid }.GetNewClosure())
 
                 if ($presenterInfo.Type -eq 'SingleObject') {
                     $dataGrid.AutoGenerateColumns = $true
@@ -310,7 +320,7 @@ function Invoke-OnCompleteHandler {
                         }
 
                         if ($firstItem -is [System.Collections.DictionaryEntry]) {
-                            $result = New-DictionarySubTab -GroupItems $groupItems -TypeName $typeName -Colors $colors -IsDictionaryEntry
+                            $result = New-DictionarySubTab -GroupItems $groupItems -TypeName $typeName -IsDictionaryEntry
                             [void]$subTabControl.Items.Add($result.Tab)
                             if ($null -eq $firstDataGrid) { $firstDataGrid = $result.DataGrid }
                             if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Added DICTIONARYENTRY sub-tab for type '" + $typeName + "'") }
@@ -318,7 +328,7 @@ function Invoke-OnCompleteHandler {
                         }
 
                         if ($firstItem -is [System.Collections.IDictionary]) {
-                            $result = New-DictionarySubTab -GroupItems $groupItems -TypeName $typeName -Colors $colors
+                            $result = New-DictionarySubTab -GroupItems $groupItems -TypeName $typeName
                             [void]$subTabControl.Items.Add($result.Tab)
                             if ($null -eq $firstDataGrid) { $firstDataGrid = $result.DataGrid }
                             if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Added DICTIONARY sub-tab for type '" + $typeName + "'") }
@@ -330,7 +340,6 @@ function Invoke-OnCompleteHandler {
                         $subTabParams = @{
                             GroupItems          = $groupItems
                             TypeName            = $typeName
-                            Colors              = $colors
                             SubTabControl       = $subTabControl
                             SingleSelect        = $SingleSelect
                             IncludeActionStatus = $includeStatus
@@ -353,7 +362,7 @@ function Invoke-OnCompleteHandler {
                     $subTabControl.Add_SelectionChanged({
                         param($sender, $eventArgs)
                         
-                        # Ignore bubbled SelectionChanged events from child controls (e.g. DataGrid)
+                        # Ignore SelectionChanged events that walk up from child controls (e.g. DataGrid)
                         # Only process events that originated from the TabControl itself
                         if ($eventArgs.OriginalSource -ne $sender -and $eventArgs.OriginalSource -isnot [System.Windows.Controls.TabItem]) {
                             return
@@ -452,7 +461,7 @@ function Invoke-OnCompleteHandler {
                     $filterControls = Add-MultiTypeFilterControls -SubTabControl $subTabControl -RightToolbar $rightToolbar -FilterPanel $filterPanel -Toolbar2 $toolbar2
                 }
 
-                # Wire up action buttons using helper function
+                # Attach action buttons using the helper
                 if ($ResultActions -and $ResultActions.Count -gt 0) {
                     $allActionButtons = [System.Collections.Generic.List[object]]::new()
                     if ($actionDropdownMenuStack) {
@@ -463,8 +472,7 @@ function Invoke-OnCompleteHandler {
                         }
                     }
 
-                    # Ensure tabs exist before passing to result action handlers
-                    # (result actions can produce their own errors/warnings)
+                    # Tabs must exist before the result action handlers get them (result actions can produce their own errors/warnings)
                     & $ensureErrorsTab
                     & $ensureWarningsTab
 
@@ -490,7 +498,7 @@ function Invoke-OnCompleteHandler {
                         Title             = $Title
                         TabControl        = $tabControl
                         TabNotifications  = $tabNotifications
-                        ErrorCount        = $errorsTabState.List.Count
+                        ErrorCount        = [int]$errorsTabState.TotalErrors
                         StatusSpinner     = $statusSpinner
                         StatusSuccess     = $statusSuccess
                         StatusWarning     = $statusWarning
@@ -503,22 +511,46 @@ function Invoke-OnCompleteHandler {
                     Add-ResultActionClickHandlers -Captures $actionCaptures -ActionButtons $allActionButtons -DropdownPopup $dropdownPopup
                 }
 
+                # Resolve the private helpers before the closures capture.
+                $getVisiblePaths  = ${function:Get-UiDataGridVisibleColumnPaths}
+                $formatExportRows = ${function:Format-UiDataGridExportRows}
+
+                # $dataGrid is pinned to the FIRST subtab's grid. Copy and Export both need the grid the user is actually on, resolved when clicked
+                $resolveActiveGrid = {
+                    $activeGrid = $dataGrid
+                    if ($resultsBorder.Child -is [System.Windows.Controls.TabControl]) {
+                        $selectedTab = $resultsBorder.Child.SelectedItem
+                        if ($selectedTab -and $selectedTab.Content -is [System.Windows.Controls.DataGrid]) { $activeGrid = $selectedTab.Content }
+                        else { $activeGrid = $null }
+                    }
+                    $activeGrid
+                }.GetNewClosure()
+
                 $copyButton.Add_Click({
-                    $text = $dataGrid.ItemsSource | ConvertTo-Csv -NoTypeInformation | Out-String
+                    $activeGrid = & $resolveActiveGrid
+                    if (!$activeGrid) { return }
+
+                    $props = @(& $getVisiblePaths -DataGrid $activeGrid)
+                    $text  = & $formatExportRows -Items $activeGrid.ItemsSource -Properties $props | ConvertTo-Csv -NoTypeInformation | Out-String
+                    if ([string]::IsNullOrEmpty($text)) { return }
                     [System.Windows.Clipboard]::SetText($text)
                     Start-UiButtonFeedback -Button $copyButton -OriginalIconChar ([PsUi.ModuleContext]::GetIcon('Copy'))
                 }.GetNewClosure())
 
-                # Show and wire up export button for datagrids
+                # Show and hook the export button for datagrids
                 $exportButton.Visibility = 'Visible'
                 $exportButton.Add_Click({
+                    $activeGrid = & $resolveActiveGrid
+                    if (!$activeGrid) { return }
+
                     $saveDialog = [Microsoft.Win32.SaveFileDialog]::new()
                     $saveDialog.Filter = 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
                     $saveDialog.DefaultExt = '.csv'
                     $saveDialog.FileName = "export_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
 
                     if ($saveDialog.ShowDialog()) {
-                        $dataGrid.ItemsSource | Export-Csv -Path $saveDialog.FileName -NoTypeInformation
+                        $props = @(& $getVisiblePaths -DataGrid $activeGrid)
+                        & $formatExportRows -Items $activeGrid.ItemsSource -Properties $props | Export-Csv -Path $saveDialog.FileName -NoTypeInformation
                         Start-UiButtonFeedback -Button $exportButton -OriginalIconChar ([PsUi.ModuleContext]::GetIcon('Export'))
                     }
                 }.GetNewClosure())
@@ -545,9 +577,9 @@ function Invoke-OnCompleteHandler {
             if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Results tab inserted and selected") }
         }
         else {
-            # No results returned - check if we have any console/error/warning output
+            # No results returned - check for any console/error/warning output
             $hasConsoleOutput = $consoleParagraph.Inlines.Count -gt 0
-            $hasErrors = $errorsTabState.List -and $errorsTabState.List.Count -gt 0
+            $hasErrors = [int]$errorsTabState.TotalErrors -gt 0
             $hasWarnings = $warningCount.Value -gt 0
 
             if ($hasConsoleOutput -or $hasErrors -or $hasWarnings) {

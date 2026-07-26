@@ -1,7 +1,7 @@
 function New-ObjectSubTab {
     <#
     .SYNOPSIS
-        Creates a DataGrid sub-tab for displaying object collections.
+        Creates a DataGrid sub-tab for displaying rows of objects.
     #>
     [CmdletBinding()]
     param(
@@ -10,10 +10,7 @@ function New-ObjectSubTab {
         
         [Parameter(Mandatory)]
         [string]$TypeName,
-        
-        [Parameter(Mandatory)]
-        [hashtable]$Colors,
-        
+
         [Parameter(Mandatory)]
         [System.Windows.Controls.TabControl]$SubTabControl,
         
@@ -50,9 +47,11 @@ function New-ObjectSubTab {
     
     if ($GroupItems.Count -gt 0) {
         $firstItem = $GroupItems[0]
-        $columnResult = Add-DataGridColumns -DataGrid $subGrid -FirstItem $firstItem -Colors $Colors -IncludeActionStatus:$IncludeActionStatus
+        $columnResult = Add-DataGridColumns -DataGrid $subGrid -FirstItem $firstItem -IncludeActionStatus:$IncludeActionStatus
         $allProps = $columnResult.AllProperties
         $defaultProps = $columnResult.DefaultProperties
+
+        Set-LastDataColumnStar -DataGrid $subGrid
     }
     
     # Pre-compute populated properties for "Has Data" filtering

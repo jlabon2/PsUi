@@ -18,7 +18,7 @@ function Set-UiStatusBar {
     .PARAMETER Severity
         Bar tint: Info (default), Success, Warning, Error. Survives theme switches.
     .PARAMETER Indeterminate
-        Toggles marquee mode on the embedded progress bar.
+        Toggles indeterminate mode on the embedded progress bar.
     .PARAMETER Timeout
         Seconds before severity auto-resets to Info. Defaults to 5 when -Severity
         is bound. Pass 0 to keep the tint until the next manual change.

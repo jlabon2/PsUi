@@ -75,7 +75,6 @@ function New-ErrorsTab {
         Background                   = ConvertTo-UiBrush $Colors.ControlBg
         BorderBrush                  = ConvertTo-UiBrush $Colors.Border
         RowBackground                = ConvertTo-UiBrush $Colors.ControlBg
-        AlternatingRowBackground     = ConvertTo-UiBrush $(if ($Colors.AlternateBg) { $Colors.AlternateBg } else { $Colors.ControlBg })
         HorizontalGridLinesBrush     = ConvertTo-UiBrush $Colors.Border
         HeadersVisibility            = 'Column'
     }
@@ -109,6 +108,11 @@ function New-ErrorsTab {
     New-DataGridContextMenu -DataGrid $errorsDataGrid
     [System.Windows.Controls.Grid]::SetRow($errorsDataGrid, 1)
     [void]$errorsContainer.Children.Add($errorsDataGrid)
+
+    # Striping visible across light/dark. Hatch type effect on any nullish cell.
+    # Tab stays Collapsed until the first error lands, so no EmptyOverlay needed.
+    Add-UiDataGridAlternatingBrush -DataGrid $errorsDataGrid
+    Add-UiDataGridEmptyCellDecorator -DataGrid $errorsDataGrid
 
     # Track unfiltered errors for collection-based filtering
     $unfilteredErrors = [System.Collections.Generic.List[object]]::new()
@@ -153,8 +157,7 @@ function New-ErrorsTab {
             $unfilteredList = $filterBox.Tag.UnfilteredErrors
             $errorsList     = $filterBox.Tag.ErrorsList
 
-            # Sync unfiltered list with any new errors added since last filter
-            # (errors are added to errorsList dynamically)
+            # Sync unfiltered list with any errors added since the last filter pass. ErrorsList grows dynamically.
             foreach ($item in $errorsList) {
                 if (!$unfilteredList.Contains($item)) {
                     [void]$unfilteredList.Add($item)
@@ -163,10 +166,10 @@ function New-ErrorsTab {
 
             # Capture sort state before rebuild
             $view = [System.Windows.Data.CollectionViewSource]::GetDefaultView($errorsList)
-            $sortDescriptions = @()
+            $sortDescriptions = [System.Collections.Generic.List[System.ComponentModel.SortDescription]]::new()
             if ($view) {
                 foreach ($sd in $view.SortDescriptions) {
-                    $sortDescriptions += $sd
+                    $sortDescriptions.Add($sd)
                 }
             }
 
@@ -178,8 +181,9 @@ function New-ErrorsTab {
                     [void]$errorsList.Add($item)
                 }
                 else {
-                    $details = if ($item._ErrorDetails) { $item._ErrorDetails.ToString().ToLower() } else { '' }
-                    if ($details -like "*$text*") {
+                    # _ErrorDetails carries script name, stack trace, error id, and inner exception. Filtering by any of those has to keep working.
+                    $haystack = @($item.Time, $item.LineNumber, $item.Category, $item.Message, $item._ErrorDetails) -join ' '
+                    if ($haystack.ToLower() -like "*$text*") {
                         [void]$errorsList.Add($item)
                     }
                 }

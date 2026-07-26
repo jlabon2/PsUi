@@ -51,10 +51,28 @@ function Add-MultiTypeFilterControls {
 
         if ($allProps.Count -eq 0) { return }
 
-        # Create and show popup for this grid
-        $popup = New-ColumnVisibilityPopup -DataGrid $currentGrid -DefaultProperties $defaultProps -AllProperties $allProps -PopulatedProperties $populatedProps
+        # PropertiesProvider closure so the popup pulls the state each time it opens
+        $gridForProvider     = $currentGrid
+        $allPropsCapture     = $allProps
+        $defaultPropsCapture = $defaultProps
+        $populatedCapture    = $populatedProps
+        $popupArgs = @{
+            DataGrid           = $currentGrid
+            PropertiesProvider = {
+                @{
+                    All       = $allPropsCapture
+                    Default   = $defaultPropsCapture
+                    Populated = $populatedCapture
+                }
+            }.GetNewClosure()
+            ItemsProvider      = { $gridForProvider.Tag.UnfilteredItems }.GetNewClosure()
+        }
+        $popup = New-ColumnVisibilityPopup @popupArgs
         $popup.Popup.PlacementTarget = $sender
-        $popup.Popup.IsOpen = $true
+
+        # The popup's opened handler runs the lazy count walk, which can trip a CheckActionPreference NRE, and the popup still shows. The throw just escapes IsOpen.
+        try { $popup.Popup.IsOpen = $true }
+        catch { Write-Verbose "Failed to open column popup: $_" }
     }.GetNewClosure())
 
     $RightToolbar.Children.Insert(0, $colButton)
@@ -130,10 +148,10 @@ function Add-MultiTypeFilterControls {
 
                 # Save sort state
                 $view = $currentGrid.ItemsSource
-                $sortDescriptions = @()
+                $sortDescriptions = [System.Collections.Generic.List[System.ComponentModel.SortDescription]]::new()
                 if ($view) {
                     foreach ($sd in $view.SortDescriptions) {
-                        $sortDescriptions += $sd
+                        $sortDescriptions.Add($sd)
                     }
                 }
 

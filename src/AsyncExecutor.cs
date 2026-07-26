@@ -20,11 +20,8 @@ namespace PsUi
     // Runs PS scripts on background threads, routes Write-Host/Progress/etc to WPF via events.
     // Partial classes: Routing.cs (event handlers), Setup.cs (proxy function injection)
     //
-    // Complexity warning: running PS on a background thread breaks Write-Host, Read-Host,
-    // progress bars, and Get-Credential. We intercept all of them, marshal to the UI thread,
-    // and handle backpressure when output floods in. The batching and queue modes exist because
-    // we've seen scripts emit 50k lines in seconds - without throttling, the dispatcher queue
-    // grows unbounded and the UI shits the bed.
+    // Complexity warning! Running PS on a background thread breaks Write-Host, Read-Host, progress bars, and Get-Credential. We intercept all of them, marshal to the UI thread, and handle backpressure when output floods in. 
+    // The batching and queue modes exist because we've seen scripts emit 50k lines in seconds - without throttling, the dispatcher queue grows unbounded and the UI shits the bed.
     public partial class AsyncExecutor : IDisposable
     {
         public event Action<PSErrorRecord> OnError;
@@ -44,8 +41,7 @@ namespace PsUi
         // Fires when execution starts (thread slot acquired)
         public event Action OnStarted;
         // Fires when internal framework operations fail (dehydration, capture, cleanup).
-        // These aren't script errors - they're problems in PsUi itself. Wire this up
-        // if you need to debug why a variable didn't sync back to a control.
+        // These aren't script errors - they're problems in PsUi itself. Hook this if you need to debug why a variable didn't sync back to a control.
         public event Action<string> OnFrameworkError;
         
         public ScriptBlock InputProvider { get; set; }
@@ -103,11 +99,10 @@ namespace PsUi
         // Throttle delay in ms - slows down script execution to let UI breathe
         public int HostThrottleMs { get; set; }
         
-        // Suppress progress events during setup phase (module imports emit Write-Progress
-        // records that leak through the host and trigger OnProgress handlers prematurely)
+        // Suppress progress events during setup phase (module imports emit Write-Progress records that leak through the host and trigger OnProgress handlers prematurely)
         private volatile bool _suppressProgress = true;
 
-        // Volatile ensures cross-thread visibility without a full lock
+        // Volatile gives cross thread visibility without a full lock
         private volatile bool _isRunning;
         public bool IsRunning
         {
@@ -126,24 +121,10 @@ namespace PsUi
         }
         
         // Semaphore to throttle thread creation - prevents spawning more threads than runspaces.
-        // Yeah, ThreadPool threads block on Wait() when all 8 slots are taken. That's fine - the
-        // pool grows dynamically and we cap at 8 waiters max. Without this gate, mashing a button
-        // spawns unlimited runspaces and you OOM. Ask me how I know.
+        // Yeah, ThreadPool threads block on Wait() when all 8 slots are taken. That's fine - the pool grows dynamically, capped at 8 waiters. Without this gate, mashing a button spawns unlimited runspaces and you OOM.
         private static readonly SemaphoreSlim _threadGate = new SemaphoreSlim(8, 8);
         
-        // STA thread for WinForms dialogs, COM objects, clipboard, etc.
-        private static void RunOnStaThread(Action action)
-        {
-            var thread = new Thread(() => action())
-            {
-                IsBackground = true
-            };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-        }
-        
-        // Background thread with STA/MTA based on session. Semaphore gates thread
-        // creation to match pool size - prevents "thread bomb" from rapid button clicks.
+        // Background thread with STA/MTA based on session. Semaphore gates thread creation to match pool size - prevents "thread bomb" from rapid button clicks.
         private void RunOnBackgroundThread(Action action)
         {
             // Check session for threading preference
@@ -280,7 +261,7 @@ namespace PsUi
         {
             if (IsRunning) return;
             
-            // Reset disposed flag so a previously-cancelled executor can be reused
+            // Reset disposed flag so a previously cancelled instance can be reused
             _disposed = false;
             _suppressProgress = true;
             
@@ -300,8 +281,7 @@ namespace PsUi
             }
             IsRunning = true;
             
-            // Determine execution mode: use dedicated runspace only if we need host interception
-            // (Read-Host, PromptForChoice, etc.) - otherwise use faster pooled execution
+            // Determine execution mode and use dedicated runspace only if we need host interception (Read-Host, PromptForChoice, etc.) - otherwise use faster pooled execution
             bool needsHostInterception = InputProvider != null || SecureInputProvider != null || 
                                           ChoiceProvider != null || CredentialProvider != null ||
                                           PromptProvider != null || ReadKeyProvider != null;
@@ -343,10 +323,10 @@ namespace PsUi
                     ps.RunspacePool = RunspacePoolManager.Pool;
                     _powershell = ps;
                     
-                    // Set thread-local executor so MinimalHost can route output
+                    // Set the thread local instance so MinimalHost can route output
                     AsyncExecutor.CurrentExecutor = this;
                     
-                    // Wire up functions, modules, and propagate session ID
+                    // Inject functions and modules, propagate the session ID
                     ExecuteSetupPhase(ps, functionsToDefine, modulesToLoad, debugEnabled);
                     
                     // Inject user-defined variables from LinkedVariables
@@ -357,7 +337,7 @@ namespace PsUi
                     hydratedValues = StateHydrationEngine.HydrateViaScript(ps, definedVarNames);
                     MergeDefinedVariables(hydratedValues, definedVarValues);
                     
-                    // Inject executor reference so Write-Host routes to UI
+                    // Inject the AsyncExecutor reference so Write-Host routes to UI
                     InjectAsyncExecutorReference(ps);
                     
                     // Snapshot PWD so we can restore it after execution
@@ -515,7 +495,7 @@ namespace PsUi
                 }
             }
             
-            // Wire up stream handlers
+            // Attach stream handlers
             WireStreamHandlers(ps);
             
             // Execute and process results
@@ -586,7 +566,7 @@ namespace PsUi
             IsRunning = false;
             _suppressProgress = true;
             
-            // Clear thread-local executor reference
+            // Clear the thread local reference
             AsyncExecutor.CurrentExecutor = null;
             
             // Put PWD back where we found it

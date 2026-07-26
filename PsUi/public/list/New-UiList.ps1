@@ -1,12 +1,12 @@
 function New-UiList {
     <#
     .SYNOPSIS
-        Creates a selectable list of items with optional filtering and selection controls.
+        Themed listbox. Optional filter box and select-all/none buttons.
     .DESCRIPTION
-        Builds a themed ListBox with optional real-time text filtering, select-all/none
-        buttons, and a manual add button. Supports both static arrays and dynamic
-        ObservableCollection binding. Use -DisplayFormat for object lists where each
-        item is a hashtable with named properties.
+        Builds a themed ListBox with opt-in toolbar controls: a real-time filter box,
+        select-all/none buttons, a manual add button. Supports both static arrays and
+        dynamic ObservableCollection binding. Use -DisplayFormat for object lists where
+        each item is a hashtable with named properties.
     .PARAMETER Variable
         Variable name for the list.
     .PARAMETER Items
@@ -32,7 +32,10 @@ function New-UiList {
     .PARAMETER AddPrompt
         Custom prompt text for the add item dialog. Defaults to "Enter item to add:".
     .PARAMETER Height
-        Fixed height in pixels. Defaults to 150.
+        Fixed height in pixels. Defaults to 150. Ignored when -Fill is set.
+    .PARAMETER Fill
+        Grow to the rest of the window's vertical view port instead of the fixed -Height.
+        List resizes with the window. Use when the list is the dominant content in the view.
     .PARAMETER FullWidth
         Stretches the list to fill available width.
     .PARAMETER EnabledWhen
@@ -79,6 +82,8 @@ function New-UiList {
 
         [int]$Height = 150,
 
+        [switch]$Fill,
+
         [switch]$FullWidth,
 
         [Parameter()]
@@ -103,18 +108,21 @@ function New-UiList {
     $listBox.Margin = [System.Windows.Thickness]::new(0)
     $listBox.SelectionMode = if ($MultiSelect) { 'Extended' } else { 'Single' }
 
-    # Bubble scroll events to parent ScrollViewer so list doesn't swallow them
-    $listBox.Add_PreviewMouseWheel({
-        param($sender, $eventArgs)
-        if (!$eventArgs.Handled) {
-            $eventArgs.Handled = $true
-            $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
-            $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
-            $newEvent.Source = $sender
-            $parentElement = $sender.Parent -as [System.Windows.UIElement]
-            if ($parentElement) { $parentElement.RaiseEvent($newEvent) }
-        }
-    })
+    # Raise scroll events to the parent ScrollViewer so the list doesn't swallow them.
+    # Skipped under -Fill: a filled list already claims the viewport, so raising the wheel again would leave nothing to scroll and kill it entirely. The list's own scrollbar owns it.
+    if (!$Fill) {
+        $listBox.Add_PreviewMouseWheel({
+            param($sender, $eventArgs)
+            if (!$eventArgs.Handled) {
+                $eventArgs.Handled = $true
+                $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
+                $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
+                $newEvent.Source = $sender
+                $parentElement = $sender.Parent -as [System.Windows.UIElement]
+                if ($parentElement) { $parentElement.RaiseEvent($newEvent) }
+            }
+        })
+    }
 
     if ($DisplayFormat) {
         Write-Debug "Registering DisplayFormat: $DisplayFormat"
@@ -124,14 +132,13 @@ function New-UiList {
 
     Set-ListBoxStyle -ListBox $listBox
 
-    # Build the data source (needed before filtering setup)
-    # When filtering is enabled, we MUST use a collection with CollectionView
+    # Build the data source before filter setup - filtering needs a collection behind a CollectionView.
     $sourceCollection = $null
     if ($null -ne $ItemsSource) {
         Write-Debug "Binding external ItemsSource collection"
         $sourceCollection = $ItemsSource
         
-        # If it's an AsyncObservableCollection, update dispatcher
+        # AsyncObservableCollection - refresh its Dispatcher to the current thread.
         if ($ItemsSource.GetType().Name -like 'AsyncObservableCollection*') {
             try { $ItemsSource.UpdateDispatcher() }
             catch { Write-Debug "Failed to update dispatcher: $_" }
@@ -167,9 +174,8 @@ function New-UiList {
         $listBox.ItemsSource = $collectionView
     }
 
-    # Build the container - either a simple wrapper or one with toolbar
+    # Container: DockPanel with toolbar, or the bare listBox on its own.
     if ($needsToolbar) {
-        # Create outer container with DockPanel layout
         $container = [System.Windows.Controls.DockPanel]@{
             Margin = [System.Windows.Thickness]::new(4, 4, 4, 8)
         }
@@ -243,7 +249,6 @@ function New-UiList {
             [System.Windows.Controls.Grid]::SetColumn($searchIcon, 0)
             [void]$toolbar.Children.Add($searchIcon)
 
-            # Container grid holds the textbox and clear button
             $filterContainer = [System.Windows.Controls.Grid]@{
                 VerticalAlignment = 'Center'
             }
@@ -370,7 +375,7 @@ function New-UiList {
             [System.Windows.Controls.Grid]::SetColumn($addBtn, $addColIndex)
             [void]$toolbar.Children.Add($addBtn)
 
-            # Wire up the add button - shows input dialog and adds to collection
+            # Hook the add button, it shows input dialog and pushes into the collection
             $addState = @{
                 Collection  = $sourceCollection
                 PromptText  = $AddPrompt
@@ -385,7 +390,6 @@ function New-UiList {
                     # Auto-select the newly added item (keeps existing selections)
                     $addState.ListView.SelectedItems.Add($result)
                     
-                    # Update count label if present
                     if ($addState.CountLabel) {
                         $selected = $addState.ListView.SelectedItems.Count
                         $total    = $addState.ListView.Items.Count
@@ -397,7 +401,7 @@ function New-UiList {
 
         [void]$container.Children.Add($toolbar)
 
-        $listBox.Height = $Height
+        if (!$Fill) { $listBox.Height = $Height }
         [void]$container.Children.Add($listBox)
 
         if ($countLabel) {
@@ -428,7 +432,6 @@ function New-UiList {
                 $clearBtn   = $tagData.ClearButton
                 $targetList = $tagData.ListView
 
-                # Show/hide clear button
                 if ($clearBtn) {
                     $clearBtn.Visibility = if ([string]::IsNullOrEmpty($textBox.Text)) { 'Collapsed' } else { 'Visible' }
                 }
@@ -446,11 +449,10 @@ function New-UiList {
                 $timer.Add_Tick({
                     $filterText     = $textBox.Text.Trim()
                     $sourceItems    = $tagData.SourceCollection
-                    $displayBinding = $targetList.DisplayMemberPath
 
                     # Rebuild collection to filter (avoids delegate issues)
                     if ($null -ne $sourceItems) {
-                        # Snapshot current selection so we can restore after rebuild
+                        # Snapshot current selection to restore after the rebuild
                         $savedSelection = [System.Collections.Generic.HashSet[object]]::new()
                         foreach ($sel in $targetList.SelectedItems) { [void]$savedSelection.Add($sel) }
 
@@ -478,7 +480,6 @@ function New-UiList {
                             }
                         }
                         
-                        # Create new view from filtered items
                         $newCollection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
                         foreach ($item in $filteredItems) { [void]$newCollection.Add($item) }
                         
@@ -494,7 +495,6 @@ function New-UiList {
                             }
                         }
 
-                        # Update selection count after filter
                         if ($targetList.Tag -and $targetList.Tag.CountLabel) {
                             $label    = $targetList.Tag.CountLabel
                             $selected = $targetList.SelectedItems.Count
@@ -513,7 +513,7 @@ function New-UiList {
 
         Set-FullWidthConstraint -Control $container -Parent $parent -FullWidth:$FullWidth
 
-        # Apply custom WPF properties to container (user may want to style the whole unit)
+        # WPF properties go on the container so styling hits the whole unit, not just the listBox
         if ($WPFProperties) {
             Set-UiProperties -Control $container -Properties $WPFProperties
         }
@@ -521,14 +521,17 @@ function New-UiList {
         Write-Debug "Adding container with toolbar to parent"
         [void]$parent.Children.Add($container)
 
-        # Wire up EnabledWhen on the container (disables toolbar and list together)
+        # Fill sizes the container, not the inner listBox - the listBox's only siblings live inside the DockPanel, so the sibling math saw nothing and controls after the list got shoved off viewport. DockPanel LastChildFill hands the listBox the remainder.
+        if ($Fill) { Set-UiFillParentHeight -Control $container }
+
+        # EnabledWhen on the container so the toolbar and list disable together
         if ($EnabledWhen) {
             Register-UiCondition -TargetControl $container -Condition $EnabledWhen
         }
     }
     else {
         # Simple listbox without toolbar
-        $listBox.Height = $Height
+        if (!$Fill) { $listBox.Height = $Height }
         $listBox.Margin = [System.Windows.Thickness]::new(4, 4, 4, 8)
 
         Set-FullWidthConstraint -Control $listBox -Parent $parent -FullWidth:$FullWidth
@@ -540,7 +543,9 @@ function New-UiList {
         Write-Debug "Adding simple ListBox to parent"
         [void]$parent.Children.Add($listBox)
 
-        # Wire up EnabledWhen on the listbox itself
+        if ($Fill) { Set-UiFillParentHeight -Control $listBox }
+
+        # EnabledWhen on the listbox itself
         if ($EnabledWhen) {
             Register-UiCondition -TargetControl $listBox -Condition $EnabledWhen
         }

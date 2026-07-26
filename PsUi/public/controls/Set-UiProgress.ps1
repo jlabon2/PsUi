@@ -13,7 +13,7 @@ function Set-UiProgress {
     .PARAMETER Severity
         Re-tint the bar: Info, Success, Warning, Error.
     .PARAMETER Indeterminate
-        Toggle marquee mode on/off. Bar template is fixed at construction, so the first
+        Toggle indeterminate mode on/off. Bar template is fixed at construction, so the first
         toggle starts the animation cold. Pass -Indeterminate to New-UiProgress up front
         for cleaner motion.
     .EXAMPLE

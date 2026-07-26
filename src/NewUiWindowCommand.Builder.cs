@@ -43,7 +43,7 @@ namespace PsUi
                 // Propagate async apartment mode (MTA uses ThreadPool, STA uses dedicated threads)
                 session.UseMtaThreading = string.Equals(p.AsyncApartment, "MTA", StringComparison.OrdinalIgnoreCase);
                 
-                // Store caller script info for error reporting
+                // Store the calling script info for error reporting
                 session.CallerScriptName = p.CallerScriptName;
                 session.CallerScriptLine = p.CallerScriptLine;
                 
@@ -53,7 +53,7 @@ namespace PsUi
                 // Store custom logo path if provided
                 session.CustomLogo = p.Logo;
 
-                // Create a runspace for this thread so we can call PowerShell functions
+                // Create a runspace for this thread so PowerShell functions are callable
                 var initialState = InitialSessionState.CreateDefault();
                 windowRunspace = RunspaceFactory.CreateRunspace(host, initialState);
                 windowRunspace.ApartmentState = System.Threading.ApartmentState.STA;
@@ -103,11 +103,9 @@ namespace PsUi
                 // Re-set session after module import (module may have reset it)
                 SessionManager.SetCurrentSession(sessionId);
 
-                // Resolve icon font. Inherit (the default) keeps whatever Set-PsUiIconFont or a previous
-                // window left active. Auto re-detects. Explicit names pin the font.
+                // Resolve icon font. Inherit (the default) keeps whatever Set-PsUiIconFont or a previous window left active. Auto re-detects. Explicit names pin the font.
                 // NoIconFontFallback can be specified independently to toggle just the fallback chain.
-                // Snapshot first so the finally block can restore on window close - per-window
-                // overrides shouldn't leak to subsequent operations.
+                // Snapshot first so the finally block can restore on window close - per-window overrides shouldn't leak to subsequent operations.
                 bool iconFontExplicit = !string.Equals(p.IconFont, "Inherit", StringComparison.OrdinalIgnoreCase);
                 if (iconFontExplicit || p.NoIconFontFallbackBound)
                 {
@@ -137,22 +135,32 @@ namespace PsUi
                 // Clear stale registered elements from previous windows
                 ThemeEngine.Reset();
 
-                // WPF Application must exist on this thread BEFORE theme init.
-                // If a previous window's thread died, Application.Current may have a stale dispatcher.
-                bool appIsStale = Application.Current != null && 
+                // WPF Application must exist on this (window) thread before theme init so brushes and controls are colocated.
+                // Two ways that have shown to already be wrong: a previous window's thread died (stale Dispatcher), or a script themed/created WPF before New-UiWindow so the one AppDomain Application is alive but stranded on another thread (orphaned).
+                bool appIsStale = Application.Current != null &&
                     (Application.Current.Dispatcher.HasShutdownStarted ||
                      !Application.Current.Dispatcher.Thread.IsAlive);
-                
+                bool appIsOrphaned = ThemeEngine.IsApplicationOrphaned();
+
                 if (Application.Current == null)
                 {
-                    new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                    DebugLog("APP", "Created new Application instance");
+                    bool created = ThemeEngine.EnsureApplication();
+                    DebugLog("APP", created ? "Created new Application instance" : "Application present after create attempt");
                 }
                 else if (appIsStale)
                 {
-                    // Application exists but dispatcher is unusable. WPF doesn't allow creating
-                    // a new Application, so we work around it by applying resources directly.
+                    // Application exists but the UI thread is unusable. WPF doesn't allow creating a new Application. The workaround is applying resources directly.
                     DebugLog("APP", "Stale Application detected (dispatcher dead), will apply theme directly");
+                }
+                else if (appIsOrphaned)
+                {
+                    // The single AppDomain Application is alive on a different, nonwindow thread, a theme or WPF call ran before this window was built.
+                    // Cant recreate it. ApplyTheme routes directly on this thread so the window still themes. Warn always visible (DebugLog may be off), same as the custom theme loader below.
+                    Console.WriteLine("[PsUi] Warning: a WPF or theme call ran before New-UiWindow, so the WPF " +
+                        "Application is bound to another thread. This window is themed via a direct fallback; theme " +
+                        "switching and some features may be degraded. Build the window first, or move pre-window " +
+                        "theme/WPF calls inside the -Content block.");
+                    DebugLog("APP", "Orphaned Application detected (alive on another thread, zero windows), will apply theme directly");
                 }
 
                 // Apply theme XAML resources (use custom JSON if provided)
@@ -217,7 +225,7 @@ namespace PsUi
                 // Build and configure the window with custom chrome
                 window = BuildWindow(p, colors);
                 
-                // Log dispatcher exceptions before suppressing
+                // Log UI thread exceptions before suppressing
                 window.Dispatcher.UnhandledException += (sender, e) =>
                 {
                     DebugLog("DISPATCHER", "Unhandled exception: " + e.Exception.Message);
@@ -324,10 +332,10 @@ namespace PsUi
                     }
                 }
 
-                // PassThru mode: show window and run dispatcher loop (non-modal)
+                // PassThru mode: show window and run the message loop (non-modal)
                 if (p.PassThru)
                 {
-                    // Shutdown dispatcher when window closes so Dispatcher.Run() returns
+                    // Shutdown Dispatcher when window closes so Dispatcher.Run() returns
                     window.Closed += (s, e) => window.Dispatcher.InvokeShutdown();
                     
                     // Show non-blocking (not modal)
@@ -336,7 +344,7 @@ namespace PsUi
                     // Store window reference before signaling (Dispatcher.Run blocks afterward)
                     if (windowHolder != null) { windowHolder[0] = window; }
                     
-                    // Signal that window is ready for caller to use
+                    // Signal that window is ready for user code to use
                     if (windowReady != null) { windowReady.Set(); }
                     
                     // Run message loop - blocks this thread but allows Invoke calls
@@ -351,7 +359,7 @@ namespace PsUi
                 // Show the window (blocks until closed)
                 window.ShowDialog();
                 
-                // Export captured variables to the shared dictionary for caller to use
+                // Export captured variables to the shared dictionary for the calling script
                 // Must happen BEFORE session disposal
                 ExportCapturedVariables(sessionId, exportedVariables);
                 
@@ -375,8 +383,7 @@ namespace PsUi
             }
             finally
             {
-                // Restore icon font state if we overrode it - per-window -IconFont shouldn't leak
-                // to subsequent operations in the same session. No-op when nothing was overridden.
+                // Restore icon font state if it was overridden (per-window). -IconFont shouldn't leak to subsequent ops in the same session.
                 if (iconFontSnapshot != null)
                 {
                     try { ModuleContext.RestoreIconFontState(iconFontSnapshot); }
@@ -406,7 +413,7 @@ namespace PsUi
             return window;
         }
         
-        // Exports captured vars back to caller scope when -ExportOnClose is used
+        // Exports captured vars back to the calling scope when -ExportOnClose is used
         private void ExportCapturedVariables(Guid sessionId, Dictionary<string, object> exportedVariables)
         {
             var session = SessionManager.GetSession(sessionId);
@@ -418,7 +425,7 @@ namespace PsUi
             
             DebugLog("EXPORT", string.Format("Exporting {0} captured variable(s) to caller scope", captured.Count));
             
-            // Copy captured variables to shared dictionary for caller thread
+            // Copy captured variables to shared dictionary for the calling thread
             foreach (var kvp in captured)
             {
                 string varName = kvp.Key;
@@ -431,7 +438,7 @@ namespace PsUi
                     continue;
                 }
                 
-                // Store in shared dictionary - caller thread will set in its runspace
+                // Store in shared dictionary - the calling thread will set in its runspace
                 exportedVariables[varName] = value;
                 
                 DebugLog("EXPORT", string.Format("Exported '{0}' ({1})", varName, 
@@ -742,30 +749,41 @@ namespace PsUi
             
             titleBar.MouseMove += (s, e) =>
             {
-                if (dragStartPoint == null) return;
+                // Snapshot the nullable up front. Setting WindowState = Normal below processes messages synchronously (StateChanged fires), which can drain a queued MouseLeftButtonUp that nulls dragStartPoint. The original code re-read dragStartPoint.Value past that point and threw (Nullable.Value on an empty nullable is an InvalidOperationException).
+                var startPoint = dragStartPoint;
+                if (startPoint == null) return;
                 if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
-                
+
+                var startX = startPoint.Value.X;
+                var startY = startPoint.Value.Y;
+
                 // Check if mouse moved enough to count as a drag (5px threshold)
                 var currentPos = e.GetPosition(window);
-                double deltaX = Math.Abs(currentPos.X - dragStartPoint.Value.X);
-                double deltaY = Math.Abs(currentPos.Y - dragStartPoint.Value.Y);
-                
+                double deltaX = Math.Abs(currentPos.X - startX);
+                double deltaY = Math.Abs(currentPos.Y - startY);
+
                 if (deltaX > 5 || deltaY > 5)
                 {
                     titleBar.ReleaseMouseCapture();
-                    
+
                     // Capture screen position and relative X BEFORE restoring
-                    var screenPos = window.PointToScreen(dragStartPoint.Value);
-                    double relativeX = dragStartPoint.Value.X / window.ActualWidth;
-                    
+                    var screenPos = window.PointToScreen(new Point(startX, startY));
+                    double relativeX = startX / window.ActualWidth;
+
                     window.WindowState = WindowState.Normal;
-                    
+
                     // Position window so mouse stays on titlebar at same relative X
                     window.Left = screenPos.X - (window.ActualWidth * relativeX);
                     window.Top = screenPos.Y - (shadowPadding + 16);
-                    
+
                     dragStartPoint = null;
-                    window.DragMove();
+
+                    // DragMove throws InvalidOperationException if the mouse was released during the WindowState=Normal message pass above. Guard it. The drag just ends.
+                    if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+                    {
+                        try { window.DragMove(); }
+                        catch (InvalidOperationException) { }
+                    }
                 }
             };
             
@@ -794,9 +812,8 @@ namespace PsUi
                 Tag = "WindowControlButton"
             };
             
-            // Don't use SetResourceReference for Foreground - creates local value that 
-            // overrides template trigger setters after theme changes. Foreground is set
-            // inside the template via DynamicResource binding instead.
+            // Don't use SetResourceReference for Foreground - creates local value that overrides template trigger setters after theme changes.
+            // Foreground is set inside the template via DynamicResource binding instead.
             
             string templateXaml = isCloseButton ? CloseButtonTemplate : WindowControlButtonTemplate;
             btn.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(templateXaml);
@@ -805,43 +822,6 @@ namespace PsUi
             System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(btn, true);
             
             return btn;
-        }
-        
-        // Apply theme from XAML resources, falling back to hashtable
-        private void ApplyWindowTheme(Window window, Hashtable colors)
-        {
-            bool colorsApplied = false;
-            
-            // Try XAML resources first
-            if (Application.Current != null && Application.Current.Resources != null)
-            {
-                var windowBgBrush = Application.Current.TryFindResource("WindowBackgroundBrush") as Brush;
-                var windowFgBrush = Application.Current.TryFindResource("WindowForegroundBrush") as Brush;
-                
-                DebugLog("THEME", "WindowBackgroundBrush found: " + (windowBgBrush != null));
-                
-                if (windowBgBrush != null)
-                {
-                    window.Background = windowBgBrush;
-                    colorsApplied = true;
-                }
-                if (windowFgBrush != null)
-                {
-                    window.Foreground = windowFgBrush;
-                }
-            }
-            
-            // Fallback to hashtable colors
-            if (!colorsApplied && colors != null)
-            {
-                DebugLog("THEME", "Using hashtable fallback for window colors");
-                object windowBg = colors["WindowBg"];
-                object windowFg = colors["WindowFg"];
-                if (windowBg != null) window.Background = ConvertToBrush(windowBg);
-                if (windowFg != null) window.Foreground = ConvertToBrush(windowFg);
-            }
-            
-            DebugLog("THEME", "Final window.Background: " + window.Background);
         }
         
         // WrapPanel for responsive mode, StackPanel for stack mode
@@ -1031,7 +1011,7 @@ namespace PsUi
                 window.Dispatcher.InvokeShutdown();
             };
             
-            // Wire up window-level hotkey handler for Register-UiHotkey
+            // Attach the window level hotkey handler for Register-UiHotkey
             WireUpHotkeyHandler(window, windowRunspace, sessionId);
         }
         
@@ -1352,7 +1332,6 @@ namespace PsUi
             return null;
         }
 
-        // Accepts #RGB, #RRGGBB, or #AARRGGBB
         // Detects the system's light/dark mode from the registry.
         // Returns "Dark" or "Light". Falls back to Light on any failure.
         private static string DetectSystemTheme()
@@ -1537,7 +1516,7 @@ namespace PsUi
                                            bool debugMode, bool verboseMode,
                                            string callerScriptName, int callerScriptLine)
         {
-            // Inject caller's variables
+            // Inject the calling scope's variables
             if (callerVariables != null && callerVariables.Count > 0)
             {
                 foreach (var kvp in callerVariables)
@@ -1553,7 +1532,7 @@ namespace PsUi
                 }
             }
             
-            // Inject caller's functions
+            // Inject the calling scope's functions
             if (callerFunctions != null && callerFunctions.Count > 0)
             {
                 using (var ps = PowerShell.Create())
@@ -1577,7 +1556,7 @@ namespace PsUi
 
             // Execute the content scriptblock
             // Extract original file and line info from the scriptblock's AST for accurate error reporting
-            // Fall back to caller info if AST doesn't have file info (inline scriptblocks)
+            // Fall back to the calling script info if AST doesn't have file info (inline scriptblocks)
             string originalFile = "script";
             int originalStartLine = 1;
             try
@@ -1613,7 +1592,7 @@ namespace PsUi
             }
             catch { /* AST access failed, use defaults */ }
             
-            // If AST didn't have file info, use caller's script info
+            // If AST didn't have file info, use the calling script's info
             if (originalFile == "script" && !string.IsNullOrEmpty(callerScriptName))
             {
                 originalFile = System.IO.Path.GetFileName(callerScriptName);
