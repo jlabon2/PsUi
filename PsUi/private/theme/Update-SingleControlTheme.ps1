@@ -113,7 +113,7 @@ function Update-SingleControlTheme {
         { $_ -is [System.Windows.Controls.ListBox] } { Set-ListBoxStyle -ListBox $Control; break }
         { $_ -is [System.Windows.Controls.DatePicker] } { Set-DatePickerStyle -DatePicker $Control; break }
         { $_ -is [System.Windows.Controls.TextBlock] } {
-            
+
             # Null-tag fast path - the tag switch below has scriptblock conditions that die on $null input when invoked from a dispatched scriptblock.
             $tag = $Control.Tag
             if ($null -eq $tag) {

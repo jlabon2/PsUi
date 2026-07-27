@@ -13,6 +13,8 @@ function Reset-StatusBarBadges {
     if ($null -ne $Meta.WarningMessages) { $Meta.WarningMessages.Clear() }
     if ($null -ne $Meta.ErrorMessages)   { $Meta.ErrorMessages.Clear() }
     if ($null -ne $Meta.HostMessages)    { $Meta.HostMessages.Clear() }
+    if ($null -ne $Meta.VerboseMessages) { $Meta.VerboseMessages.Clear() }
+    if ($null -ne $Meta.DebugMessages)   { $Meta.DebugMessages.Clear() }
 
     # Badges back to visible-but-dimmed
     if ($Meta.WarningBadge) {
@@ -30,6 +32,16 @@ function Reset-StatusBarBadges {
         $Meta.HostBadge.Badge.Opacity  = 0.35
         $Meta.HostBadge.Badge.ToolTip  = '0 Messages'
     }
+    if ($Meta.VerboseBadge) {
+        $Meta.VerboseBadge.CountText.Text = '0'
+        $Meta.VerboseBadge.Badge.Opacity  = 0.35
+        $Meta.VerboseBadge.Badge.ToolTip  = '0 Verbose lines'
+    }
+    if ($Meta.DebugBadge) {
+        $Meta.DebugBadge.CountText.Text = '0'
+        $Meta.DebugBadge.Badge.Opacity  = 0.35
+        $Meta.DebugBadge.Badge.ToolTip  = '0 Debug lines'
+    }
 
     # Close popups and clear their content
     if ($Meta.WarningPopup) {
@@ -46,5 +58,15 @@ function Reset-StatusBarBadges {
         $Meta.HostPopup.MessagePanel.Children.Clear()
         $Meta.HostPopup.HeaderText.Text = '0 Messages'
         $Meta.HostPopup.Popup.IsOpen    = $false
+    }
+    if ($Meta.VerbosePopup) {
+        $Meta.VerbosePopup.MessagePanel.Children.Clear()
+        $Meta.VerbosePopup.HeaderText.Text = '0 Verbose lines'
+        $Meta.VerbosePopup.Popup.IsOpen    = $false
+    }
+    if ($Meta.DebugPopup) {
+        $Meta.DebugPopup.MessagePanel.Children.Clear()
+        $Meta.DebugPopup.HeaderText.Text = '0 Debug lines'
+        $Meta.DebugPopup.Popup.IsOpen    = $false
     }
 }

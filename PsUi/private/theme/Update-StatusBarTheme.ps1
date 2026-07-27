@@ -45,12 +45,13 @@ function Update-StatusBarTheme {
             # Recalculate badge text foreground against the badge's own background
             $barMeta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
             if ($barMeta.Intercept) {
-                foreach ($badgeInfo in @($barMeta.WarningBadge, $barMeta.ErrorBadge, $barMeta.HostBadge)) {
+                foreach ($badgeInfo in @($barMeta.WarningBadge, $barMeta.ErrorBadge, $barMeta.HostBadge, $barMeta.VerboseBadge, $barMeta.DebugBadge)) {
                     if (!$badgeInfo) { continue }
                     $sevHex = switch ($badgeInfo.BrushKey) {
-                        'WarningBrush' { $capturedColors.Warning }
-                        'ErrorBrush'   { $capturedColors.Error }
-                        'AccentBrush'  { $capturedColors.Accent }
+                        'WarningBrush'       { $capturedColors.Warning }
+                        'ErrorBrush'         { $capturedColors.Error }
+                        'AccentBrush'        { $capturedColors.Accent }
+                        'SecondaryTextBrush' { $capturedColors.SecondaryText }
                     }
                     if ($sevHex) {
                         $fgBrush = ConvertTo-UiBrush (Get-ContrastColor -HexColor $sevHex)

@@ -42,9 +42,26 @@ function Set-StatusBarSeverityVisual {
     }
 
     if ($Severity -eq 'Info') {
-        # Hand each block back to the theme system so tag-based colours come back
+        # Cannot use Update-SingleControlTheme here. Itll brick the window if called from a scriptblock dispatched to the UI thread while the background runspace is parked in Wait().
+        $tagColor = @{
+            AccentBrush                 = $Colors.Accent
+            AccentText                  = $Colors.Accent
+            AccentHeaderForegroundBrush = $Colors.AccentHeaderFg
+            AccentButtonIcon            = $Colors.AccentHeaderFg
+            AccentButtonText            = $Colors.AccentHeaderFg
+            ControlFgBrush              = $Colors.ControlFg
+            SecondaryTextBrush          = $Colors.SecondaryText
+            SuccessBrush                = $Colors.Success
+            ErrorBrush                  = $Colors.Error
+            ThemeButtonIcon             = $Colors.HeaderForeground
+            HeaderText                  = $Colors.HeaderForeground
+        }
         foreach ($textBlock in $textBlocks) {
-            Update-SingleControlTheme -Control $textBlock -Colors $colors
+            $tag = $textBlock.Tag
+            $hex = $null
+            if ($tag -is [string] -and $tagColor.ContainsKey($tag)) { $hex = $tagColor[$tag] }
+            elseif (!(Test-IconFont $textBlock.FontFamily)) { $hex = $Colors.ControlFg }
+            if ($hex) { $textBlock.Foreground = ConvertTo-UiBrush $hex }
         }
 
         # Collapse the severity indicator glyph

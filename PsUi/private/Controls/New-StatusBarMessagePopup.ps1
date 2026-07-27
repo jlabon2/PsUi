@@ -6,7 +6,7 @@ function New-StatusBarMessagePopup {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Warning', 'Error', 'Info')]
+        [ValidateSet('Warning', 'Error', 'Info', 'Verbose', 'Debug')]
         [string]$Severity,
 
         [Parameter(Mandatory)]
@@ -26,6 +26,7 @@ function New-StatusBarMessagePopup {
         'Warning' { 'WarningBrush' }
         'Error'   { 'ErrorBrush' }
         'Info'    { 'AccentBrush' }
+        default   { 'SecondaryTextBrush' }
     }
     $noun = if ($BadgeInfo -and $BadgeInfo.Noun) { $BadgeInfo.Noun } else { $Severity }
     $headerText = [System.Windows.Controls.TextBlock]@{

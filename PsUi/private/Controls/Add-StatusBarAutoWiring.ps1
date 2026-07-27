@@ -62,9 +62,11 @@ function Add-StatusBarAutoWiring {
         $capturedProgressLabel = $bar.Tag['ProgressLabel']
 
         # Intercept state for badge tracking
-        $capturedIntercept    = [bool]$bar.Tag['Intercept']
-        $capturedCaptureHost  = [bool]$bar.Tag['CaptureHost']
-        $capturedNoOutputOnly = [bool]$bar.Tag['NoOutputOnly']
+        $capturedIntercept      = [bool]$bar.Tag['Intercept']
+        $capturedCaptureHost    = [bool]$bar.Tag['CaptureHost']
+        $capturedCaptureVerbose = [bool]$bar.Tag['CaptureVerbose']
+        $capturedCaptureDebug   = [bool]$bar.Tag['CaptureDebug']
+        $capturedNoOutputOnly   = [bool]$bar.Tag['NoOutputOnly']
         $capturedPersist      = [bool]$bar.Tag['Persist']
         $capturedMaxMessages  = if ($bar.Tag['MaxMessages']) { $bar.Tag['MaxMessages'] } else { 100 }
         $capturedExecutor     = $Executor
@@ -74,6 +76,7 @@ function Add-StatusBarAutoWiring {
         # OnStarted: reveal Cancel button and progress bar (severity already reset above)
         $revealOnStart = {
             Invoke-OnUIThread {
+                $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 if ($capturedCancel) {
                     $capturedCancel.Visibility = [System.Windows.Visibility]::Visible
                     $capturedCancel.IsEnabled  = $true
@@ -83,8 +86,8 @@ function Add-StatusBarAutoWiring {
                     $capturedProgressLabel.Text       = ''
                     $capturedProgressLabel.Visibility = [System.Windows.Visibility]::Collapsed
                 }
-                # Reset progress bar state but keep it hidden until Write-Progress fires
-                if ($capturedProgress) {
+                # Reset progress bar state but keep it hidden until Write-Progress fires. A ManualBar bar belongs to an explicit Set-UiStatusBar call - its value and sweep stay put across unrelated actions.
+                if ($capturedProgress -and !$meta.ManualBar) {
                     $capturedProgress.Value           = 0
                     $capturedProgress.IsIndeterminate = $false
                     $capturedProgress.Visibility      = [System.Windows.Visibility]::Hidden
@@ -92,7 +95,6 @@ function Add-StatusBarAutoWiring {
 
                 # Reset intercept badges for the new action (unless -Persist keeps them)
                 if ($capturedIntercept -and !$capturedPersist) {
-                    $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                     Reset-StatusBarBadges -Meta $meta
                 }
             }
@@ -111,6 +113,8 @@ function Add-StatusBarAutoWiring {
                 $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
 
                 if ($record.RecordType -eq 'Completed') {
+                    # An explicit -Completed record ends any manual hold on the bar too
+                    $meta.ManualBar = $false
                     if ($capturedText) { $capturedText.Text = ''; $capturedText.ToolTip = $null }
                     if ($capturedProgress) {
                         $capturedProgress.IsIndeterminate = $false
@@ -132,7 +136,9 @@ function Add-StatusBarAutoWiring {
                     return
                 }
 
-                # In-progress record: pick the most descriptive text and update fill
+                # In-progress record: pick the most descriptive text and update fill. Real records reclaim the bar from any manual hold - the hold protects a value the lifecycle isn't driving, and now it is.
+                $meta.ManualBar = $false
+
                 $progressText = if ($record.StatusDescription) { $record.StatusDescription }
                                 elseif ($record.Activity)      { $record.Activity }
                                 else                            { $null }
@@ -162,12 +168,13 @@ function Add-StatusBarAutoWiring {
             }
         }.GetNewClosure())
 
-        # OnHostBatch: route Write-Host to status text and console badge
+        # OnHostObserved, not OnHostBatch: the observer copy fires in every routing mode, so windowed buttons feed the console badge too. Subscribing OnHostBatch here would starve the output window's own subscription and see nothing in queue mode anyway.
         if ($capturedCaptureHost) {
-            $Executor.add_OnHostBatch({
+            $Executor.add_OnHostObserved({
                 param($batch)
                 Invoke-OnUIThread {
                     if ($batch.Count -eq 0 -or !$capturedText) { return }
+                    if ($capturedNoOutputOnly -and $capturedExecutor.UseQueueMode) { return }
                     $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
 
                     # Update the status text with the latest message in the batch
@@ -214,6 +221,78 @@ function Add-StatusBarAutoWiring {
             }.GetNewClosure())
         }
 
+        # Verbose, badge and popup only. No tint, no status text. Records only arrive when the action's $VerbosePreference lets Write-Verbose emit, same as a console.
+        if ($capturedCaptureVerbose) {
+            $Executor.add_OnVerbose({
+                param($message)
+                if ([string]::IsNullOrEmpty($message)) { return }
+                Invoke-OnUIThread {
+                    $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
+                    if ($null -eq $meta.VerboseMessages) { return }
+                    if ($capturedNoOutputOnly -and $capturedExecutor.UseQueueMode) { return }
+
+                    $entry = @{ Time = [DateTime]::Now; Message = $message }
+                    if ($meta.VerboseMessages.Count -ge $capturedMaxMessages) { $meta.VerboseMessages.RemoveAt(0) }
+                    $meta.VerboseMessages.Add($entry)
+
+                    $count = $meta.VerboseMessages.Count
+                    $meta.VerboseBadge.CountText.Text = "$count"
+                    $meta.VerboseBadge.Badge.Opacity  = 1.0
+                    $meta.VerboseBadge.Badge.ToolTip  = "$count Verbose line$(if ($count -ne 1) { 's' }) - click to view"
+
+                    $msgBlock = [System.Windows.Controls.TextBlock]@{
+                        Text         = "[$($entry.Time.ToString('HH:mm:ss'))] $message"
+                        TextWrapping = 'Wrap'
+                        Margin       = [System.Windows.Thickness]::new(4, 1, 4, 1)
+                        FontSize     = 11
+                        FontFamily   = [System.Windows.Media.FontFamily]::new('Consolas')
+                    }
+                    [void]$meta.VerbosePopup.MessagePanel.Children.Add($msgBlock)
+                    $meta.VerbosePopup.HeaderText.Text = "$count Verbose line$(if ($count -ne 1) { 's' })"
+
+                    if ($meta.VerbosePopup.MessagePanel.Children.Count -gt $capturedMaxMessages) {
+                        $meta.VerbosePopup.MessagePanel.Children.RemoveAt(0)
+                    }
+                }
+            }.GetNewClosure())
+        }
+
+        # Debugm, identical, gated by $DebugPreference instead
+        if ($capturedCaptureDebug) {
+            $Executor.add_OnDebug({
+                param($message)
+                if ([string]::IsNullOrEmpty($message)) { return }
+                Invoke-OnUIThread {
+                    $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
+                    if ($null -eq $meta.DebugMessages) { return }
+                    if ($capturedNoOutputOnly -and $capturedExecutor.UseQueueMode) { return }
+
+                    $entry = @{ Time = [DateTime]::Now; Message = $message }
+                    if ($meta.DebugMessages.Count -ge $capturedMaxMessages) { $meta.DebugMessages.RemoveAt(0) }
+                    $meta.DebugMessages.Add($entry)
+
+                    $count = $meta.DebugMessages.Count
+                    $meta.DebugBadge.CountText.Text = "$count"
+                    $meta.DebugBadge.Badge.Opacity  = 1.0
+                    $meta.DebugBadge.Badge.ToolTip  = "$count Debug line$(if ($count -ne 1) { 's' }) - click to view"
+
+                    $msgBlock = [System.Windows.Controls.TextBlock]@{
+                        Text         = "[$($entry.Time.ToString('HH:mm:ss'))] $message"
+                        TextWrapping = 'Wrap'
+                        Margin       = [System.Windows.Thickness]::new(4, 1, 4, 1)
+                        FontSize     = 11
+                        FontFamily   = [System.Windows.Media.FontFamily]::new('Consolas')
+                    }
+                    [void]$meta.DebugPopup.MessagePanel.Children.Add($msgBlock)
+                    $meta.DebugPopup.HeaderText.Text = "$count Debug line$(if ($count -ne 1) { 's' })"
+
+                    if ($meta.DebugPopup.MessagePanel.Children.Count -gt $capturedMaxMessages) {
+                        $meta.DebugPopup.MessagePanel.Children.RemoveAt(0)
+                    }
+                }
+            }.GetNewClosure())
+        }
+
         # OnError: the big ol' heavyweight. Tints severity, truncates the message for the status text, extracts every diagnostic field PSErrorRecord offers, and builds a popup entry.
         $Executor.add_OnError({
             param($errorRecord)
@@ -228,7 +307,7 @@ function Add-StatusBarAutoWiring {
 
             # Extract every diagnostic field PSErrorRecord has to offer. "Unknown error" is never helpful, so go a little overboard here. Exception type first.
             $exceptionType = $null
-            
+
             if ($errorRecord.RawRecord -and $errorRecord.RawRecord.Exception) { $exceptionType = $errorRecord.RawRecord.Exception.GetType().Name  }
 
             # Location file:line, category, FQEID - whatever the record actually populated
@@ -276,13 +355,14 @@ function Add-StatusBarAutoWiring {
             }
 
             Invoke-OnUIThread {
+                $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 if ($capturedText) {
                     $capturedText.Text    = $errorMessage
                     $capturedText.ToolTip = if ($fullErrorMsg.Length -gt 60) { $fullErrorMsg } else { $null }
                 }
                 try { Add-StatusBarHistoryEntry -Bar $capturedBar -Message $errorMessage -Kind 'Error' }
                 catch { Write-Debug "OnError ledger entry failed: $_" }
-                if ($capturedProgress) {
+                if ($capturedProgress -and !$meta.ManualBar) {
                     $capturedProgress.IsIndeterminate = $false
                     if ($capturedProgress.Value -le 0) {
                         $capturedProgress.Visibility = [System.Windows.Visibility]::Hidden
@@ -291,7 +371,6 @@ function Add-StatusBarAutoWiring {
                 if ($capturedCancel) { $capturedCancel.Visibility = [System.Windows.Visibility]::Hidden }
 
                 Set-StatusBarSeverityVisual -Bar $capturedBar -Severity Error
-                $meta          = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 $meta.Severity = 'Error'
                 if ($meta.SeverityTimer) {
                     $meta.SeverityTimer.Stop()
@@ -463,10 +542,11 @@ function Add-StatusBarAutoWiring {
         # OnCancelled: tint Warning briefly and reset the running visuals
         $Executor.add_OnCancelled({
             Invoke-OnUIThread {
+                $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 if ($capturedText) { $capturedText.Text = 'Cancelled'; $capturedText.ToolTip = $null }
                 try { Add-StatusBarHistoryEntry -Bar $capturedBar -Message 'Cancelled' -Kind 'Warning' }
                 catch { Write-Debug "OnCancelled ledger entry failed: $_" }
-                if ($capturedProgress) {
+                if ($capturedProgress -and !$meta.ManualBar) {
                     $capturedProgress.IsIndeterminate = $false
                     if ($capturedProgress.Value -le 0) {
                         $capturedProgress.Visibility = [System.Windows.Visibility]::Hidden
@@ -479,7 +559,6 @@ function Add-StatusBarAutoWiring {
                 }
 
                 Set-StatusBarSeverityVisual -Bar $capturedBar -Severity Warning
-                $meta          = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 $meta.Severity = 'Warning'
                 if ($meta.SeverityTimer) {
                     $meta.SeverityTimer.Stop()
@@ -489,15 +568,16 @@ function Add-StatusBarAutoWiring {
             }
         }.GetNewClosure())
 
-        # OnComplete: hide Cancel and progress bar, drop indeterminate. Leave text and severity alone so the user's last Write-Status / Set-UiStatusBar wins.
+        # OnComplete: hide Cancel and progress bar, drop indeterminate. Leave text, severity, and a ManualBar hold alone so the user's last Write-Status / Set-UiStatusBar wins.
         $Executor.add_OnComplete({
             Invoke-OnUIThread {
+                $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
                 if ($capturedCancel) { $capturedCancel.Visibility = [System.Windows.Visibility]::Hidden }
                 if ($capturedProgressLabel) {
                     $capturedProgressLabel.Text       = ''
                     $capturedProgressLabel.Visibility = [System.Windows.Visibility]::Collapsed
                 }
-                if ($capturedProgress) {
+                if ($capturedProgress -and !$meta.ManualBar) {
                     $capturedProgress.IsIndeterminate = $false
                     if ($capturedProgress.Value -le 0) {
                         $capturedProgress.Visibility = [System.Windows.Visibility]::Hidden

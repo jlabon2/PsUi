@@ -30,9 +30,23 @@ function New-UiStatusBar {
         a popup with timestamped message details. Badges reset on each new
         action unless -Persist is also specified.
     .PARAMETER CaptureHost
-        Requires -Intercept. Also intercepts Write-Host from button actions and
-        displays the latest message in the status text label. Only captures from
-        -NoOutput buttons (architectural constraint of the queue-based routing).
+        Requires -Intercept. Also intercepts Write-Host and Write-Information
+        from button actions, counting them on a console badge and displaying
+        the latest message in the status text label. Captures from every
+        button, output window or not; add -NoOutputOnly to count only the
+        windowless ones.
+    .PARAMETER CaptureVerbose
+        Requires -Intercept. Adds a badge that counts Write-Verbose output from
+        button actions. Records only flow when the action's $VerbosePreference
+        allows them, same as a console.
+    .PARAMETER CaptureDebug
+        Requires -Intercept. Adds a badge that counts Write-Debug output from
+        button actions. Gated by $DebugPreference, same as -CaptureVerbose.
+        Not compatible with New-UiWindow -Debug, which routes debug lines to
+        the real console instead - the badge stays at zero there.
+    .PARAMETER CaptureAll
+        Requires -Intercept. Shorthand for -CaptureHost -CaptureVerbose
+        -CaptureDebug (every stream a console would show lands on the bar).
     .PARAMETER NoOutputOnly
         Requires -Intercept. Only intercepts from buttons that do NOT have an
         output window. Prevents duplicate badge notifications when warnings and
@@ -65,6 +79,11 @@ function New-UiStatusBar {
 
         Intercepts warnings/errors as badge counters and routes Write-Host to
         the status text. Click a badge to see accumulated messages.
+    .EXAMPLE
+        New-UiStatusBar -Intercept -CaptureAll -Persist -DefaultText 'Ready'
+
+        Console-grade capture: warnings, errors, Write-Host and Write-Information,
+        verbose, and debug all land as badges, and counts stack across clicks.
     #>
     [CmdletBinding()]
     param(
@@ -86,6 +105,12 @@ function New-UiStatusBar {
 
         [switch]$CaptureHost,
 
+        [switch]$CaptureVerbose,
+
+        [switch]$CaptureDebug,
+
+        [switch]$CaptureAll,
+
         [switch]$NoOutputOnly,
 
         [switch]$Persist,
@@ -104,11 +129,19 @@ function New-UiStatusBar {
 
     # Warn on dependent parameters used without -Intercept
     if (!$Intercept) {
-        if ($CaptureHost)  { Write-Warning 'New-UiStatusBar: -CaptureHost requires -Intercept and will be ignored.' }
-        if ($NoOutputOnly) { Write-Warning 'New-UiStatusBar: -NoOutputOnly requires -Intercept and will be ignored.' }
-        if ($Persist)      { Write-Warning 'New-UiStatusBar: -Persist requires -Intercept and will be ignored.' }
+        if ($CaptureHost)    { Write-Warning 'New-UiStatusBar: -CaptureHost requires -Intercept and will be ignored.' }
+        if ($CaptureVerbose) { Write-Warning 'New-UiStatusBar: -CaptureVerbose requires -Intercept and will be ignored.' }
+        if ($CaptureDebug)   { Write-Warning 'New-UiStatusBar: -CaptureDebug requires -Intercept and will be ignored.' }
+        if ($CaptureAll)     { Write-Warning 'New-UiStatusBar: -CaptureAll requires -Intercept and will be ignored.' }
+        if ($NoOutputOnly)   { Write-Warning 'New-UiStatusBar: -NoOutputOnly requires -Intercept and will be ignored.' }
+        if ($Persist)        { Write-Warning 'New-UiStatusBar: -Persist requires -Intercept and will be ignored.' }
         if ($PSBoundParameters.ContainsKey('MaxMessages')) { Write-Warning 'New-UiStatusBar: -MaxMessages requires -Intercept and will be ignored.' }
     }
+
+    # -CaptureAll fans out to the individual switches. Plain bools from here down - assigning $true into a [switch] variable quietly turns it into a bool whose .IsPresent reads $null.
+    $wantHost    = $CaptureHost.IsPresent    -or $CaptureAll.IsPresent
+    $wantVerbose = $CaptureVerbose.IsPresent -or $CaptureAll.IsPresent
+    $wantDebug   = $CaptureDebug.IsPresent   -or $CaptureAll.IsPresent
 
     $session = Assert-UiSession -CallerName 'New-UiStatusBar'
 
@@ -152,7 +185,8 @@ function New-UiStatusBar {
         $barMeta          = if ($targetBar.Tag -is [hashtable]) { $targetBar.Tag } else { @{} }
         $barMeta.Severity = 'Info'
 
-        if ($barMeta.ProgressBar) {
+        # Tint expiry is not a progress event - a ManualBar hold keeps its value and sweep through it. Every armed tint (Set-UiStatusBar, intercepted warnings and errors, the cancel flash) expires through this one Tick, so this is the guard that keeps them all from wiping a held bar.
+        if ($barMeta.ProgressBar -and !$barMeta.ManualBar) {
             $barMeta.ProgressBar.Visibility     = [System.Windows.Visibility]::Hidden
             $barMeta.ProgressBar.Value          = 0
             $barMeta.ProgressBar.IsIndeterminate = $false
@@ -392,7 +426,7 @@ function New-UiStatusBar {
         $innerPanel.Children.Insert(0, $warnBadge.Badge)
 
         # Build console output badge when CaptureHost is enabled
-        if ($CaptureHost) {
+        if ($wantHost) {
             $hostMessages = [System.Collections.Generic.List[hashtable]]::new()
 
             $hostBadge      = New-StatusBarBadge -Severity Info
@@ -417,8 +451,60 @@ function New-UiStatusBar {
             $innerPanel.Children.Insert(0, $hostBadge.Badge)
         }
 
+        # Verbose badge, same wiring one notch further left
+        if ($wantVerbose) {
+            $verboseMessages = [System.Collections.Generic.List[hashtable]]::new()
+
+            $verboseBadge      = New-StatusBarBadge -Severity Verbose
+            $verbosePopupSplat = @{
+                Severity        = 'Verbose'
+                PlacementTarget = $verboseBadge.Badge
+                BadgeInfo       = $verboseBadge
+                MessageList     = $verboseMessages
+                Bar             = $bar
+            }
+            $verbosePopup = New-StatusBarMessagePopup @verbosePopupSplat
+
+            $capturedVerbosePopup = $verbosePopup.Popup
+            $verboseBadge.Badge.Add_MouseLeftButtonDown({
+                $capturedVerbosePopup.IsOpen = !$capturedVerbosePopup.IsOpen
+            }.GetNewClosure())
+            $verboseBadge.Badge.Add_MouseEnter({ $capturedVerbosePopup.StaysOpen = $true }.GetNewClosure())
+            $verboseBadge.Badge.Add_MouseLeave({ $capturedVerbosePopup.StaysOpen = $false }.GetNewClosure())
+
+            [System.Windows.Controls.DockPanel]::SetDock($verboseBadge.Badge, 'Right')
+            $innerPanel.Children.Insert(0, $verboseBadge.Badge)
+        }
+
+        # Debug badge
+        if ($wantDebug) {
+            $debugMessages = [System.Collections.Generic.List[hashtable]]::new()
+
+            $debugBadge      = New-StatusBarBadge -Severity Debug
+            $debugPopupSplat = @{
+                Severity        = 'Debug'
+                PlacementTarget = $debugBadge.Badge
+                BadgeInfo       = $debugBadge
+                MessageList     = $debugMessages
+                Bar             = $bar
+            }
+            $debugPopup = New-StatusBarMessagePopup @debugPopupSplat
+
+            $capturedDebugPopup = $debugPopup.Popup
+            $debugBadge.Badge.Add_MouseLeftButtonDown({
+                $capturedDebugPopup.IsOpen = !$capturedDebugPopup.IsOpen
+            }.GetNewClosure())
+            $debugBadge.Badge.Add_MouseEnter({ $capturedDebugPopup.StaysOpen = $true }.GetNewClosure())
+            $debugBadge.Badge.Add_MouseLeave({ $capturedDebugPopup.StaysOpen = $false }.GetNewClosure())
+
+            [System.Windows.Controls.DockPanel]::SetDock($debugBadge.Badge, 'Right')
+            $innerPanel.Children.Insert(0, $debugBadge.Badge)
+        }
+
         $meta.Intercept       = $true
-        $meta.CaptureHost     = $CaptureHost.IsPresent
+        $meta.CaptureHost     = $wantHost
+        $meta.CaptureVerbose  = $wantVerbose
+        $meta.CaptureDebug    = $wantDebug
         $meta.NoOutputOnly    = $NoOutputOnly.IsPresent
         $meta.Persist         = $Persist.IsPresent
         $meta.MaxMessages     = $MaxMessages
@@ -429,10 +515,20 @@ function New-UiStatusBar {
         $meta.WarningMessages = $warnMessages
         $meta.ErrorMessages   = $errorMessages
 
-        if ($CaptureHost) {
+        if ($wantHost) {
             $meta.HostBadge    = $hostBadge
             $meta.HostPopup    = $hostPopup
             $meta.HostMessages = $hostMessages
+        }
+        if ($wantVerbose) {
+            $meta.VerboseBadge    = $verboseBadge
+            $meta.VerbosePopup    = $verbosePopup
+            $meta.VerboseMessages = $verboseMessages
+        }
+        if ($wantDebug) {
+            $meta.DebugBadge    = $debugBadge
+            $meta.DebugPopup    = $debugPopup
+            $meta.DebugMessages = $debugMessages
         }
     }
 

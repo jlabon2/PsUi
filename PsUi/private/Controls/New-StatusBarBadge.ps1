@@ -6,25 +6,30 @@ function New-StatusBarBadge {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Warning', 'Error', 'Info')]
+        [ValidateSet('Warning', 'Error', 'Info', 'Verbose', 'Debug')]
         [string]$Severity
     )
 
-    # Pick glyph, brush key, and display noun based on severity
+    # Pick glyph, brush key, and display noun based on severity. Verbose and Debug share the muted pill - the glyphs (circled i, bug) carry the distinction.
     $glyph   = switch ($Severity) {
         'Warning' { [char]0xE7BA }
         'Error'   { [char]0xE783 }
         'Info'    { [char]0xE756 }
+        'Verbose' { [char]0xE946 }
+        'Debug'   { [char]0xEBE8 }
     }
     $brushKey = switch ($Severity) {
         'Warning' { 'WarningBrush' }
         'Error'   { 'ErrorBrush' }
         'Info'    { 'AccentBrush' }
+        default   { 'SecondaryTextBrush' }
     }
     $noun = switch ($Severity) {
         'Warning' { 'Warning' }
         'Error'   { 'Error' }
         'Info'    { 'Message' }
+        'Verbose' { 'Verbose line' }
+        'Debug'   { 'Debug line' }
     }
 
     # Icon glyph - tagged so severity DFS skips it
@@ -88,6 +93,7 @@ function New-StatusBarBadge {
         'Warning' { $colors.Warning }
         'Error'   { $colors.Error }
         'Info'    { $colors.Accent }
+        default   { $colors.SecondaryText }
     }
     if ($severityHx) {
         $fgHex = Get-ContrastColor -HexColor $severityHx

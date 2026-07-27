@@ -50,7 +50,8 @@ function Clear-UiStatus {
             $meta.ProgressLabel.Visibility = [System.Windows.Visibility]::Collapsed
         }
 
-        # Zero the embedded progress bar, hide it, and clear its severity tint
+        # Zero the embedded progress bar, hide it, and clear its severity tint. Also releases any ManualBar hold.
+        $meta.ManualBar = $false
         $progBar = $meta.ProgressBar
         if ($progBar) {
             $progBar.IsIndeterminate = $false

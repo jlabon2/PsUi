@@ -11,7 +11,10 @@ function Set-UiStatusBar {
         Pass an empty string to clear.
     .PARAMETER Progress
         Progress value (0-100). Sets .Value on the embedded progress bar.
-        If both -Progress and -Increment are bound, -Progress wins.
+        If both -Progress and -Increment are bound, -Progress wins. A value
+        above zero holds the bar on screen across actions; zero releases the
+        hold and hides the bar. For a visible not-started state, use
+        -Indeterminate instead of zero.
     .PARAMETER Increment
         Adds to the current progress value. Clamps to [0, 100].
         Ignored when -Progress is also bound.
@@ -137,6 +140,20 @@ function Set-UiStatusBar {
             if ($boundKeys -contains 'Indeterminate') {
                 $progBar.IsIndeterminate = $indeterminateValue
                 Set-ProgressBarStyle -ProgressBar $progBar
+            }
+
+            if ($wantsProgress) {
+                if ($progBar.IsIndeterminate) {
+                    $meta.ManualBar = $true
+                }
+                elseif ($progBar.Value -gt 0) {
+                    if (($boundKeys -contains 'Progress') -or ($boundKeys -contains 'Increment')) { $meta.ManualBar = $true }
+                    else { $meta.ManualBar = $false }
+                }
+                else {
+                    $meta.ManualBar     = $false
+                    $progBar.Visibility = [System.Windows.Visibility]::Hidden
+                }
             }
         }
 

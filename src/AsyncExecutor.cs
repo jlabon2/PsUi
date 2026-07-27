@@ -30,6 +30,7 @@ namespace PsUi
         public event Action<string> OnDebug;
         public event Action<HostOutputRecord> OnHost;
         public event Action<List<HostOutputRecord>> OnHostBatch;
+        public event Action<List<HostOutputRecord>> OnHostObserved;
         public event Action<ProgressRecord> OnProgress;
         public event Action<object> OnPipelineOutput;
         public event Action OnComplete;
@@ -76,6 +77,9 @@ namespace PsUi
         private List<HostOutputRecord> _hostBatch = new List<HostOutputRecord>();
         private readonly object _hostBatchLock = new object();
         private DateTime _lastHostFlush = DateTime.MinValue;
+        private List<HostOutputRecord> _observedBatch = new List<HostOutputRecord>();
+        private readonly object _observedBatchLock = new object();
+        private DateTime _lastObservedFlush = DateTime.MinValue;
         private const int HOST_BATCH_SIZE = 50;
         private const int HOST_FLUSH_MS = 50;
         
@@ -955,6 +959,7 @@ namespace PsUi
             OnDebug = null;
             OnHost = null;
             OnHostBatch = null;
+            OnHostObserved = null;
             OnProgress = null;
             OnPipelineOutput = null;
             OnComplete = null;
