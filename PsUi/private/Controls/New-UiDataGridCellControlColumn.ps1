@@ -146,7 +146,23 @@ function New-UiDataGridCellControlColumn {
                     Add-UiDataGridSearchText -PsObject $row -Force
                 }
 
-                # Stale filter cache would keep matching the pre toggle text on not owned rows.
+                # -Items rows are snapshot copies with your original object hanging off _BaseObject, and hydration unwraps to that. A template column checkbox runs no edit transaction, so RowEditEnding never writes the tick back and it lands on the copy only.
+                $baseProp = if ($null -ne $row) { $row.PSObject.Properties['_BaseObject'] } else { $null }
+                $base     = if ($baseProp) { $baseProp.Value } else { $null }
+                if ($null -ne $base -and ![object]::ReferenceEquals($base, $row)) {
+                    try {
+                        if ($base -is [System.Collections.IDictionary]) {
+                            if ($base.Contains($bindPath)) { $base[$bindPath] = $newValue }
+                        }
+                        else {
+                            $dstProp = $base.PSObject.Properties[$bindPath]
+                            if ($dstProp -and $dstProp.IsSettable) { $dstProp.Value = $newValue }
+                        }
+                    }
+                    catch { Write-Debug "Toggle write to _BaseObject failed: $_" }
+                }
+
+                # Stale filter cache would keep matching the pre toggle text on not owned rows. The row brush cache has the same problem and the binding writes the row in place, which raises nothing either one listens for.
                 try {
                     $grid = $sender
                     while ($grid -and $grid -isnot [System.Windows.Controls.DataGrid]) {
@@ -155,13 +171,18 @@ function New-UiDataGridCellControlColumn {
                     $gridTag = if ($grid) { $grid.Tag } else { $null }
                     $filterBox = if ($gridTag -is [hashtable] -and $gridTag.FilterBox) { $gridTag.FilterBox } else { $null }
                     if ($filterBox -and $filterBox.Tag -and $filterBox.Tag.ClearSearchCache) { & $filterBox.Tag.ClearSearchCache }
+                    # Guard the null: the invalidator reads $null as "drop every cached brush", which would throw away the whole map and recolor nothing.
+                    if ($null -ne $row -and $gridTag -is [hashtable] -and $gridTag.InvalidateRowBackground) { & $gridTag.InvalidateRowBackground $row }
                 }
-                catch { Write-Debug "Toggle filter cache invalidation skipped: $_" }
+                catch { Write-Debug "Toggle cache invalidation skipped: $_" }
 
                 if (!$onChange) { return }
 
-                # ForEach-Object binds $_ to the row. The .EXAMPLE in New-UiDataGrid uses $_.PropertyName form, so the natural scriptblock would silently see $null without this pipe.
-                try { $row | ForEach-Object { & $onChange $_ $newValue } }
+                # InvokeWithContext - $_ doesn't survive the trip across the module boundary by itself, and the pipe into a positional call doesn't carry it either (the OnChange body saw an empty $_ while the row sat in $args[0]). Positional args stay for param($row, $checked) bodies.
+                $vars = [System.Collections.Generic.List[psvariable]]::new()
+                $vars.Add([psvariable]::new('_', $row))
+                $vars.Add([psvariable]::new('row', $row))
+                try { [void]$onChange.InvokeWithContext($null, $vars, @($row, $newValue)) }
                 catch { Write-Debug "Toggle OnChange failed: $($_.Exception.Message)" }
             }.GetNewClosure()
 

@@ -35,12 +35,26 @@ function Invoke-UiAction {
         $localFanOut = $fanOutMode
         $repaint = {
             try {
+                # Owned rows carry a baked _SearchText and the filter predicate reads it before anything else, so an in place write leaves the row matching its pre action values. Filter on the old text and it still shows, search the new one and it never appears. Both paths (cell edits, Toggle cells) rebuild it the same way.
+                $gridTag = $localGrid.Tag
+                foreach ($touched in @($localItem)) {
+                    if ($null -eq $touched -or !$touched.PSObject.Properties['_SearchText']) { continue }
+                    try { Add-UiDataGridSearchText -PsObject $touched -Force }
+                    catch { Write-Debug "Search text rebuild after action failed: $_" }
+                }
+                try {
+                    $filterBox = if ($gridTag -is [hashtable]) { $gridTag.FilterBox } else { $null }
+                    if ($filterBox -and $filterBox.Tag -and $filterBox.Tag.ClearSearchCache) { & $filterBox.Tag.ClearSearchCache }
+                }
+                catch { Write-Debug "Filter cache invalidation after action failed: $_" }
+
                 # Items.Refresh on its own redraws reliably in clean tests, but inside a real PsUi grid (styled cells, filter view, fan out from worker runspaces) the cell bindings sometimes don't pull again from the mutated PSCustomObject. Force a surgical regen of just the touched row's container by removing and reinserting at the same index - WPF can't collapse a paired Remove/Insert into nothing the way it silently drops a same reference indexer assignment. Saved selection state restores around the Remove so multi select fan out doesn't shed rows.
                 # New-UiDataGrid sets ItemsSource to a ListCollectionView, so unwrap to SourceCollection or the IList check fails and the Remove/Insert path never fires.
                 #
                 # Skipped under -FanOut: N parallel runspaces all racing the same source list caused IndexOf misses and dropped per row mutations. Items.Refresh below is idempotent and survives the parallel barrage.
                 $source = $localGrid.ItemsSource
                 if ($source -is [System.ComponentModel.ICollectionView]) { $source = $source.SourceCollection }
+                $regenerated = $false
                 if (!$localFanOut -and $localItem -and $source -is [System.Collections.IList] -and !$source.IsReadOnly) {
                     $idx = $source.IndexOf($localItem)
                     if ($idx -ge 0) {
@@ -52,8 +66,15 @@ function Invoke-UiAction {
                             if ($localGrid.SelectionMode -eq [System.Windows.Controls.DataGridSelectionMode]::Single) { $localGrid.SelectedItem = $localItem }
                             else { [void]$localGrid.SelectedItems.Add($localItem) }
                         }
+                        # Remove and Insert raise CollectionChanged, which drops the brush key on its own, and the regenerated container recomputes it through LoadingRow.
+                        $regenerated = $source -is [System.Collections.Specialized.INotifyCollectionChanged]
                     }
                 }
+
+                # -RowBackground holds one brush per row and an in place write raises nothing, so the touched rows have to be dropped by hand.
+                # Only where the Remove/Insert above didn't already do it and calling both ran the user's scriptblock twice per row.
+                if (!$regenerated -and $gridTag -is [hashtable] -and $gridTag.InvalidateRowBackground) { & $gridTag.InvalidateRowBackground $localItem }
+
                 $localGrid.Items.Refresh()
             }
             catch { Write-Debug "Invoke-UiAction refresh failed: $_" }
@@ -130,9 +151,11 @@ function Invoke-UiAction {
         }
     }
 
-    # Write-Host from the worker runspace lands on whatever thread the AsyncExecutor's host hook fires on. Route back to the app's UI thread so PsUi's existing host hook captures it.
-    $appCurrent    = [System.Windows.Application]::Current
-    $appDispatcher = if ($appCurrent) { $appCurrent.Dispatcher } else { $null }
+    # Write-Host from the worker runspace lands on whatever thread the AsyncExecutor's host hook fires on. Route back to this window's UI thread so PsUi's existing host hook captures it.
+    # Not Application.Current, it stays pinned to the first window of the process, so in a second window it points at a thread that already exited and every routed line disappears.
+    $hostSession   = [PsUi.SessionManager]::Current
+    $appDispatcher = if ($hostSession -and $hostSession.Window) { $hostSession.Window.Dispatcher }
+                     elseif ([System.Windows.Application]::Current) { [System.Windows.Application]::Current.Dispatcher }
 
     $onHost = {
         param($record)
@@ -171,7 +194,7 @@ function Invoke-UiAction {
                 }
                 catch { Write-Debug "Action error dialog skipped (window closed): $_" }
             }
-            & $refresh
+            # No refresh here. Invoke-UiAsync raises OnError from inside its OnComplete handler and no longer stops there, so OnComplete runs the refresh right after this returns. Doing it here as well ran the whole thing twice for every touched row.
         }.GetNewClosure()
         OnHost        = $onHost
     }

@@ -700,11 +700,31 @@ function New-UiDataGrid {
                         # Unbound, there is no view processing to corrupt. Reattaching is a fresh bind, same as construction. Adds landing mid surgery are absorbed by it.
                         #
                         # No try/finally: PS's CheckActionPreference NREs on try block exit when the scriptblock runs off pipeline (this is a Dispatcher delegate), and the hijacked unwind SKIPS finally - the grid stayed detached, showing zero rows forever. trap handles the error path. The tail reattach handles success. Same pattern as Add-UiDataGridRowDetails.
-                        $savedSource = $localState.DataGrid.ItemsSource
-                        $localState.DataGrid.ItemsSource = $null
+                        # $seedGrid is a plain local on purpose. $rebind below closes over it, and an inner GetNewClosure only captures THIS scope's locals - reaching for $localState (an outer closure capture) in there hands back $null and the reattach silently does nothing, leaving the grid empty forever.
+                        $seedGrid    = $localState.DataGrid
+                        $savedSource = $seedGrid.ItemsSource
+                        $savedView   = $savedSource -as [System.ComponentModel.ICollectionView]
+                        $savedSorts  = if ($savedView) { @($savedView.SortDescriptions) } else { @() }
+
+                        # Built BEFORE the detach below, because a trap covers its whole scope no matter where the statement sits. Dfined after, an error thrown on the detach itself would reach the trap with $rebind still $null, and & $null throws before the reattach ever runs.
+                        # Cycling ItemsSource wipes the view's SortDescriptions, so -DefaultSort on a grid that started empty died the moment its first rows landed (it applied at build, then vanished). SortDescription is a struct, so the array above holds copies and survives the clear. Same save and restore the column picker and the errors tab already do around their rebuilds.
+                        $rebind = {
+                            $seedGrid.ItemsSource = $savedSource
+                            if (!$savedView -or $savedSorts.Count -eq 0 -or $savedView.SortDescriptions.Count -gt 0) { return }
+                            foreach ($sd in $savedSorts) {
+                                # Per entry catch, same as Add-UiDataGridDefaultSort: a mixed type column throws on Add and has to come back out, or every later refresh rethrows it.
+                                try { $savedView.SortDescriptions.Add($sd) }
+                                catch {
+                                    [void]$savedView.SortDescriptions.Remove($sd)
+                                    Write-Debug "Seed rebind dropped sort '$($sd.PropertyName)': $($_.Exception.Message)"
+                                }
+                            }
+                        }.GetNewClosure()
+
+                        $seedGrid.ItemsSource = $null
 
                         trap {
-                            $localState.DataGrid.ItemsSource = $savedSource
+                            & $rebind
                             Write-Debug "New-UiDataGrid seed build failed: $($_.Exception.Message)"
                             continue
                         }
@@ -719,7 +739,7 @@ function New-UiDataGrid {
                                 $localState.Handler = $localState.SelfRef
                                 $localState.Collection.add_CollectionChanged($localState.SelfRef)
                             }
-                            $localState.DataGrid.ItemsSource = $savedSource
+                            & $rebind
                             return
                         }
 
@@ -744,8 +764,8 @@ function New-UiDataGrid {
                             }
                         }
 
-                        # Known cosmetic: the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze, filter, sort all behave. Leaving it.
-                        $localState.DataGrid.ItemsSource = $savedSource
+                        # Known cosmetic: the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze and filter behave. Leaving it.
+                        & $rebind
                     }.GetNewClosure())
             }.GetNewClosure()
             $seedState.Handler = $seedHandler

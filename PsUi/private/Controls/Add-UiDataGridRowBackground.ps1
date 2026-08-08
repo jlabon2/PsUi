@@ -35,6 +35,26 @@ function Add-UiDataGridRowBackground {
         return $null
     }.GetNewClosure()
 
+    # nvoke-UiAction and the Toggle cell both call this once the write lands
+    $invalidate = {
+        param($items)
+        if ($null -eq $items) { $brushMap.Clear(); return }
+        foreach ($target in @($items)) {
+            if ($null -eq $target) { continue }
+            [void]$brushMap.Remove($target)
+
+            # Recolor the row here and now. Dropping the key only helps rows WPF regenerates afterwards and a checkbox click regenerates nothing.
+            $container = $DataGrid.ItemContainerGenerator.ContainerFromItem($target)
+            if (!$container) { continue }
+            $brush = & $evaluate $target
+            $brushMap[$target] = $brush
+            if ($null -ne $brush) { $container.Background = $brush }
+            else { $container.ClearValue([System.Windows.Controls.Control]::BackgroundProperty) }
+        }
+    }.GetNewClosure()
+
+    if ($DataGrid.Tag -is [hashtable]) { $DataGrid.Tag.InvalidateRowBackground = $invalidate }
+
     # Track the live source so subscriptions swap when ItemsSource is replaced at runtime.
     # LoadingRow handles initial fill lazily, no eager prefill.
     $subState = @{ Source = $null; Handler = $null }
@@ -63,22 +83,22 @@ function Add-UiDataGridRowBackground {
 
     # Source sync. Sort/filter don't fire CollectionChanged on the source, so this only runs for real Add/Remove/Replace/Reset.
     $buildHandler = {
-        # Rebind to locals: nested .GetNewClosure() captures only this invocation's locals, not what $buildHandler itself captured - $brushMap/$evaluate were $null inside the running handler, so Remove bookkeeping leaked and Reset never cleared the cache.
-        $mapRef  = $brushMap
-        $evalRef = $evaluate
+        # Rebind to locals: nested .GetNewClosure() captures only this invocation's locals, not what $buildHandler itself captured - $brushMap was $null inside the running handler, so Remove bookkeeping leaked and Reset never cleared the cache.
+        $mapRef = $brushMap
         # Cast to the delegate type so add_/remove_CollectionChanged see the same instance - the raw scriptblock rides PS's conversion cache and the detach can miss under GC.
         $handler = [System.Collections.Specialized.NotifyCollectionChangedEventHandler]{
             param($sender, $eventArgs)
+            # Drop keys, never compute. LoadingRow evaluates at realization, so an offscreen row never runs the user scriptblock and a feed of per row Adds stays cheap on the UI thread.
             switch ($eventArgs.Action) {
                 ([System.Collections.Specialized.NotifyCollectionChangedAction]::Add) {
-                    foreach ($newItem in $eventArgs.NewItems) { $mapRef[$newItem] = & $evalRef $newItem }
+                    foreach ($newItem in $eventArgs.NewItems) { [void]$mapRef.Remove($newItem) }
                 }
                 ([System.Collections.Specialized.NotifyCollectionChangedAction]::Remove) {
                     foreach ($oldItem in $eventArgs.OldItems) { [void]$mapRef.Remove($oldItem) }
                 }
                 ([System.Collections.Specialized.NotifyCollectionChangedAction]::Replace) {
                     foreach ($oldItem in $eventArgs.OldItems) { [void]$mapRef.Remove($oldItem) }
-                    foreach ($newItem in $eventArgs.NewItems) { $mapRef[$newItem] = & $evalRef $newItem }
+                    foreach ($newItem in $eventArgs.NewItems) { [void]$mapRef.Remove($newItem) }
                 }
                 ([System.Collections.Specialized.NotifyCollectionChangedAction]::Reset) {
                     # Clear only. LoadingRow refills on miss - prefilling here runs the user scriptblock once per source row on the UI thread, and a ReplaceAll with 50k rows turns that into a freeze.
@@ -89,10 +109,11 @@ function Add-UiDataGridRowBackground {
         return $handler
     }.GetNewClosure()
 
+    # Unary comma, or the return unrolls the collection into its elements and $attach ends up testing an Object[] for INotifyCollectionChanged - always false, so it never subscribes. A dead subscription still looks healthy: rows keep coloring on the way in through the LoadingRow miss.
     $resolveSource = {
         $view = $DataGrid.ItemsSource -as [System.ComponentModel.ICollectionView]
-        if ($view) { return $view.SourceCollection }
-        return $DataGrid.ItemsSource
+        if ($view) { return ,$view.SourceCollection }
+        return ,$DataGrid.ItemsSource
     }.GetNewClosure()
 
     $attach = {
@@ -101,7 +122,8 @@ function Add-UiDataGridRowBackground {
         if ([object]::ReferenceEquals($newSource, $subState.Source)) { return }
 
         # Detach the old subscription before swapping. Leaving it hooked leaks the grid via the source's event multicast, and the new source goes silent on Add/Remove.
-        if ($subState.Source -and $subState.Handler) {
+        # An EMPTY collection is falsy, and the column surgery on initially empty -ItemsSource grids swaps ItemsSource right when the source is empty. A skipped detach here left the source subscribed twice, so every added row ran the user scriptblock twice.
+        if ($null -ne $subState.Source -and $subState.Handler) {
             try { $subState.Source.remove_CollectionChanged($subState.Handler) }
             catch { Write-Debug "RowBackground old-source detach failed: $_" }
         }
@@ -135,7 +157,7 @@ function Add-UiDataGridRowBackground {
     $onWindowClosed = {
         try { $itemsSourcePropDesc.RemoveValueChanged($DataGrid, $itemsSourceChangedHandler) }
         catch { Write-Debug "RowBackground DPD detach failed: $_" }
-        if ($subState.Source -and $subState.Handler) {
+        if ($null -ne $subState.Source -and $subState.Handler) {
             try { $subState.Source.remove_CollectionChanged($subState.Handler) }
             catch { Write-Debug "RowBackground source detach failed: $_" }
             $subState.Source  = $null

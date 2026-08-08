@@ -9,9 +9,13 @@ function Invoke-UiAsync {
     .PARAMETER ScriptBlock
         Code to run in background.
     .PARAMETER OnComplete
-        Code to run when done. Receives the result as parameter.
+        Code to run when done. Receives the result as parameter. Runs on every finish that wasn't
+        cancelled, errors or not, so a run that wrote to the error stream and still returned data
+        delivers that data here as well as reporting through OnError.
     .PARAMETER OnError
-        Code to run on error. Receives the error as parameter.
+        Code to run when the background script wrote to the error stream. Receives the joined error
+        text. A non-terminating error counts, so this can fire on a run that still produced results
+        and still reaches OnComplete.
     .PARAMETER OnHost
         Per-record Write-Host handler for background output. Receives the emitted record.
         Background runspaces have no console-visible host of their own; hook this to route
@@ -80,13 +84,13 @@ function Invoke-UiAsync {
 
     $__executor = [PsUi.AsyncExecutor]::new()
 
-    # Set dispatcher for proper UI thread marshaling
-    if ([System.Windows.Application]::Current) {
-        $__executor.UiDispatcher = [System.Windows.Application]::Current.Dispatcher
-    }
+    # Every callback the run raises (OnComplete included) is queued on this thread. Application.Current pins to whichever window came up FIRST and keeps pointing at that thread for the rest of the process, so a second window queues its completion onto a thread that already exited - BeginInvoke swallows it and OnComplete never fires, while the action itself still runs. Session window first, same order Invoke-OnUIThread uses.
+    $execSession  = [PsUi.SessionManager]::Current
+    $uiDispatcher = if ($execSession -and $execSession.Window) { $execSession.Window.Dispatcher }
+                    elseif ([System.Windows.Application]::Current) { [System.Windows.Application]::Current.Dispatcher }
+    if ($uiDispatcher) { $__executor.UiDispatcher = $uiDispatcher }
 
     # Store executor in session for Stop-UiAsync cancellation
-    $execSession = [PsUi.SessionManager]::Current
     if ($execSession -and !$NoActiveExecutor) { $execSession.ActiveExecutor = $__executor }
 
     $__varsToInject = @{}
@@ -236,31 +240,32 @@ function Invoke-UiAsync {
     }.GetNewClosure())
 
     # Completion callback - runs on UI thread via AsyncExecutor's MarshalToUi
+    # trap, NOT try/finally. A finally here means the teardown below never runs and every handler registered after this one goes with it, the status bar's own OnComplete sits right behind this. Same trap New-UiDataGrid uses. An inner try/catch with no finally is safe.
     $__executor.add_OnComplete({
-        try {
-            # Restore session context on UI thread so Set-UiValue and other functions work
-            if ($state.SessionId -ne [Guid]::Empty) {
-                [PsUi.SessionManager]::SetCurrentSession($state.SessionId)
-            }
+        trap { Write-Warning "Invoke-UiAsync OnComplete error: $_"; continue }
 
-            if ($state.Errors.Count -gt 0 -and $state.OnError) {
-                & $state.OnError ($state.Errors -join "`n`n")
-            }
-            elseif ($state.OnComplete) {
-                if ($state.Results.Count -eq 0)     { & $state.OnComplete $null }
-                elseif ($state.Results.Count -eq 1) { & $state.OnComplete $state.Results[0] }
-                else                                { & $state.OnComplete @($state.Results) }
-            }
+        # Restore session context on UI thread so Set-UiValue and other functions work
+        if ($state.SessionId -ne [Guid]::Empty) {
+            [PsUi.SessionManager]::SetCurrentSession($state.SessionId)
         }
-        catch { Write-Warning "Invoke-UiAsync OnComplete error: $_" }
-        finally {
-            # Drop OnHost before Dispose. Redundant with Dispose's own handler nulling - it stays because the add/remove pairing reads clearer than leaning on a Dispose side effect.
-            if ($state.OnHostHandler -and $state.Executor) {
-                try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }
-                $state.OnHostHandler = $null
-            }
-            if ($state.Executor) { $state.Executor.Dispose() }
+
+        if ($state.Errors.Count -gt 0 -and $state.OnError) {
+            & $state.OnError ($state.Errors -join "`n`n")
         }
+
+        # Not an elseif... one Write-Error would route the whole run to OnError and throw the pipeline output away, including the results from every row that worked.
+        if ($state.OnComplete) {
+            if ($state.Results.Count -eq 0)     { & $state.OnComplete $null }
+            elseif ($state.Results.Count -eq 1) { & $state.OnComplete $state.Results[0] }
+            else                                { & $state.OnComplete @($state.Results) }
+        }
+
+        # Drop OnHost before Dispose. Redundant with Dispose's own handler nulling - it stays because the add/remove pairing reads clearer than leaning on a Dispose side effect.
+        if ($state.OnHostHandler -and $state.Executor) {
+            try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }
+            $state.OnHostHandler = $null
+        }
+        if ($state.Executor) { $state.Executor.Dispose() }
     }.GetNewClosure())
 
     # Cancel() fires OnCancelled, not OnComplete, so the disposer above never runs on a Stop-UiAsync / AutoCancel cancel. The executor (its CTS + handler delegates) would sit rooted in ActiveExecutor until GC. Same teardown New-UiButton's cancel path does.
