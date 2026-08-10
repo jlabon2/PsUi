@@ -2,7 +2,7 @@
 
 All changes to PsUi will be documented in this file.
 
-## [1.1.0] - 2026-07-24
+## [1.1.0] - 2026-08-08
 
 - **New-UiDataGrid**: a full datagrid suite with cell buttons / toggles / links, cell editing, row details, row coloring, frozen columns, live `-ItemsSource` binding from background runspaces
 - Status bar suite with `Write-*` interception: badges, status text, embedded progress
@@ -49,8 +49,9 @@ All changes to PsUi will be documented in this file.
   - `-AutoProgress` embeds a progress bar driven by plain `Write-Progress` from your actions. Hidden until the first record, gone again on `-Completed`.
   - `-AutoCancel` embeds a Cancel button that lights up while something runs.
   - `-Intercept` makes the bar capture and print your actions' output. `Write-Warning` and `Write-Error` pile up as clickable badges, and the error popup keeps the useful parts (exception type, script, line, stack).
-  - `-CaptureHost` (with `-Intercept`) sends `Write-Host` from windowless buttons into the status text, batched so heavy output stays smooth.
+  - `-CaptureHost` (with `-Intercept`) sends `Write-Host` from your buttons into the status text, batched so heavy output stays smooth.
   - `-NoOutputOnly` counts only buttons without output windows, so badges don't double-count what a window already shows.
+  - `-CaptureVerbose` and `-CaptureDebug` add badges for those streams; `-CaptureAll` is shorthand for turning every capture on.
   - `-Persist` keeps badge counts across clicks instead of resetting each action.
   - `-MaxMessages` caps popup entries (default 100), oldest out first.
   - Severity tinting: the bar shifts green/yellow/red with the stream and settles back to neutral (2s green, 5s yellow, 8s red).
@@ -123,9 +124,18 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 - **Cross-thread adds could throw**: a background loop adding to a list or grid the window is showing could die with `Cannot change ObservableCollection during a CollectionChanged event`. Mutations queue onto the window's thread in order now. Hammer away.
 - **Second window, dead collection**: a collection made in a second window pinned itself to the first window's thread - adds went through, nothing showed. It homes to its own window now, and creating one on a background thread now throws up front instead of silently dropping everything.
+- **Second window, dead callbacks**: the companion bug - async completions in a second window queued onto the first window's exited thread and vanished, while the action itself ran fine. A context menu edit changed the row and the cell kept its old text. Callbacks land on their own window now.
+- **Actions that edit a row**: search and filter kept matching the old values after a rightclick action or cell toggle changed them. They see the new ones now.
+- **`-DefaultSort` on an empty start**: a grid that began empty lost its sort the moment the first rows landed. It sticks now.
+- **Toggle ticks landed on the copy**: with `-Items`, a cell toggle wrote to the grid's snapshot, so a Save button reading your objects saw nothing changed. Ticks land on the original now.
+- **Row colors went stale**: `-RowBackground` brushes didn't keep up with list changes. They do now.
 - **Piped scalars and falsy rows**: piping `0`, `''`, or `$false` to `Out-Datagrid` dropped those rows, and piping plain strings or numbers drew a ghost grid (strings got a lone `Length` column). Falsy rows stay now, and scalars get a `Value` column. Copy and export emit the values, not character counts.
 - **Array cells in copy/export**: Copy Rows and Export CSV wrote `System.Object[]` for array cells. They come out as their joined contents now, ie (`a, b, c`).
 - **Resizing `'*'` columns could lock up**: columns that share the leftover width stop taking resize drags once there's none left to give: no error, the drag just stops existing. `New-UiDataGrid` unlocks that, and a click that never drags doesn't pin the width.
+
+#### Status Bar
+
+- **Two ways to kill the bar**: `Write-Status -Severity Info` could freeze the window, and `Set-UiStatusBar` could take down the embedded progress bar. Both fixed.
 
 #### Theme System
 
@@ -146,6 +156,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 #### Other
 
+- **One error ate the run**: a single `Write-Error` midrun routed the whole run to OnError and threw away the pipeline output that worked. OnError still fires; OnComplete gets the results too.
 - **Copy/export leaked internals**: every copy path - toolbar Copy and Export, right-click copy, CSV export, Ctrl+C - wrote the raw rows, so the grid's internal search properties rode along as extra columns. One shared path strips them now, on `Out-Datagrid` and the output window alike.
 - **Link color stuck after theme switch**: expandable-cell links froze at their build-time color, so Dark then Light meant white on white. They follow the theme live now.
 - **ConvertTo-UiBrush**: the brush cache could be null on the first call from a button action, so color lookups there threw. It initializes itself now, whichever copy of the function ends up running.
