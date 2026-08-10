@@ -8,36 +8,49 @@ function Invoke-OnUIThread {
     param(
         [Parameter(Mandatory)]
         [scriptblock]$ScriptBlock,
-        
+
         [switch]$Async
     )
 
-    $session = Get-UiSession
+    $session    = Get-UiSession
     $dispatcher = $null
-    
+
     # Try session window first, then fall back to Application.Current
     if ($session -and $session.Window) { $dispatcher = $session.Window.Dispatcher }
     if ($null -eq $dispatcher) { $dispatcher = [System.Windows.Application]::Current.Dispatcher }
-    
-    # No dispatcher - run directly
+
     if ($null -eq $dispatcher) { return & $ScriptBlock }
 
-    # Already on UI thread - execute directly
     if ($dispatcher.CheckAccess()) { return & $ScriptBlock }
-    
-    # Not on UI thread - marshal to UI thread dispatcher
+
     if ($Async) {
-        # Fire and forget
         [void]$dispatcher.BeginInvoke([Action]$ScriptBlock, $null)
+        return
     }
-    else {
-        # Use BeginInvoke + Wait to avoid deadlock
-        # Direct Invoke would block the calling thread and prevent the dispatcher from processing the request
-        $operation = $dispatcher.BeginInvoke([Func[object]]$ScriptBlock, $null)
-        
-        # Wait for completion without blocking dispatcher
+
+    # BeginInvoke + Wait avoids the deadlock that a direct Invoke causes here
+    $operation = $dispatcher.BeginInvoke([Func[object]]$ScriptBlock, $null)
+
+    try {
         $operation.Wait()
-        
-        if ($operation.Status -eq 'Completed') { return $operation.Result }
+    }
+    catch [System.AggregateException] {
+        # OperationCanceledException = dispatcher isn't running (tests, no UI window)
+        $inner = $_.Exception.InnerException
+        if ($inner -is [System.OperationCanceledException]) { return & $ScriptBlock }
+        if ($inner) { throw $inner }
+        throw
+    }
+
+    # Wait() may not surface every failure mode, so inspect status as well
+    switch ($operation.Status) {
+        'Completed' { return $operation.Result }
+        'Faulted'   {
+            $ex = $operation.Exception
+            if ($ex.InnerException) { $ex = $ex.InnerException }
+            throw $ex
+        }
+        'Aborted'   { return & $ScriptBlock }
+        default     { return $null }
     }
 }

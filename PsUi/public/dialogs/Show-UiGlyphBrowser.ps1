@@ -39,6 +39,15 @@ function Show-UiGlyphBrowser {
     }
     $glyphList = $glyphList | Sort-Object Name
 
+    # Pre-count renderable glyphs under the active font so the title reflects what's actually on
+    # screen. Iterates IsGlyphAvailable once (cache-hits after the first lookup) - cheaper than
+    # any other way of plumbing the count out of the per-tile loop below. Flipping the fallback
+    # via Set-PsUiIconFont and reopening the browser changes this number, which is the whole point.
+    $renderable = 0
+    foreach ($g in $glyphList) {
+        if ([PsUi.ModuleContext]::IsGlyphAvailable($g.Name)) { $renderable++ }
+    }
+
     # Pre-create brushes BEFORE the content block since private functions aren't accessible inside
     $colors = Get-ThemeColors
     $tileBgBrush        = ConvertTo-UiBrush $colors.ControlBg
@@ -47,12 +56,12 @@ function Show-UiGlyphBrowser {
     $secondaryTextBrush = ConvertTo-UiBrush $colors.SecondaryText
 
     $childParams = @{
-        Title   = "Glyph Browser ($($glyphList.Count) unique)"
+        Title   = "Glyph Browser - $(Get-PsUiIconFont) ($renderable of $($glyphList.Count) renderable)"
         Width   = 867.5
         Height  = 600
         Content = {
-            New-UiLabel -Text "Segoe MDL2 Assets Icon Browser" -Style Title
-            New-UiLabel -Text "Click any icon to copy its name to clipboard. Use -Icon 'Name' with buttons, cards, and panels." -Style Note
+            New-UiLabel -Text "$(Get-PsUiIconFont) Icon Browser" -Style Title
+            New-UiLabel -Text "Click any icon to copy its name to clipboard. Dimmed icons are missing from the active font; hover any tile to see which font(s) carry it. Use -Icon 'Name' with buttons, cards, and panels." -Style Note
             New-UiInput -Label 'Search' -Variable 'glyphSearch' -Placeholder 'Type to filter glyphs...'
 
             $session = Get-UiSession
@@ -63,8 +72,26 @@ function Show-UiGlyphBrowser {
                 Margin      = [System.Windows.Thickness]::new(0, 8, 0, 0)
             }
 
+            # Pre-resolve the active font name once to avoid extra lookups per tile
+            $activeName = [PsUi.ModuleContext]::ActiveIconFontName
+
+            # Tooltip badge enumerates the fonts each glyph is carried by.
+            # Add a new entry here when MS ships another icon font - the rest stays as-is.
+            $fontSpecs = @(
+                @{ Short = 'MDL2'   ; Name = [PsUi.ModuleContext]::FontNameMDL2   }
+                @{ Short = 'Fluent' ; Name = [PsUi.ModuleContext]::FontNameFluent }
+            )
+
             # Create glyph tiles using pre-created brushes (captured via AST)
             foreach ($glyph in $glyphList) {
+                # Per-glyph availability in each font drives the tooltip badge
+                $inActive  = [PsUi.ModuleContext]::IsGlyphAvailable($glyph.Name)
+                $carriedBy = foreach ($spec in $fontSpecs) {
+                    if ([PsUi.ModuleContext]::IsGlyphAvailableInFont($glyph.Name, $spec.Name)) { $spec.Short }
+                }
+                $badge   = if ($carriedBy) { $carriedBy -join ', ' } else { 'not available' }
+                $tipText = if ($inActive) { "$($glyph.Name) ($badge)" } else { "$($glyph.Name) (not in $activeName - $badge)" }
+
                 $tile = [System.Windows.Controls.Border]@{
                     Width           = 75
                     Height          = 75
@@ -74,7 +101,7 @@ function Show-UiGlyphBrowser {
                     BorderThickness = [System.Windows.Thickness]::new(1)
                     CornerRadius    = [System.Windows.CornerRadius]::new(4)
                     Cursor          = 'Hand'
-                    ToolTip         = $glyph.Name
+                    ToolTip         = $tipText
                     Tag             = @{ Name = $glyph.Name }
                 }
 
@@ -85,13 +112,17 @@ function Show-UiGlyphBrowser {
                     IsHitTestVisible    = $false
                 }
 
+                # Dim glyphs missing from the active font
+                $tileOpacity = if ($inActive) { 1.0 } else { 0.3 }
+
                 $icon = [System.Windows.Controls.TextBlock]@{
                     Text                = $glyph.Char
-                    FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                    FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                     FontSize            = 24
                     Foreground          = $fgBrush
                     HorizontalAlignment = 'Center'
                     Margin              = [System.Windows.Thickness]::new(0, 6, 0, 2)
+                    Opacity             = $tileOpacity
                 }
 
                 $labelText = if ($glyph.Name.Length -gt 9) { $glyph.Name.Substring(0, 7) + '..' } else { $glyph.Name }
@@ -101,6 +132,7 @@ function Show-UiGlyphBrowser {
                     Foreground          = $secondaryTextBrush
                     HorizontalAlignment = 'Center'
                     TextTrimming        = 'CharacterEllipsis'
+                    Opacity             = $tileOpacity
                 }
 
                 $stack.Children.Add($icon) | Out-Null

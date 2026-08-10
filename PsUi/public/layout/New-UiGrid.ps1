@@ -22,23 +22,24 @@ function New-UiGrid {
     .PARAMETER FormLayout
         Optimized for label+control pairs. Automatically uses a 2-column layout with
         auto-width labels on the left and stretching controls on the right.
-        Note: May not work well with controls that have complex internal labels.
+        Does not handle controls with complex internal labels cleanly.
     .PARAMETER RowSpacing
         Vertical spacing between rows in pixels. Default is 4.
     .PARAMETER ColumnSpacing
         Horizontal spacing between columns in pixels. Default is 8.
     .PARAMETER Content
         ScriptBlock containing child controls.
-    .PARAMETER FillParent
-        Makes the grid fill its parent's available vertical space. Use this
-        when star-sized rows need to divide height evenly (e.g. dashboard grids).
-        Works by reading the parent's ActualHeight and subtracting sibling heights.
+    .PARAMETER Fill
+        Makes the grid fill the parent's remaining vertical space. Use this when
+        star sized rows need to divide height evenly (e.g. dashboard grids).
+        Height comes from the outer ScrollViewer's viewport, minus this grid's offset
+        and the heights of the siblings below it. -FillParent is the legacy alias.
     .PARAMETER FullWidth
         Stretches the grid to fill available width.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the Grid.
     .EXAMPLE
-        New-UiGrid -Columns 2 -Rows '*,*' -FillParent -Content {
+        New-UiGrid -Columns 2 -Rows '*,*' -Fill -Content {
             New-UiChart -Type Bar -Data $sales -Title "Sales"
             New-UiChart -Type Line -Data $trend -Title "Trend"
             New-UiChart -Type Pie -Data $share -Title "Share"
@@ -100,7 +101,8 @@ function New-UiGrid {
 
         [switch]$FullWidth,
 
-        [switch]$FillParent,
+        [Alias('FillParent')]
+        [switch]$Fill,
 
         [Parameter()]
         [hashtable]$WPFProperties
@@ -143,7 +145,6 @@ function New-UiGrid {
         $Columns = 'Auto,*'
     }
 
-    # Parse column definitions
     $columnSpecs = ConvertTo-GridDefinitions -Spec $Columns -Type 'Column'
 
     $grid = [System.Windows.Controls.Grid]@{
@@ -175,7 +176,6 @@ function New-UiGrid {
         }
     }
 
-    # Create column definitions
     $columnDefs = [System.Collections.Generic.List[object]]::new()
     foreach ($colSpec in $columnSpecs) {
         $colDefinition = [System.Windows.Controls.ColumnDefinition]::new()
@@ -257,9 +257,9 @@ function New-UiGrid {
                 }
             }
             
-            # Fallback: detect label+control wrapper by structure (for backward compat)
+            # Fallback: detect the label+control panel by structure (for backward compat)
             $isLabelWrapper = $false
-            if (!$skipUnwrap -and !$formTag -and $child -is [System.Windows.Controls.StackPanel]) {
+            if ($FormLayout -and !$skipUnwrap -and !$formTag -and $child -is [System.Windows.Controls.StackPanel]) {
                 if ($child.Children.Count -eq 2 -and $child.Children[0] -is [System.Windows.Controls.TextBlock]) {
                     $isLabelWrapper = $true
                 }
@@ -271,7 +271,6 @@ function New-UiGrid {
                     $labelBlock = $formTag.Label
                     $control    = $formTag.Control
 
-                    # Disconnect label from its parent (may be nested in a DockPanel)
                     $labelParent = $labelBlock.Parent
                     if ($labelParent -is [System.Windows.Controls.Panel]) {
                         [void]$labelParent.Children.Remove($labelBlock)
@@ -283,7 +282,7 @@ function New-UiGrid {
                         [void]$controlParent.Children.Remove($control)
                     }
 
-                    # Remove the wrapper from grid (no longer needed)
+                    # Remove the emptied panel from the grid
                     [void]$grid.Children.Remove($child)
 
                     # Add label and control as separate items
@@ -302,7 +301,7 @@ function New-UiGrid {
                     $labelBlock = $child.Children[0]
                     $control    = $child.Children[1]
 
-                    # Remove from wrapper (must remove in reverse order)
+                    # Remove from the panel (must remove in reverse order)
                     $child.Children.RemoveAt(1)
                     $child.Children.RemoveAt(0)
 
@@ -312,7 +311,7 @@ function New-UiGrid {
                         continue
                     }
 
-                    # Remove wrapper from grid
+                    # Remove the panel from the grid
                     [void]$grid.Children.Remove($child)
 
                     # Add label and control as separate items
@@ -328,7 +327,7 @@ function New-UiGrid {
             else {
                 try {
                     [void]$unwrappedChildren.Add($child)
-                    # Remove so we can re-add in order
+                    # Remove then add back in display order below
                     [void]$grid.Children.Remove($child)
                 }
                 catch {
@@ -364,7 +363,6 @@ function New-UiGrid {
             # Add child to grid
             [void]$grid.Children.Add($child)
 
-            # Auto-place this child (all unwrapped children need placement)
             [System.Windows.Controls.Grid]::SetRow($child, $ctx.Row)
             [System.Windows.Controls.Grid]::SetColumn($child, $ctx.Col)
 
@@ -413,7 +411,7 @@ function New-UiGrid {
     }
 
     Write-Debug "Placement phase complete"
-    # FullWidth mode — WrapPanel parents need explicit Width since they size to content
+    # FullWidth mode. WrapPanel parents need explicit Width since they size to content
     if ($FullWidth -or $parent -is [System.Windows.Controls.WrapPanel]) {
         $grid.HorizontalAlignment = 'Stretch'
         if ($parent -is [System.Windows.Controls.WrapPanel]) {
@@ -439,88 +437,5 @@ function New-UiGrid {
     [void]$parent.Children.Add($grid)
     Write-Debug "Grid added to parent with $($grid.Children.Count) children"
 
-    # FillParent: walk up the visual tree to find the ScrollViewer that wraps
-    # all window content. The ScrollViewer's ViewportHeight is the real visible
-    # area — everything inside it measures with infinite height, so star rows
-    # collapse to Auto without an explicit Height on the grid.
-    # Strategy: shrink the grid to a small initial height so the ScrollViewer
-    # content fits the viewport, then fire a DispatcherTimer (100ms) to read
-    # TranslatePoint and ViewportHeight once layout has stabilized.
-    if ($FillParent -and $parent -is [System.Windows.Controls.Panel]) {
-        $gridRef   = $grid
-        $parentRef = $parent
-
-        # Width: WrapPanel tracks horizontal size correctly, keep it in sync on resize
-        $parentRef.Add_SizeChanged({
-            param($sizeSender, $sizeArgs)
-            $newWidth = $sizeSender.ActualWidth
-            if ($newWidth -gt 50) { $gridRef.Width = $newWidth }
-        }.GetNewClosure())
-
-        # Height: discover the ScrollViewer after the visual tree is built
-        $gridRef.Add_Loaded({
-            param($loadSender, $loadArgs)
-
-            # Set width immediately (may have been 0 at creation time)
-            if ($parentRef.ActualWidth -gt 50) { $gridRef.Width = $parentRef.ActualWidth }
-
-            # Shrink the grid so its natural content height doesn't push it
-            # below the ScrollViewer viewport (which makes TranslatePoint > ViewportHeight)
-            $gridRef.Height = 200
-
-            # Walk up the visual tree to find the window's ScrollViewer
-            $sv = $null
-            $walker = $parentRef
-            while ($walker) {
-                $nextUp = [System.Windows.Media.VisualTreeHelper]::GetParent($walker)
-                if (!$nextUp) { break }
-                if ($nextUp -is [System.Windows.Controls.ScrollViewer]) { $sv = $nextUp; break }
-                $walker = $nextUp
-            }
-            if (!$sv) { return }
-
-            # Capture references for closures — keep names short to avoid nested scope issues
-            $gr = $gridRef
-
-            # Compute height: viewport minus the grid's Y offset within the ScrollViewer
-            $computeHeight = {
-                $vh = $sv.ViewportHeight
-                if ($vh -le 0) { return }
-
-                $offset = 80.0
-                try {
-                    $pt = $gr.TranslatePoint([System.Windows.Point]::new(0, 0), $sv)
-                    $offset = $pt.Y
-                }
-                catch { Write-Debug 'TranslatePoint failed during auto-size' }
-
-                $target = $vh - $offset - 10
-                $current = $gr.ActualHeight
-
-                # Only update if meaningfully different (prevents infinite layout cycles)
-                if ($target -gt 50 -and ([double]::IsNaN($current) -or [Math]::Abs($target - $current) -gt 5)) {
-                    $gr.Height = $target
-                }
-            }.GetNewClosure()
-
-            # DispatcherTimer is the most reliable deferred-execution pattern
-            # in PowerShell closures. BeginInvoke [Action] casting can fail silently.
-            $heightFn = $computeHeight
-            $timer    = [System.Windows.Threading.DispatcherTimer]::new()
-            $timer.Interval = [TimeSpan]::FromMilliseconds(100)
-            $tRef = $timer
-            $timer.Add_Tick({
-                $tRef.Stop()
-                & $heightFn
-            }.GetNewClosure())
-            $timer.Start()
-
-            # Recalculate whenever the viewport resizes (window drag, maximize, etc.)
-            $resizeFn = $computeHeight
-            $sv.Add_SizeChanged({
-                param($sizeSender, $sizeArgs)
-                & $resizeFn
-            }.GetNewClosure())
-        }.GetNewClosure())
-    }
+    if ($Fill -and $parent -is [System.Windows.Controls.Panel]) { Set-UiFillParentHeight -Control $grid -TrackParentWidth $parent }
 }

@@ -198,7 +198,7 @@ function Show-UiFilterBuilder {
     # Close button - foreground is set inside the template to avoid local value precedence issues
     $closeBtn = [System.Windows.Controls.Button]@{
         Content             = [PsUi.ModuleContext]::GetIcon('Close')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 12
         Width               = 36
         Height              = 36

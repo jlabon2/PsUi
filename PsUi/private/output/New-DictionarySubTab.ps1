@@ -10,10 +10,7 @@ function New-DictionarySubTab {
         
         [Parameter(Mandatory)]
         [string]$TypeName,
-        
-        [Parameter(Mandatory)]
-        [hashtable]$Colors,
-        
+
         [switch]$IsDictionaryEntry
     )
     
@@ -26,7 +23,7 @@ function New-DictionarySubTab {
     $keyCol.Binding = [System.Windows.Data.Binding]::new('Key')
     [void]$subGrid.Columns.Add($keyCol)
     
-    $valCol = New-ExpandableValueColumn -Colors $Colors
+    $valCol = New-ExpandableValueColumn
     [void]$subGrid.Columns.Add($valCol)
     
     $list = [System.Collections.Generic.List[object]]::new()

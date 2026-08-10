@@ -3,7 +3,7 @@ function Out-TextEditor {
     .SYNOPSIS
         Opens a themed text editor window.
     .DESCRIPTION
-        Displays text in a themed editor window with find, copy, and optional save.
+        Displays text in a themed editor window. Find and copy are built in, and save is optional.
         Accepts input via parameter or pipeline.
     .PARAMETER InputObject
         Text to display. Accepts string array from pipeline.
@@ -30,12 +30,24 @@ function Out-TextEditor {
         Font face for the editor. Defaults to Consolas.
     .PARAMETER FontSize
         Font size in points.
+    .PARAMETER IconFont
+        Icon font to use for the editor's chrome (header, find, save, etc): Inherit (default -
+        keep whatever Set-PsUiIconFont last established), Auto (re-detect), SegoeMDL2, or
+        SegoeFluentIcons. Honored only when launched standalone - when hosted inside a parent
+        New-UiWindow the parent's font wins. Restored to the previous active font on close.
+    .PARAMETER NoIconFontFallback
+        Pin to the chosen icon font with no WPF fallback chain. Honored only when standalone.
+        On Win10 with only MDL2 installed this changes nothing visually (no secondary to fall
+        back to). The remaining effect is tighter IntelliSense for -Icon names.
     .EXAMPLE
         Out-TextEditor -InitialText "Hello World"
     .EXAMPLE
         Get-Content C:\file.txt | Out-TextEditor -Theme Dark
     .EXAMPLE
         "Line 1", "Line 2", "Line 3" | Out-TextEditor
+    .EXAMPLE
+        Out-TextEditor -InitialText 'Modern' -IconFont SegoeFluentIcons
+        # Render chrome icons in Fluent for this window only.
     #>
     [CmdletBinding()]
     param(
@@ -54,6 +66,10 @@ function Out-TextEditor {
         [string]$FontFamily = 'Consolas',
         [ValidateRange(8, 24)]
         [int]$FontSize = 12,
+        # Default 'Inherit' (rather than leaving unbound) so $IconFont always satisfies the ValidateSet. Any .GetNewClosure() would otherwise carry an unbound "" through the attribute and explode.
+        [ValidateSet('Inherit', 'Auto', 'SegoeMDL2', 'SegoeFluentIcons')]
+        [string]$IconFont = 'Inherit',
+        [switch]$NoIconFontFallback,
         [switch]$ReadOnly,
         [switch]$NoWordWrap,
         [switch]$SpellCheck
@@ -96,13 +112,58 @@ function Out-TextEditor {
     $isStandalone = !(Test-Path variable:__WPFThemeColors)
     Write-Debug "Context: isStandalone=$isStandalone, textLength=$($finalText.Length)"
 
+    # RowContextMenu actions invoke without __WPFThemeColors in scope. Fall back to ActiveTheme, or the default 'Light' below flips the parent window via Initialize-UITheme.
+    if (!$PSBoundParameters.ContainsKey('Theme')) {
+        $active = [PsUi.ModuleContext]::ActiveTheme
+        if (![string]::IsNullOrWhiteSpace($active)) { $Theme = $active }
+    }
+
+    # If standalone, null out the calling script's session pointers around ShowDialog. The editor has no PsUi session of its own (no New-UiButton, no helpers). Without this clear, the parent's CurrentSessionId rides in by thread, Add_Closed disposes it, and the parent window's controls and variables go with it.
+    $priorSessionId = $null
+    $priorGlobalId  = $null
     if ($isStandalone) {
-        # Standalone: use -Theme parameter and initialize full theme resources
+        $priorSessionId = [PsUi.SessionManager]::CurrentSessionId
+        $priorGlobalId  = if (Test-Path variable:Global:__PsUiSessionId) { $Global:__PsUiSessionId } else { $null }
+
+        [PsUi.SessionManager]::ClearCurrentSession()
+        Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue
+
+        # If standalone, create the Application on this (ShowDialog) thread before Initialize-UITheme. ThemeEngine no longer creates it, and a cross thread App loses content theming. Does nothing if one exists. Then initialize full theme resources with -Theme (resolved above).
+        [void][PsUi.ThemeEngine]::EnsureApplication()
         $colors = Initialize-UITheme -Theme $Theme
     }
     else {
-        # Child window: use injected theme colors from parent context
+        # Child window: parent's theme colors are already in __WPFThemeColors.
         $colors = Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue
+    }
+
+    # Push -IconFont override when standalone. Returns $null when inside a parent (parent's font wins) or when no override params were supplied. Restore runs after ShowDialog on the success path. The trap below covers throws between here and there.
+    $overrideParams = @{
+        IsStandalone       = $isStandalone
+        BoundParameters    = $PSBoundParameters
+        IconFont           = $IconFont
+        NoIconFontFallback = [bool]$NoIconFontFallback
+    }
+    $iconFontSnap = Push-UiIconFontOverride @overrideParams
+
+    # A throw between the push and the post ShowDialog restore would leak the override and the session swap. Function scope trap restores both, then break rethrows.
+    trap {
+        if ($iconFontSnap) {
+            [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+            $iconFontSnap = $null
+        }
+        if ($isStandalone) {
+            if ($priorSessionId -and $priorSessionId -ne [Guid]::Empty) {
+                [PsUi.SessionManager]::SetCurrentSession($priorSessionId)
+            }
+            if ($null -ne $priorGlobalId) {
+                $Global:__PsUiSessionId = $priorGlobalId
+            }
+            else {
+                Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+        break
     }
 
     # Ultimate fallback theme colors
@@ -207,7 +268,7 @@ function Out-TextEditor {
 
     $headerIcon = [System.Windows.Controls.TextBlock]@{
         Text              = [PsUi.ModuleContext]::GetIcon('Edit')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 24
         VerticalAlignment = 'Center'
         Width             = 32
@@ -263,7 +324,7 @@ function Out-TextEditor {
     $copyAllPanel.Orientation = 'Horizontal'
     $copyAllIcon = [System.Windows.Controls.TextBlock]::new()
     $copyAllIcon.Text = [PsUi.ModuleContext]::GetIcon('Copy')
-    $copyAllIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $copyAllIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $copyAllIcon.FontSize = 12
     $copyAllIcon.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $copyAllIcon.VerticalAlignment = 'Center'
@@ -287,7 +348,7 @@ function Out-TextEditor {
     $clearPanel.Orientation = 'Horizontal'
     $clearIcon = [System.Windows.Controls.TextBlock]::new()
     $clearIcon.Text = [PsUi.ModuleContext]::GetIcon('Delete')
-    $clearIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $clearIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $clearIcon.FontSize = 12
     $clearIcon.Margin = [System.Windows.Thickness]::new(0, 0, 4, 0)
     $clearIcon.VerticalAlignment = 'Center'
@@ -415,7 +476,7 @@ function Out-TextEditor {
 
     $findClearBtn = [System.Windows.Controls.Button]::new()
     $findClearBtn.Content = [PsUi.ModuleContext]::GetIcon('Cancel')
-    $findClearBtn.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findClearBtn.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findClearBtn.FontSize = 9
     $findClearBtn.Width = 14
     $findClearBtn.Height = 14
@@ -445,7 +506,7 @@ function Out-TextEditor {
     $findPrevBtn.ToolTip = 'Find previous occurrence (Shift+F3)'
     $findPrevIcon = [System.Windows.Controls.TextBlock]::new()
     $findPrevIcon.Text = [PsUi.ModuleContext]::GetIcon('ArrowLeft')
-    $findPrevIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findPrevIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findPrevIcon.FontSize = 12
     $findPrevIcon.HorizontalAlignment = 'Center'
     $findPrevIcon.VerticalAlignment = 'Center'
@@ -462,7 +523,7 @@ function Out-TextEditor {
     $findNextBtn.ToolTip = 'Find next occurrence (F3)'
     $findNextIcon = [System.Windows.Controls.TextBlock]::new()
     $findNextIcon.Text = [PsUi.ModuleContext]::GetIcon('ArrowRight')
-    $findNextIcon.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+    $findNextIcon.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
     $findNextIcon.FontSize = 12
     $findNextIcon.HorizontalAlignment = 'Center'
     $findNextIcon.VerticalAlignment = 'Center'
@@ -530,7 +591,7 @@ function Out-TextEditor {
 
     $scrollViewer = [System.Windows.Controls.ScrollViewer]::new()
     $scrollViewer.VerticalScrollBarVisibility = 'Auto'
-    
+
     # Default to wrap on unless NoWordWrap specified
     $scrollViewer.HorizontalScrollBarVisibility = if ($NoWordWrap) { 'Auto' } else { 'Disabled' }
     [void]$contentPanel.Children.Add($scrollViewer)
@@ -551,41 +612,41 @@ function Out-TextEditor {
     $textBox.FontSize = $FontSize
     $textBox.Padding = [System.Windows.Thickness]::new(8)
     $textBox.IsReadOnly = $ReadOnly
-    
+
     # Enable spell check only if explicitly requested
     [System.Windows.Controls.SpellCheck]::SetIsEnabled($textBox, $SpellCheck)
-    
-    # Create base context menu (we'll add spell suggestions dynamically)
+
+    # Base context menu - spell suggestions get appended dynamically on open
     $baseContextMenu = New-TextBoxContextMenu -ReadOnly:$ReadOnly
     $textBox.ContextMenu = $baseContextMenu
-    
+
     # Add spell check suggestions when context menu opens
     $textBox.Add_ContextMenuOpening({
         param($sender, $eventArgs)
-        
+
         # Get the textbox and its context menu
         $tb = $sender
         $menu = $tb.ContextMenu
-        
+
         # Remove any previous spell check items (they have Tag = 'SpellCheck')
         $itemsToRemove = @($menu.Items | Where-Object { $_.Tag -eq 'SpellCheck' })
         foreach ($item in $itemsToRemove) {
             [void]$menu.Items.Remove($item)
         }
-        
+
         # Spell check suggestions go at the top of the context menu
         if ([System.Windows.Controls.SpellCheck]::GetIsEnabled($tb)) {
             # Get the character index at the mouse position (not caret position)
             $mousePos = [System.Windows.Input.Mouse]::GetPosition($tb)
             $charIndex = $tb.GetCharacterIndexFromPoint($mousePos, $true)
-            
+
             if ($charIndex -ge 0) {
                 $spellingError = $tb.GetSpellingError($charIndex)
-                
+
                 if ($spellingError) {
                     $suggestions = $spellingError.Suggestions
                     $insertIndex = 0
-                    
+
                     # Add spelling suggestions
                     if ($suggestions) {
                         foreach ($suggestion in $suggestions) {
@@ -593,7 +654,7 @@ function Out-TextEditor {
                             $suggestionItem.Header = $suggestion
                             $suggestionItem.FontWeight = [System.Windows.FontWeights]::SemiBold
                             $suggestionItem.Tag = 'SpellCheck'
-                            
+
                             # Capture values for the click handler
                             $capturedSuggestion = $suggestion
                             $capturedError = $spellingError
@@ -603,11 +664,11 @@ function Out-TextEditor {
                                 $capturedError.Correct($capturedSuggestion)
                                 $capturedTextBox.EndChange()
                             }.GetNewClosure())
-                            
+
                             [void]$menu.Items.Insert($insertIndex, $suggestionItem)
                             $insertIndex++
                         }
-                        
+
                         # Add separator after spell check suggestions
                         $spellSeparator = [System.Windows.Controls.Separator]::new()
                         $spellSeparator.Tag = 'SpellCheck'
@@ -804,8 +865,7 @@ function Out-TextEditor {
     }
 
     # Ctrl+Z/Ctrl+Y in findBox must not propagate through the focus toggle to the main editor.
-    # The focus toggle in $updateSelectionWithFocus briefly gives focus to the textBox, and
-    # if the undo keystroke is still being processed, WPF routes it there mid-undo — crash.
+    # The focus toggle in $updateSelectionWithFocus briefly gives focus to the textBox, and if the undo keystroke is still being processed, WPF routes it there mid undo - crash.
     $findBox.Add_PreviewKeyDown({
         param($sender, $eventArgs)
         $mod = [System.Windows.Input.Keyboard]::Modifiers
@@ -814,7 +874,7 @@ function Out-TextEditor {
                 if ($eventArgs.Key -eq 'Z') { $sender.Undo() }
                 else { $sender.Redo() }
             }
-            catch { <# Undo unit may be open from in-progress text change — not critical #> }
+            catch { <# Undo/Redo throws if an undo unit is open mid text change - not critical #> }
             $eventArgs.Handled = $true
         }
     })
@@ -866,11 +926,15 @@ function Out-TextEditor {
     $cancelBtn.Add_Click({ $window.Tag = $null; $window.Close() }.GetNewClosure())
     $saveBtn.Add_Click({ $window.Tag = $textBox.Text; $window.Close() }.GetNewClosure())
 
-    # Wire up standard window loaded behavior with icon
     Initialize-UiWindowLoaded -Window $window -SetIcon
 
-    # Clean up session on window close (only if we created it)
+    # Clean up session on window close (only if this call created it, not wtihin an inherited session)
     $window.Add_Closed({
+        # Stop the copy feedback timer if it's still pending - otherwise it fires once against the disposed window, touching controls that are already gone.
+        if ($script:_copyTimer) {
+            try { $script:_copyTimer.Stop() } catch { Write-Debug "Copy timer stop: $_" }
+            $script:_copyTimer = $null
+        }
         if ($isStandalone) {
             $sessionId = [PsUi.SessionManager]::CurrentSessionId
             if ($sessionId -ne [Guid]::Empty) {
@@ -880,6 +944,19 @@ function Out-TextEditor {
     }.GetNewClosure())
 
     [void]$window.ShowDialog()
+
+    # Tail teardown, not a finally: off pipeline (called from a -NoAsync click) a finally NREs on exit. The function scope trap above mirrors this for a throw from ShowDialog.
+    # Restore the icon font if an override was pushed. Nothing to restore though when $iconFontSnap is $null.
+    [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+    $iconFontSnap = $null
+
+    # Restore the calling script's session pointers. Add_Closed already disposed any editor session. CurrentSessionId is Empty by now.
+    if ($isStandalone) {
+        if ($priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
+
+        if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+        else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
+    }
 
     return $window.Tag
     } # end block

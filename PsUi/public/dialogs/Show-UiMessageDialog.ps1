@@ -66,14 +66,21 @@ function Show-UiMessageDialog {
     $buttonCount   = if ($CustomButtons) { $CustomButtons.Count } else { 3 }
     $minForButtons = [Math]::Max(420, ($buttonCount * 90) + 50)
 
+    # Long messages (error dumps, stack traces, joined multi-row failures) get a wide resizable dialog - at 420 a stack line wraps four deep and the whole thing reads like a ransom note.
+    # Short prompts keep the compact fixed layout.
+    $messageLines = @(if ($Message) { $Message -split "`n" } else { '' })
+    $longestLine  = 0
+    foreach ($msgLine in $messageLines) { if ($msgLine.Length -gt $longestLine) { $longestLine = $msgLine.Length } }
+    $isBigMessage = ($longestLine -gt 80) -or ($messageLines.Count -gt 10)
+
     # PowerShell mode uses fixed size; standard mode sizes to content
     $dialogParams = @{
         Title         = $Title
-        Width         = if ($PowerShell) { 700 } else { $minForButtons }
+        Width         = if ($PowerShell) { 700 } elseif ($isBigMessage) { [Math]::Max(700, $minForButtons) } else { $minForButtons }
         Height        = if ($PowerShell) { 500 } else { 0 }
-        MaxHeight     = if ($PowerShell) { 10000 } else { 800 }
+        MaxHeight     = if ($PowerShell -or $isBigMessage) { 10000 } else { 800 }
         SizeToContent = if ($PowerShell) { 'Manual' } else { 'Height' }
-        ResizeMode    = if ($PowerShell) { 'CanResizeWithGrip' } else { 'NoResize' }
+        ResizeMode    = if ($PowerShell -or $isBigMessage) { 'CanResizeWithGrip' } else { 'NoResize' }
         AppIdSuffix   = 'Message'
         ThemeColors   = $ThemeColors
     }
@@ -125,7 +132,7 @@ function Show-UiMessageDialog {
         $copyContent = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
         $copyIcon = [System.Windows.Controls.TextBlock]@{
             Text              = [PsUi.ModuleContext]::GetIcon('Copy')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 12
             Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
             VerticalAlignment = 'Center'
@@ -176,8 +183,10 @@ function Show-UiMessageDialog {
 
     # Build message content area - different for PowerShell vs standard mode
     if ($PowerShell) {
+
         # PowerShell console-styled TextBox
         $codeBox = [System.Windows.Controls.TextBox]@{
+            
             Text                          = $Message
             IsReadOnly                    = $true
             AcceptsReturn                 = $true
@@ -193,6 +202,7 @@ function Show-UiMessageDialog {
             BorderBrush                   = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#1E3A5F')
             Padding                       = [System.Windows.Thickness]::new(5)
             Margin                        = [System.Windows.Thickness]::new(0, 0, 0, 12)
+        
         }
         
         # Add themed context menu for copy/select all
@@ -224,7 +234,7 @@ function Show-UiMessageDialog {
         if ($hasIcon) {
             $iconBlock = [System.Windows.Controls.TextBlock]@{
                 Text                = $overlayGlyph
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+                FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
                 FontSize            = 32
                 Foreground          = ConvertTo-UiBrush $iconColor
                 VerticalAlignment   = 'Center'

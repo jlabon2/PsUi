@@ -188,6 +188,12 @@ namespace PsUi
             if (cts != null && cts.IsCancellationRequested) return;
             var record = new HostOutputRecord(value, foregroundColor, backgroundColor, noNewLine);
 
+            // Observers get a copy in every mode, before the routing split.
+            if (OnHostObserved != null)
+            {
+                QueueObservedRecord(record);
+            }
+
             // Queue mode: add to queue for UI timer to poll
             if (UseQueueMode)
             {
@@ -263,6 +269,54 @@ namespace PsUi
             {
                 MarshalToUi(delegate { if (OnHostBatch != null) OnHostBatch(toFlush); });
             }
+
+            FlushObservedBatch();
+        }
+
+        // Same accumulate and flush as the OnHostBatch pathing on its own list
+        private void QueueObservedRecord(HostOutputRecord record)
+        {
+            bool shouldFlush = false;
+            List<HostOutputRecord> toFlush = null;
+
+            lock (_observedBatchLock)
+            {
+                _observedBatch.Add(record);
+                var now = DateTime.Now;
+                var elapsed = (now - _lastObservedFlush).TotalMilliseconds;
+
+                if (_observedBatch.Count >= HOST_BATCH_SIZE || elapsed >= HOST_FLUSH_MS)
+                {
+                    toFlush = _observedBatch;
+                    _observedBatch = new List<HostOutputRecord>();
+                    _lastObservedFlush = now;
+                    shouldFlush = true;
+                }
+            }
+
+            if (shouldFlush && toFlush != null && toFlush.Count > 0)
+            {
+                MarshalToUi(delegate { if (OnHostObserved != null) OnHostObserved(toFlush); });
+            }
+        }
+
+        private void FlushObservedBatch()
+        {
+            List<HostOutputRecord> toFlush = null;
+            lock (_observedBatchLock)
+            {
+                if (_observedBatch.Count > 0)
+                {
+                    toFlush = _observedBatch;
+                    _observedBatch = new List<HostOutputRecord>();
+                    _lastObservedFlush = DateTime.Now;
+                }
+            }
+
+            if (toFlush != null && toFlush.Count > 0 && OnHostObserved != null)
+            {
+                MarshalToUi(delegate { if (OnHostObserved != null) OnHostObserved(toFlush); });
+            }
         }
 
         internal void RaiseOnError(PSErrorRecord errorRecord)
@@ -311,7 +365,7 @@ namespace PsUi
         // Progress with throttling - always fires for completion, otherwise throttled
         internal void RaiseOnProgress(ProgressRecord record)
         {
-            if (OnProgress == null) return;
+            if (OnProgress == null || _suppressProgress) return;
 
             lock (_progressLock)
             {

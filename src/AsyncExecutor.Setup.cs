@@ -8,9 +8,7 @@ namespace PsUi
     public partial class AsyncExecutor
     {
         // Cached static portion of setup script (host overrides + module functions).
-        // These don't change between button clicks, only debug flag and caller-specific
-        // functions/modules vary. Caching avoids rebuilding ~200KB of func definitions
-        // on every click (~40ms saved per invoc).
+        // These don't change between button clicks, only debug flag and caller specific functions/modules vary. Caching avoids rebuilding ~200KB of func definitions on every click (~40ms saved per invoc).
         private static string _cachedStaticSetup;
         private static readonly object _cacheLock = new object();
 
@@ -156,10 +154,8 @@ function Global:Out-Host {
 }
 ");
 
-            // We inject ALL private functions (~110 of them) into every async runspace. Yeah it's
-            // ~40ms overhead, but they have interdependencies (Get-ThemeColors -> Get-ContrastColor)
-            // and selective injection would be fragile. Reliability wins over latency here.
-            // Now cached — only paid once per module load instead of every button click.
+            // ALL private functions (~110 of them) go into every async runspace. Yeah it's ~40ms overhead, but they have interdependencies (Get-ThemeColors calls Get-ContrastColor) and selective injection would be fragile. Reliability wins over latency here.
+            // Now cached - only paid once per module load instead of every button click.
             
             // Inject private helper functions from ModuleContext
             var privateFuncs = ModuleContext.PrivateFunctions;
@@ -231,7 +227,11 @@ function Global:Out-Host {
                     try
                     {
                         string name = kvp.Key.ToString();
-                        if (!Constants.IsValidIdentifier(name)) continue;
+                        if (!Constants.IsValidFunctionName(name))
+                        {
+                            Debug.WriteLine("AsyncExecutor: skipping function with unsafe name: " + name);
+                            continue;
+                        }
 
                         string definition = kvp.Value.ToString();
                         sb.AppendFormat("function Global:{0} {{ {1} }}\n", name, definition);

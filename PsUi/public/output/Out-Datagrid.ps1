@@ -1,36 +1,63 @@
 function Out-Datagrid {
     <#
     .SYNOPSIS
-        Displays data in a filterable, sortable grid - a better Out-GridView.
+        Like Out-GridView, but you can read it and theme it.
     .DESCRIPTION
-        Creates a themed data grid window with filtering, sorting, export to CSV,
-        copy to clipboard, and optional selection passthrough. Use -PassThru to
-        return selected items when the window closes.
+        Pipe objects in and receive a sortable filterable grid. Add -PassThru and you get the
+        selected rows back on OK. Closing the window or clicking Cancel returns nothing.
+
+        Filter, sort, copy, export to CSV, and a column picker are in the toolbar.
+
+        Opens the window in place when the caller can host one directly (ISE, PsUi -Sync
+        actions). From a console session that can't, spins up a dedicated UI host and shows
+        the window there. Either way the call blocks until you close it.
+
+        Can't be called from inside an async button action. Use -NoAsync on the button.
     .PARAMETER Data
-        Data to display in the grid. Accepts pipeline input.
+        The objects to show. Take from the pipeline or pass directly.
     .PARAMETER TitleText
         Window title.
     .PARAMETER IsFilterable
-        Enable live text filtering.
+        Show the filter textbox.
     .PARAMETER PassThru
-        Return selected items when the OK button is clicked.
+        Return the selected rows on OK.
     .PARAMETER OutputMode
-        Selection mode: None, Single, or Multiple. Defaults to Multiple with PassThru.
+        How many rows can be selected: None, Single, or Multiple (default - Ctrl/Shift to extend).
     .PARAMETER Theme
-        Color theme: Light, Dark, etc.
+        Color theme. See Get-UiThemeTemplate for the list.
     .PARAMETER Width
-        Window width (400-2000).
+        Window width in pixels (400-2000).
     .PARAMETER Height
-        Window height (300-1500).
+        Window height in pixels (300-1500).
+    .PARAMETER IconFont
+        Which icon font to use for the toolbar: Inherit (default), Auto, SegoeMDL2 (Win10),
+        or SegoeFluentIcons (Win11). Only matters when this is the top-level window. When
+        hosted inside another PsUi window, that window's font wins.
+    .PARAMETER NoIconFontFallback
+        Don't fall back to other icon fonts for missing glyphs. Mostly useful for tightening
+        Tab completion on -Icon parameters.
+    .PARAMETER RowBackground
+        Scriptblock that colors rows. Returns a color string (e.g. '#33FF6B6B') or $null.
+        `$_` is the row inside the scriptblock. Runs as rows scroll into view.
+    .PARAMETER DefaultSort
+        Sort the grid before showing it. Accepts:
+          - 'PropName'
+          - 'PropName -Descending'
+          - @{ Property = 'PropName'; Direction = 'Descending' }
+          - an array of any of the above for multi-key sorting
+    .PARAMETER NoSafeWrap
+        Skip the protective wrapping done on input items. Faster, but if a property getter
+        on one of your objects throws, the whole grid blows up.
     .EXAMPLE
         Get-Process | Out-Datagrid -TitleText 'Processes' -IsFilterable
-        # Display processes in a grid
     .EXAMPLE
         Get-Service | Out-Datagrid -PassThru | Restart-Service
-        # Select services and restart them
     .EXAMPLE
         Get-ChildItem | Out-Datagrid -PassThru -OutputMode Single
-        # Select a single file
+    .EXAMPLE
+        $rowBg   = { if ($_.Status -eq 'Stopped') { '#33FF6B6B' } }
+        $dgSplat = @{ RowBackground = $rowBg; DefaultSort = 'Status' }
+        Get-Service | Out-Datagrid @dgSplat
     #>
     [CmdletBinding()]
     param(
@@ -54,524 +81,401 @@ function Out-Datagrid {
         [int]$Width = 900,
 
         [ValidateRange(300, 1500)]
-        [int]$Height = 600
+        [int]$Height = 600,
+
+        [ValidateSet('Inherit', 'Auto', 'SegoeMDL2', 'SegoeFluentIcons')]
+        [string]$IconFont = 'Inherit',
+
+        [switch]$NoIconFontFallback,
+
+        [scriptblock]$RowBackground,
+
+        $DefaultSort,
+
+        [switch]$NoSafeWrap
     )
 
     begin {
-        # ShowDialog requires the UI thread - block async button actions from calling this
-        if ([PsUi.AsyncExecutor]::CurrentExecutor) {
-            Write-Error 'Out-DataGrid cannot be called from an async button action (ShowDialog requires the UI thread). Use -NoAsync on your button, or call this function outside the DSL.'
-            return
-        }
-
-        Write-Debug "Starting with Title='$TitleText', Theme='$Theme', PassThru=$PassThru"
-
-        # Helper to show themed dialogs
-        function Show-ThemedDialog {
-            param(
-                [string]$Title,
-                [string]$Message,
-                [string]$Buttons = 'OK',
-                [string]$Icon = 'Info'
-            )
-            Show-UiMessageDialog -Title $Title -Message $Message -Buttons $Buttons -Icon $Icon -ThemeColors $colors
-        }
-
-        $allData = [System.Collections.Generic.List[object]]::new()
-        $result = @{ Selection = $null }
+        $accumulated = [System.Collections.Generic.List[object]]::new()
     }
 
     process {
-        if ($Data) {
-            foreach ($item in $Data) {
-                [void]$allData.Add($item)
-            }
+        # $null -ne, not truthiness: a piped 0/''/$false binds as a one element array that PS evaluates falsy.
+        if ($null -ne $Data) {
+            foreach ($item in $Data) { [void]$accumulated.Add($item) }
         }
     }
 
     end {
-        if ($allData.Count -eq 0) {
+        if ($accumulated.Count -eq 0) {
             Write-Warning 'No data to display'
             return
         }
 
-        $isStandalone = !(Test-Path variable:__WPFThemeColors)
-        Write-Debug "Context: isStandalone=$isStandalone, Items=$($allData.Count)"
-
-        if ($isStandalone) {
-            $colors = Initialize-UITheme -Theme $Theme
-        }
-        else {
-            $colors = Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue
+        # ShowDialog needs the UI thread. Match Out-CSVDataGrid's stance and bounce with a clear error rather than freezing your button action partway through.
+        if ([PsUi.AsyncExecutor]::CurrentExecutor) {
+            Write-Error 'Out-Datagrid cannot be called from an async button action (ShowDialog requires the UI thread). Use -NoAsync on the button.'
+            return
         }
 
-        if (!$colors) {
-            $colors = Initialize-UITheme -Theme 'Light'
+        $effectiveSelectionMode = switch ($OutputMode) {
+            'Single' { 'Single' }
+            'None'   { 'None' }
+            default  { 'Extended' }
         }
 
-        # Build window
-        $window = [System.Windows.Window]@{
-            Title                 = $TitleText
-            Width                 = $Width
-            Height                = $Height
-            MinWidth              = 400
-            MinHeight             = 300
-            WindowStartupLocation = 'CenterScreen'
-            FontFamily            = [System.Windows.Media.FontFamily]::new('Segoe UI')
-            ResizeMode            = 'CanResizeWithGrip'
+        # Carry everything the worker needs. Hashtables travel tghrough runspace boundaries by reference so OK button writes to SharedResult are visible in this scope after the worker returns.
+        $sharedResult = @{ OK = $false; Selection = $null }
+        $ctx = @{
+            Items               = $accumulated
+            TitleText           = $TitleText
+            Width               = $Width
+            Height              = $Height
+            Theme               = $Theme
+            IconFont            = $IconFont
+            NoIconFontFallback  = $NoIconFontFallback.IsPresent
+            IsFilterable        = $IsFilterable.IsPresent
+            PassThru            = $PassThru.IsPresent
+            EffSelMode          = $effectiveSelectionMode
+            RowBackground       = $RowBackground
+            DefaultSort         = $DefaultSort
+            NoSafeWrap          = $NoSafeWrap.IsPresent
+            ThemeBound          = $PSBoundParameters.ContainsKey('Theme')
+            IconFontBound       = $PSBoundParameters.ContainsKey('IconFont')
+            NoIconFontFbBound   = $PSBoundParameters.ContainsKey('NoIconFontFallback')
+            SharedResult        = $sharedResult
         }
 
-        # Link to parent window for proper layering
-        $null = Set-WindowOwner -Window $window
-        $window.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'WindowBackgroundBrush')
-        $window.SetResourceReference([System.Windows.Window]::ForegroundProperty, 'ControlForegroundBrush')
+        # For the injected function cleanup inside buildAndShow. $PSCmdlet.SessionState is the calling script's (outside the module) session state. Removing a global function that shadows a module private one only works from a session state outside the module - a plain Remove-Item in module scope hits the shadow and silently leaks the global. Null inside the spawned MTA runspace, which is disposed anyway.
+        $callerSessionState = $PSCmdlet.SessionState
+        $fnRemover = [scriptblock]::Create("Remove-Item -LiteralPath ('Function:' + `$args[0]) -Force -ErrorAction SilentlyContinue")
 
-        Set-UIResources -Window $window -Colors $colors
+        # Window construction + ShowDialog packaged as one closure. Runs inline when the calling script is STA (keeps its UI thread the same as the Application's so theme switches don't cross threads), shipped onto a spawned STA runspace when it's MTA.
+        $buildAndShow = {
+            param($context)
 
-        $appId = "PsUi.DataGrid." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-        [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+            # Create the WPF Application on this thread (the one that will ShowDialog) before any theme call. Does nothing if one exists. Without it, Initialize-UITheme below would create the App via ThemeEngine, which no longer does so - and a later New-UiWindow that inherited a cross thread App would lose all content theming. Must live inside the closure: the MTA path reparses this from a string and runs it on a fresh STA thread.
+            [void][PsUi.ThemeEngine]::EnsureApplication()
 
-        $gridWindowIcon = $null
+            # Inheriting from parent's __WPFThemeColors only makes sense in a runspace that HAS it in scope. The spawned STA runspace path won't.
+            $isStandalone = !(Test-Path variable:__WPFThemeColors)
+            $themeName    = $context.Theme
+            if (!$context.ThemeBound) {
+                $active = [PsUi.ModuleContext]::ActiveTheme
+                if (![string]::IsNullOrWhiteSpace($active)) { $themeName = $active }
+            }
+            if ($isStandalone) {
+                $colors = Initialize-UITheme -Theme $themeName
+            }
+            else {  $colors = Get-Variable -Name __WPFThemeColors -ValueOnly -ErrorAction SilentlyContinue    }
+            if (!$colors) { $colors = Initialize-UITheme -Theme $themeName }
+
+            # Synthesise BoundParameters for Push-UiIconFontOverride from the bound flags.
+            $bp = @{}
+            if ($context.IconFontBound)     { $bp['IconFont']           = $context.IconFont }
+            if ($context.NoIconFontFbBound) { $bp['NoIconFontFallback'] = $context.NoIconFontFallback }
+            $overrideParams = @{
+                IsStandalone       = $isStandalone
+                BoundParameters    = $bp
+                IconFont           = $context.IconFont
+                NoIconFontFallback = [bool]$context.NoIconFontFallback
+            }
+            $iconFontSnap = Push-UiIconFontOverride @overrideParams
+
+            # Full teardown on the error path. No try/finally around the build+ShowDialog below: this closure runs outside the pipeline (inline STA branch, called from a -NoAsync click delegate) where PS's CheckActionPreference NREs on try block exit. The tail block after ShowDialog mirrors this for the success path. Guards cover an early throw before the session exists.
+            trap {
+                foreach ($fnName in $injectedFns) {
+                    if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
+                }
+                if ($null -ne $sessionId -and $sessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($sessionId)  }
+                if ($null -ne $priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
+                
+                if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+                else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+                
+                if ($iconFontSnap) {
+                    [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+                    $iconFontSnap = $null
+                }
+
+                break
+            }
+
+            $window = [System.Windows.Window]@{
+                Title                 = $context.TitleText
+                Width                 = $context.Width
+                Height                = $context.Height
+                MinWidth              = 400
+                MinHeight             = 300
+                WindowStartupLocation = 'CenterScreen'
+                FontFamily            = [System.Windows.Media.FontFamily]::new('Segoe UI')
+                ResizeMode            = 'CanResizeWithGrip'
+            }
+
+            # Pin owner / center BEFORE the session swap below - after it $session.Window is THIS window, and CenterOnParent($window, $window) NullRefs reading the bounds of an unshown self owner.
+            if (!$isStandalone) {
+                Set-UiDialogPosition -Dialog $window
+            }
+            else {
+                $null = Set-WindowOwner -Window $window
+            }
+
+            $window.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'WindowBackgroundBrush')
+            $window.SetResourceReference([System.Windows.Window]::ForegroundProperty, 'ControlForegroundBrush')
+
+            Set-UIResources -Window $window -Colors $colors
+
+            try {
+                $appId = "PsUi.OutDatagrid." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+                [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+            }
+            catch { Write-Debug "SetWindowAppId failed: $_" }
+
+            $datagridIcon = $null
+            try {
+                $datagridIcon = New-WindowIcon -Colors $colors
+                if ($datagridIcon) { $window.Icon = $datagridIcon }
+            }
+            catch { Write-Verbose "Failed to create window icon: $_" }
+
+            $capturedWindow = $window
+            $capturedIcon   = $datagridIcon
+            $window.Add_Loaded({
+                if ($capturedIcon) {
+                    try { [PsUi.WindowManager]::SetTaskbarIcon($capturedWindow, $capturedIcon) }
+                    catch { Write-Debug "SetTaskbarIcon failed: $_" }
+                }
+            }.GetNewClosure())
+
+            $mainPanel = [System.Windows.Controls.DockPanel]@{ LastChildFill = $true }
+            $window.Content = $mainPanel
+
+            $headerBorder = [System.Windows.Controls.Border]@{
+                Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
+                Tag     = 'HeaderBorder'
+            }
+            $headerBorder.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'HeaderBackgroundBrush')
+            [System.Windows.Controls.DockPanel]::SetDock($headerBorder, 'Top')
+
+            $headerGrid = [System.Windows.Controls.Grid]::new()
+            [void]$headerGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{  Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) })
+            [void]$headerGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{  Width = [System.Windows.GridLength]::Auto  })
+
+            $headerStack = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
+            [System.Windows.Controls.Grid]::SetColumn($headerStack, 0)
+
+            $headerIcon = [System.Windows.Controls.TextBlock]@{
+                Text              = [PsUi.ModuleContext]::GetIcon('GridView')
+                FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
+                FontSize          = 24
+                VerticalAlignment = 'Center'
+                Width             = 32
+                TextAlignment     = 'Center'
+                Margin            = [System.Windows.Thickness]::new(0, 0, 12, 0)
+                Tag               = 'HeaderText'
+            }
+            $headerIcon.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'HeaderForegroundBrush')
+            [void]$headerStack.Children.Add($headerIcon)
+
+            $headerTitle = [System.Windows.Controls.TextBlock]@{
+                Text              = $context.TitleText
+                FontSize          = 18
+                FontWeight        = [System.Windows.FontWeights]::SemiBold
+                VerticalAlignment = 'Center'
+                Tag               = 'HeaderText'
+            }
+            $headerTitle.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'HeaderForegroundBrush')
+            [void]$headerStack.Children.Add($headerTitle)
+
+            [void]$headerGrid.Children.Add($headerStack)
+
+            if ($isStandalone) {
+                $themeButtonData = New-ThemePopupButton -Container $window -CurrentTheme $themeName
+                [System.Windows.Controls.Grid]::SetColumn($themeButtonData.Button, 1)
+                [void]$headerGrid.Children.Add($themeButtonData.Button)
+            }
+
+            $headerBorder.Child = $headerGrid
+            [void]$mainPanel.Children.Add($headerBorder)
+
+            $bodyGrid = [System.Windows.Controls.Grid]@{  Margin = [System.Windows.Thickness]::new(12)  }
+            [void]$bodyGrid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]@{  Height = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) })
+            [void]$bodyGrid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]@{  Height = [System.Windows.GridLength]::Auto })
+            [void]$mainPanel.Children.Add($bodyGrid)
+
+            $gridHost = [System.Windows.Controls.Grid]::new()
+            [System.Windows.Controls.Grid]::SetRow($gridHost, 0)
+            [void]$bodyGrid.Children.Add($gridHost)
+
+            $buttonBar = [System.Windows.Controls.StackPanel]@{
+                Orientation         = 'Horizontal'
+                HorizontalAlignment = 'Right'
+                Margin              = [System.Windows.Thickness]::new(0, 8, 0, 0)
+            }
+            [System.Windows.Controls.Grid]::SetRow($buttonBar, 1)
+            [void]$bodyGrid.Children.Add($buttonBar)
+
+            # Get-UiSession checks $Global:__PsUiSessionId BEFORE SessionManager.Current. Without an override on the global, New-UiDataGrid finds the parent's session and adds the grid to the parent's CurrentParent (the wrong window) instead of this gridHost.
+            $priorSessionId = [PsUi.SessionManager]::CurrentSessionId
+            $priorGlobalId  = if (Test-Path variable:Global:__PsUiSessionId) { $Global:__PsUiSessionId } else { $null }
+
+            $sessionId = [PsUi.SessionManager]::CreateSession()
+            [PsUi.SessionManager]::SetCurrentSession($sessionId)
+            $Global:__PsUiSessionId = $sessionId.ToString()
+
+            $session = [PsUi.SessionManager]::Current
+            $session.Window        = $window
+            $session.CurrentParent = $gridHost
+
+            # Grid handlers and the OK button are GetNewClosure scriptblocks - WPF resolves their calls against the runspace GLOBAL scope. New-UiWindow injects private functions for exactly this. These paths get none, so copy/export/PassThru died CommandNotFound.
+            $injectedFns = [System.Collections.Generic.List[string]]::new()
+            $privFns     = [PsUi.ModuleContext]::PrivateFunctions
+            if ($privFns) {
+                foreach ($fnName in @($privFns.Keys)) {
+                    # Add only what's missing so cleanup can't take out a preexisting global
+                    if (!(Test-Path -LiteralPath "function:global:$fnName")) {
+                        Set-Item -LiteralPath "function:global:$fnName" -Value ([scriptblock]::Create([string]$privFns[$fnName]))
+                        [void]$injectedFns.Add($fnName)
+                    }
+                }
+            }
+
+            $gridArgs = @{
+                Items              = $context.Items
+                Variable           = 'picked'
+                SelectionMode      = $context.EffSelMode
+                FullWidth          = $true
+                CaptureScrollWheel = $true
+            }
+            if (!$context.IsFilterable) { $gridArgs.NoFilter      = $true }
+            if ($context.RowBackground) { $gridArgs.RowBackground = $context.RowBackground }
+            if ($context.DefaultSort)   { $gridArgs.DefaultSort   = $context.DefaultSort }
+            if ($context.NoSafeWrap)    { $gridArgs.NoSafeWrap    = $true }
+
+            New-UiDataGrid @gridArgs
+
+            $session.CurrentParent = $buttonBar
+
+            # Direct refs for the click actions - Get-UiSession comes back null in WPF click scopes (and isn't resolvable at all on the inline path), which made (Get-UiSession).Window.Close() NullRef at OK time.
+            $winRef    = $window
+            $resultRef = $context.SharedResult
+            $gridRef   = $session.GetControl('picked')
+
+            if ($context.PassThru) {
+                New-UiButton -Text 'OK' -NoAsync -Action {
+                    # -NoAsync skips variable hydration so $picked is empty - read SelectedItems off the captured grid ref, then close via the captured window ref.
+                    try {
+                        if ($gridRef -and $resultRef) {
+                            $resultRef.OK        = $true
+                            $resultRef.Selection = @($gridRef.SelectedItems | ForEach-Object {
+                                if ($null -ne $_._BaseObject) { $_._BaseObject } else { $_ }
+                            })
+                        }
+                    }
+                    catch { Write-Debug "Out-Datagrid OK action selection capture failed: $_" }
+                    if ($winRef) { $winRef.Close() }
+                }.GetNewClosure()
+                New-UiButton -Text 'Cancel' -NoAsync -Action {
+                    if ($winRef) { $winRef.Close() }
+                }.GetNewClosure()
+            }
+            else {
+                New-UiButton -Text 'Close' -NoAsync -Action {
+                    if ($winRef) { $winRef.Close() }
+                }.GetNewClosure()
+            }
+
+            for ($i = 1; $i -lt $buttonBar.Children.Count; $i++) {
+                $buttonBar.Children[$i].Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+            }
+
+            [void]$window.ShowDialog()
+
+            # Success path teardown, mirroring the trap above. Plain statements, not a finally - outside the pipeline the finally would NRE on exit. The trap covers the error path.
+            foreach ($fnName in $injectedFns) {
+                # A plain Remove-Item runs in module scope and hits the module's own shadow, never the injected global copy (leaks). Run it in the calling session state (outside the module) where Function:name resolves to the global one. Null in the spawned MTA runspace (disposed).
+                if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
+            }
+            [PsUi.SessionManager]::DisposeSession($sessionId)
+            if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
+            
+            if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+            else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
+            
+            if ($iconFontSnap) {
+                [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
+                $iconFontSnap = $null
+            }
+
+            # Emit the final result after cleanup. The MTA path reads this through $ps.Invoke() output. Cross runspace AddArgument marshaling of $context.SharedResult is within the same process so the hashtable mutation usually round-trips, but emit is the contract.
+            [PSCustomObject]@{
+                OK        = [bool]$context.SharedResult.OK
+                Selection = $context.SharedResult.Selection
+            }
+        }
+
+        # The build scriptblock owns its cleanup. This catch logs breadcrumbs and rethrows.
+        # Swallowing made any build/ShowDialog failure look exactly like Cancel - no window, no error, -PassThru empty. A mistitled parent error popup beats silent.
+        $emitted = $null
         try {
-            $gridWindowIcon = New-WindowIcon -Colors $colors
-            if ($gridWindowIcon) {
-                $window.Icon = $gridWindowIcon
+            if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -eq [System.Threading.ApartmentState]::STA) {
+                $emitted = & $buildAndShow $ctx
+            }
+            else {
+                # MTA host (typically pwsh.exe console). Window construction requires STA - spawn one. No parent UI thread to block in this case so the original cross thread theme bug doesn't apply.
+                $modulePath = (Get-Module -Name PsUi).Path
+                if (!$modulePath) {
+                    Write-Error "Out-Datagrid: PsUi module path not resolvable; can't spawn STA runspace."
+                    return
+                }
+
+                $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+                $rs.ApartmentState = [System.Threading.ApartmentState]::STA
+                $rs.ThreadOptions  = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+                $rs.Open()
+                $ps = $null
+                try {
+                    $ps = [System.Management.Automation.PowerShell]::Create()
+                    $ps.Runspace = $rs
+                    [void]$ps.AddCommand('Import-Module').AddArgument($modulePath).AddParameter('Force', $true)
+                    [void]$ps.Invoke()
+                    $ps.Commands.Clear()
+
+                    # Pass the scriptblock as a string - ScriptBlock objects are pinned to their creation runspace. The $wrapper reparses it inside the module's session state so private functions resolve. Otherwise the first private call dies.
+                    $wrapper = {
+                        param($scriptText, $context)
+                        # Two PsUi modules load in the spawned runspace: binary (PsUi.dll) and script (PsUi.psm1). Only the script one can be invoked with & - the binary throws "Cannot use '&' to invoke in the context of binary module".
+                        $mod = Get-Module PsUi | Where-Object { $_.ModuleType -eq 'Script' } | Select-Object -First 1
+                        if (!$mod) { throw "PsUi script module not loaded in spawned runspace" }
+                        & $mod {
+                            param($text, $ctx)
+                            $sb = [scriptblock]::Create($text)
+                            & $sb $ctx
+                        } $scriptText $context
+                    }
+                    [void]$ps.AddScript($wrapper.ToString()).AddArgument($buildAndShow.ToString()).AddArgument($ctx)
+                    $emitted = $ps.Invoke()
+
+                    foreach ($errorRecord in $ps.Streams.Error) { $Host.UI.WriteErrorLine($errorRecord.ToString()) }
+                }
+                finally {
+                    if ($ps) { $ps.Dispose() }
+                    $rs.Close()
+                    $rs.Dispose()
+                }
             }
         }
         catch {
-            Write-Verbose "Failed to create window icon: $_"
+            Write-Debug "Out-Datagrid dispatch caught: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+            Write-Debug "Stack: $($_.ScriptStackTrace)"
+            throw
         }
 
-        $overlayIcon = $null
-        try {
-            $gridGlyph = [PsUi.ModuleContext]::GetIcon('Grid')
-            $overlayIcon = New-TaskbarOverlayIcon -GlyphChar $gridGlyph -Color $colors.Accent
-            # Store glyph in resources for theme updates
-            $window.Resources['OverlayGlyph'] = $gridGlyph
-        }
-        catch { Write-Debug "Taskbar overlay failed: $_" }
+        # Pick the emitted result object out of whatever buildAndShow streamed. Picks last so any intermediate writes from inner code don't take precedence over the final summary.
+        $result = $emitted |
+            Where-Object { $_ -is [System.Management.Automation.PSObject] -and $_.PSObject.Properties['OK'] } |
+            Select-Object -Last 1
 
-        $capturedGridWindow = $window
-        $capturedGridIcon   = $gridWindowIcon
-        $capturedOverlay    = $overlayIcon
-
-        $window.Add_Loaded({
-            if ($capturedGridIcon) {
-                [PsUi.WindowManager]::SetTaskbarIcon($capturedGridWindow, $capturedGridIcon)
-            }
-            if ($capturedOverlay) {
-                [PsUi.WindowManager]::SetTaskbarOverlay($capturedGridWindow, $capturedOverlay, 'Data')
-            }
-        }.GetNewClosure())
-
-        $mainPanel = [System.Windows.Controls.DockPanel]@{ LastChildFill = $true }
-        $window.Content = $mainPanel
-
-        # Header bar
-        $headerBorder = [System.Windows.Controls.Border]@{
-            Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
-            Tag     = 'HeaderBorder'
-        }
-        $headerBorder.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'HeaderBackgroundBrush')
-        [System.Windows.Controls.DockPanel]::SetDock($headerBorder, 'Top')
-
-        $headerGrid = [System.Windows.Controls.Grid]::new()
-        $col1 = [System.Windows.Controls.ColumnDefinition]@{ Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }
-        $col2 = [System.Windows.Controls.ColumnDefinition]@{ Width = [System.Windows.GridLength]::Auto }
-        [void]$headerGrid.ColumnDefinitions.Add($col1)
-        [void]$headerGrid.ColumnDefinitions.Add($col2)
-
-        $headerStack = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
-        [System.Windows.Controls.Grid]::SetColumn($headerStack, 0)
-
-        $headerIcon = [System.Windows.Controls.TextBlock]@{
-            Text              = [PsUi.ModuleContext]::GetIcon('Grid')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
-            FontSize          = 24
-            VerticalAlignment = 'Center'
-            Width             = 32
-            TextAlignment     = 'Center'
-            Margin            = [System.Windows.Thickness]::new(0, 0, 12, 0)
-            Tag               = 'HeaderText'
-        }
-        $headerIcon.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'HeaderForegroundBrush')
-        [void]$headerStack.Children.Add($headerIcon)
-
-        $headerTitle = [System.Windows.Controls.TextBlock]@{
-            Text              = $TitleText
-            FontSize          = 18
-            FontWeight        = [System.Windows.FontWeights]::SemiBold
-            VerticalAlignment = 'Center'
-            Tag               = 'HeaderText'
-        }
-        $headerTitle.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'HeaderForegroundBrush')
-        [void]$headerStack.Children.Add($headerTitle)
-
-        [void]$headerGrid.Children.Add($headerStack)
-
-        # Theme button (standalone only)
-        if ($isStandalone) {
-            $themeButtonData = New-ThemePopupButton -Container $window -CurrentTheme $Theme
-            [System.Windows.Controls.Grid]::SetColumn($themeButtonData.Button, 1)
-            [void]$headerGrid.Children.Add($themeButtonData.Button)
-        }
-
-        $headerBorder.Child = $headerGrid
-        [void]$mainPanel.Children.Add($headerBorder)
-
-        # Content area
-        $contentPanel = [System.Windows.Controls.DockPanel]@{
-            Margin        = [System.Windows.Thickness]::new(12)
-            LastChildFill = $true
-        }
-        [void]$mainPanel.Children.Add($contentPanel)
-
-        # Filter toolbar
-        $toolbar = [System.Windows.Controls.StackPanel]@{
-            Orientation = 'Horizontal'
-            Margin      = [System.Windows.Thickness]::new(0, 0, 0, 8)
-        }
-        [System.Windows.Controls.DockPanel]::SetDock($toolbar, 'Top')
-        [void]$contentPanel.Children.Add($toolbar)
-
-        $filterBox = $null
-        if ($IsFilterable) {
-            $filterLabel = [System.Windows.Controls.TextBlock]@{
-                Text              = 'Filter:'
-                VerticalAlignment = 'Center'
-                Margin            = [System.Windows.Thickness]::new(0, 0, 8, 0)
-            }
-            $filterLabel.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
-            [void]$toolbar.Children.Add($filterLabel)
-
-            $filterBoxContainer = [System.Windows.Controls.Grid]@{
-                Width             = 200
-                Height            = 26
-                VerticalAlignment = 'Center'
-            }
-
-            $filterBox = [System.Windows.Controls.TextBox]@{
-                Height  = 26
-                Padding = [System.Windows.Thickness]::new(4, 0, 20, 0)
-            }
-            Set-TextBoxStyle -TextBox $filterBox
-            [void]$filterBoxContainer.Children.Add($filterBox)
-
-            # Clear button overlaid on filter box
-            $filterClearBtn = [System.Windows.Controls.Button]@{
-                Content             = [PsUi.ModuleContext]::GetIcon('Cancel')
-                FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
-                FontSize            = 10
-                Width               = 16
-                Height              = 16
-                Padding             = [System.Windows.Thickness]::new(0)
-                Margin              = [System.Windows.Thickness]::new(0, 0, 5, 0)
-                HorizontalAlignment = 'Right'
-                VerticalAlignment   = 'Center'
-                Background          = [System.Windows.Media.Brushes]::Transparent
-                BorderThickness     = [System.Windows.Thickness]::new(0)
-                Cursor              = [System.Windows.Input.Cursors]::Hand
-                Visibility          = 'Collapsed'
-                ToolTip             = 'Clear'
-                Tag                 = $filterBox
-            }
-            $filterClearBtn.SetResourceReference([System.Windows.Controls.Button]::ForegroundProperty, 'SecondaryTextBrush')
-            $filterClearBtn.Add_Click({ $this.Tag.Text = ''; $this.Tag.Focus() }.GetNewClosure())
-            [void]$filterBoxContainer.Children.Add($filterClearBtn)
-
-            $filterBox.Tag = @{ ClearButton = $filterClearBtn }
-            [void]$toolbar.Children.Add($filterBoxContainer)
-        }
-
-        # Button panel at bottom
-        $buttonPanel = [System.Windows.Controls.StackPanel]@{
-            Orientation         = 'Horizontal'
-            HorizontalAlignment = 'Right'
-            Margin              = [System.Windows.Thickness]::new(0, 8, 0, 0)
-        }
-        [System.Windows.Controls.DockPanel]::SetDock($buttonPanel, 'Bottom')
-        [void]$contentPanel.Children.Add($buttonPanel)
-
-        # Export button
-        $exportBtn = [System.Windows.Controls.Button]@{
-            Width   = 36
-            Height  = 32
-            Margin  = [System.Windows.Thickness]::new(0, 0, 8, 0)
-            ToolTip = 'Export to CSV'
-            Padding = [System.Windows.Thickness]::new(0)
-        }
-        $exportIcon = [System.Windows.Controls.TextBlock]@{
-            Text                = [PsUi.ModuleContext]::GetIcon('SaveLocal')
-            FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
-            FontSize            = 16
-            HorizontalAlignment = 'Center'
-            VerticalAlignment   = 'Center'
-        }
-        $exportBtn.Content = $exportIcon
-        Set-ButtonStyle -Button $exportBtn
-        [void]$buttonPanel.Children.Add($exportBtn)
-
-        # Copy button
-        $copyBtn = [System.Windows.Controls.Button]@{
-            Width   = 36
-            Height  = 32
-            Margin  = [System.Windows.Thickness]::new(0, 0, 8, 0)
-            ToolTip = 'Copy selected to clipboard'
-            Padding = [System.Windows.Thickness]::new(0)
-        }
-        $copyIcon = [System.Windows.Controls.TextBlock]@{
-            Text                = [PsUi.ModuleContext]::GetIcon('Copy')
-            FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
-            FontSize            = 16
-            HorizontalAlignment = 'Center'
-            VerticalAlignment   = 'Center'
-        }
-        $copyBtn.Content = $copyIcon
-        Set-ButtonStyle -Button $copyBtn
-        [void]$buttonPanel.Children.Add($copyBtn)
-
-        # OK button (only shown when PassThru)
-        $okBtn = $null
-        if ($PassThru) {
-            $okBtn = [System.Windows.Controls.Button]@{
-                Content = 'OK'
-                Width   = 80
-                Height  = 32
-                Margin  = [System.Windows.Thickness]::new(0, 0, 8, 0)
-            }
-            Set-ButtonStyle -Button $okBtn -Accent
-            [void]$buttonPanel.Children.Add($okBtn)
-        }
-
-        # Cancel/Close button
-        $cancelBtn = [System.Windows.Controls.Button]@{
-            Content = if ($PassThru) { 'Cancel' } else { 'Close' }
-            Width   = 80
-            Height  = 32
-        }
-        Set-ButtonStyle -Button $cancelBtn
-        [void]$buttonPanel.Children.Add($cancelBtn)
-
-        # DataGrid
-        $selectionMode = switch ($OutputMode) {
-            'Single' { 'Single' }
-            default  { 'Extended' }
-        }
-        $dataGrid = [System.Windows.Controls.DataGrid]::new()
-        Set-DataGridStyle -Grid $dataGrid -SelectionMode $selectionMode
-        $dataGrid.AutoGenerateColumns         = $true
-        $dataGrid.IsReadOnly                  = $true
-        $dataGrid.EnableRowVirtualization     = $true
-        $dataGrid.EnableColumnVirtualization  = $true
-        [System.Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($dataGrid, $true)
-        [System.Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($dataGrid, 'Recycling')
-        [void]$contentPanel.Children.Add($dataGrid)
-
-        # Context menu
-        $null = New-DataGridContextMenu -DataGrid $dataGrid
-
-        # Per-window state captured by closures (avoids $script: collisions between grids)
-        $gridState = @{
-            SearchCache     = @{}
-            UnfilteredItems = [System.Collections.Generic.List[object]]::new()
-            DataObservable  = $null
-            CollectionView  = $null
-            FilterTimer     = $null
-            CopyTimer       = $null
-        }
-
-        # Load data and pre-cache search strings for fast filtering
-        $observable = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-        foreach ($item in $allData) {
-            [void]$observable.Add($item)
-            [void]$gridState.UnfilteredItems.Add($item)
-            # Build a single concatenated search string for each item
-            $searchParts = [System.Collections.Generic.List[string]]::new()
-            foreach ($prop in $item.PSObject.Properties) {
-                if ($null -ne $prop.Value) {
-                    $searchParts.Add($prop.Value.ToString())
-                }
-            }
-            $gridState.SearchCache[$item] = $searchParts -join '|'
-        }
-        $gridState.DataObservable = $observable
-        $gridState.CollectionView = [System.Windows.Data.CollectionViewSource]::GetDefaultView($observable)
-        $dataGrid.ItemsSource = $gridState.CollectionView
-
-        # Manually create columns with explicit SortMemberPath for reliable sorting
-        $dataGrid.AutoGenerateColumns = $false
-        if ($allData.Count -gt 0) {
-            $firstItem = $allData[0]
-            foreach ($prop in $firstItem.PSObject.Properties) {
-                $col = [System.Windows.Controls.DataGridTextColumn]::new()
-                $col.Header = $prop.Name
-                $col.Binding = [System.Windows.Data.Binding]::new($prop.Name)
-                $col.SortMemberPath = $prop.Name
-                $col.CanUserSort = $true
-                [void]$dataGrid.Columns.Add($col)
-            }
-        }
-
-        # Filter handler with debouncing - rebuilds collection to avoid delegate issues with sorting
-        if ($IsFilterable -and $filterBox) {
-            $filterBox.Add_TextChanged({
-                $clearBtn = $filterBox.Tag.ClearButton
-                if ($clearBtn) {
-                    $clearBtn.Visibility = if ([string]::IsNullOrEmpty($filterBox.Text)) { 'Collapsed' } else { 'Visible' }
-                }
-
-                if ($gridState.FilterTimer) {
-                    $gridState.FilterTimer.Stop()
-                    $gridState.FilterTimer = $null
-                }
-
-                $gridState.FilterTimer = [System.Windows.Threading.DispatcherTimer]::new()
-                $gridState.FilterTimer.Interval = [TimeSpan]::FromMilliseconds(300)
-
-                $gridState.FilterTimer.Add_Tick({
-                    $text = $filterBox.Text.Trim()
-
-                    # Collection rebuild avoids delegate issues with WPF sorting
-                    if ($gridState.UnfilteredItems -and $gridState.DataObservable) {
-                        # Capture current sort state
-                        $sortDescriptions = @()
-                        if ($gridState.CollectionView) {
-                            foreach ($sd in $gridState.CollectionView.SortDescriptions) {
-                                $sortDescriptions += $sd
-                            }
-                        }
-
-                        $gridState.DataObservable.Clear()
-
-                        foreach ($item in $gridState.UnfilteredItems) {
-                            if ([string]::IsNullOrEmpty($text)) {
-                                [void]$gridState.DataObservable.Add($item)
-                            }
-                            else {
-                                $cached = $gridState.SearchCache[$item]
-                                if ($cached -and $cached.IndexOf($text, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                                    [void]$gridState.DataObservable.Add($item)
-                                }
-                            }
-                        }
-
-                        # Reapply sort
-                        if ($gridState.CollectionView -and $sortDescriptions.Count -gt 0) {
-                            $gridState.CollectionView.SortDescriptions.Clear()
-                            foreach ($sd in $sortDescriptions) {
-                                $gridState.CollectionView.SortDescriptions.Add($sd)
-                            }
-                        }
-                    }
-
-                    $gridState.FilterTimer.Stop()
-                    $gridState.FilterTimer = $null
-                })
-
-                $gridState.FilterTimer.Start()
-            })
-        }
-
-        # Export handler
-        $exportBtn.Add_Click({
-            $saveDialog = [Microsoft.Win32.SaveFileDialog]::new()
-            $saveDialog.Filter = 'CSV Files (*.csv)|*.csv|All Files (*.*)|*.*'
-            $saveDialog.DefaultExt = '.csv'
-            $saveDialog.FileName = 'export.csv'
-            if ($saveDialog.ShowDialog()) {
-                try {
-                    $items = @($dataGrid.ItemsSource)
-                    if ($items.Count -gt 0) {
-                        $items | Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Force
-                        Show-ThemedDialog -Title 'Export Complete' -Message "Exported to:`n$($saveDialog.FileName)" -Buttons OK -Icon Info
-                    }
-                }
-                catch {
-                    Show-ThemedDialog -Title 'Export Failed' -Message "Failed: $_" -Buttons OK -Icon Error
-                }
-            }
-        }.GetNewClosure())
-
-        # Copy handler
-        $copyBtn.Add_Click({
-            if ($dataGrid.SelectedItems.Count -gt 0) {
-                try {
-                    $text = $dataGrid.SelectedItems | ConvertTo-Csv -NoTypeInformation | Out-String
-                    [System.Windows.Clipboard]::SetText($text)
-
-                    # Visual feedback
-                    $copyIcon.Text = [PsUi.ModuleContext]::GetIcon('Check')
-                    $originalBg = $copyBtn.Background
-                    $accentBrush = [System.Windows.Application]::Current.TryFindResource('AccentBrush')
-                    if ($accentBrush) { $copyBtn.Background = $accentBrush }
-
-                    $gridState.CopyTimer = [System.Windows.Threading.DispatcherTimer]::new()
-                    $gridState.CopyTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
-                    $gridState.CopyTimer.Tag = @{ Button = $copyBtn; Icon = $copyIcon; OriginalBg = $originalBg }
-                    $gridState.CopyTimer.Add_Tick({
-                        param($sender, $eventArgs)
-                        $data = $sender.Tag
-                        $data.Button.Background = $data.OriginalBg
-                        $data.Icon.Text = [PsUi.ModuleContext]::GetIcon('Copy')
-                        $sender.Stop()
-                    })
-                    $gridState.CopyTimer.Start()
-                }
-                catch {
-                    Show-ThemedDialog -Title 'Copy Failed' -Message "Failed: $_" -Buttons OK -Icon Error
-                }
-            }
-            else {
-                Show-ThemedDialog -Title 'No Selection' -Message 'Select rows to copy' -Buttons OK -Icon Warning
-            }
-        }.GetNewClosure())
-
-        # OK button returns selection and closes
-        if ($okBtn) {
-            $okBtn.Add_Click({
-                $result.Selection = @($dataGrid.SelectedItems)
-                $window.Close()
-            }.GetNewClosure())
-        }
-
-        # Cancel just closes
-        $cancelBtn.Add_Click({ $window.Close() }.GetNewClosure())
-
-        # Standard window setup
-        Initialize-UiWindowLoaded -Window $window -SetIcon
-
-        # Cleanup on window close
-        $window.Add_Closed({
-            # Stop any active filter timer to prevent callbacks on disposed controls
-            if ($gridState.FilterTimer) {
-                $gridState.FilterTimer.Stop()
-                $gridState.FilterTimer = $null
-            }
-
-            # Release data structures
-            $gridState.SearchCache     = $null
-            $gridState.UnfilteredItems = $null
-            $gridState.DataObservable  = $null
-            $gridState.CollectionView  = $null
-
-            if ($isStandalone) {
-                $sessionId = [PsUi.SessionManager]::CurrentSessionId
-                if ($sessionId -ne [Guid]::Empty) {
-                    [PsUi.SessionManager]::DisposeSession($sessionId)
-                }
-            }
-        }.GetNewClosure())
-
-        # Position window on parent's monitor when launched from PsUi context
-        if (!$isStandalone) {
-            Set-UiDialogPosition -Dialog $window
-        }
-
-        [void]$window.ShowDialog()
-
-        # Return selection if PassThru and OK was clicked
-        if ($PassThru -and $result.Selection) {
-            return $result.Selection
-        }
+        if ($PassThru -and $result -and $result.OK) { return $result.Selection }
     }
 }

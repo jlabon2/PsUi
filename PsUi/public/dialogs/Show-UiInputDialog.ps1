@@ -159,17 +159,21 @@ function Show-UiInputDialog {
     [void]$buttonPanel.Children.Add($cancelBtn)
     $cancelBtn.IsCancel = $true
 
+    # Pre-compute border brush so the handler doesn't call ConvertTo-UiBrush at runtime 
+    # (WPF callbacks resolve to the Global:-scoped function copy # where the brush cache may not be initialized)
+    $borderBrush = ConvertTo-UiBrush $colors.Border
+
     # Clear error on text change
     if ($inputBox -is [System.Windows.Controls.PasswordBox]) {
         $inputBox.Add_PasswordChanged({
             $errorText.Visibility = 'Collapsed'
-            $inputBox.BorderBrush = ConvertTo-UiBrush $colors.Border
+            $inputBox.BorderBrush = $borderBrush
         }.GetNewClosure())
     }
     else {
         $inputBox.Add_TextChanged({
             $errorText.Visibility = 'Collapsed'
-            $inputBox.BorderBrush = ConvertTo-UiBrush $colors.Border
+            $inputBox.BorderBrush = $borderBrush
         }.GetNewClosure())
     }
 

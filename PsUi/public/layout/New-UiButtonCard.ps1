@@ -15,7 +15,7 @@ function New-UiButtonCard {
     .PARAMETER Description
         Optional description text shown below the header.
     .PARAMETER Icon
-        Icon name from Segoe MDL2 Assets (e.g., 'Play', 'Save', 'Processing').
+        Icon name (e.g., 'Play', 'Save', 'Processing'). Use Show-UiGlyphBrowser to browse names.
     .PARAMETER ButtonText
         Text shown on the action button. Defaults to 'Go'.
     .PARAMETER Action
@@ -153,7 +153,7 @@ function New-UiButtonCard {
         $grid.ColumnDefinitions[0].Width = [System.Windows.GridLength]::new(48)
         $iconBlock = [System.Windows.Controls.TextBlock]@{
             Text = $iconText
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize = 24
             HorizontalAlignment = 'Center'
             VerticalAlignment = 'Center'

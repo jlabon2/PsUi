@@ -19,6 +19,10 @@ function Get-UiDefinition {
         [string[]]$FilePickerParameters = @(),
         [string[]]$FolderPickerParameters = @(),
         [string[]]$ComputerPickerParameters = @(),
+        [string[]]$UserPickerParameters = @(),
+        [string[]]$GroupPickerParameters = @(),
+        [string[]]$MemberPickerParameters = @(),
+        [string[]]$OUPickerParameters = @(),
         [switch]$NoAutoHelpers,
 
         # Caller's SessionState for local function lookup
@@ -339,7 +343,11 @@ function Get-UiDefinition {
     $allParams = $cmdInfo.Parameters
     $parameterSets = $cmdInfo.ParameterSets | Where-Object { $_.Name -ne '__AllParameterSets' } | ForEach-Object { $_.Name }
     $hasMultipleSets = $parameterSets.Count -gt 1
-    $parameterSetName = if ($ParameterSet) { $ParameterSet } else { $cmdInfo.DefaultParameterSet }
+    # Use explicit set, then default, then first available (some cmdlets have no default)
+    $parameterSetName = if ($ParameterSet) { $ParameterSet }
+                        elseif ($cmdInfo.DefaultParameterSet) { $cmdInfo.DefaultParameterSet }
+                        elseif ($parameterSets.Count -gt 0) { $parameterSets[0] }
+                        else { $null }
 
     $paramSetDef = $null
     if ($parameterSetName) {
@@ -539,11 +547,19 @@ function Get-UiDefinition {
         FilePicker     = [System.Collections.Generic.List[string]]::new()
         FolderPicker   = [System.Collections.Generic.List[string]]::new()
         ComputerPicker = [System.Collections.Generic.List[string]]::new()
+        UserPicker     = [System.Collections.Generic.List[string]]::new()
+        GroupPicker    = [System.Collections.Generic.List[string]]::new()
+        MemberPicker   = [System.Collections.Generic.List[string]]::new()
+        OUPicker       = [System.Collections.Generic.List[string]]::new()
         FilterBuilder  = @{}
     }
     if ($FilePickerParameters) { $inputHelpers.FilePicker.AddRange($FilePickerParameters) }
     if ($FolderPickerParameters) { $inputHelpers.FolderPicker.AddRange($FolderPickerParameters) }
     if ($ComputerPickerParameters) { $inputHelpers.ComputerPicker.AddRange($ComputerPickerParameters) }
+    if ($UserPickerParameters) { $inputHelpers.UserPicker.AddRange($UserPickerParameters) }
+    if ($GroupPickerParameters) { $inputHelpers.GroupPicker.AddRange($GroupPickerParameters) }
+    if ($MemberPickerParameters) { $inputHelpers.MemberPicker.AddRange($MemberPickerParameters) }
+    if ($OUPickerParameters) { $inputHelpers.OUPicker.AddRange($OUPickerParameters) }
 
     # Detect command type to determine filter mode
     $cmdName = $cmdInfo.Name
@@ -571,11 +587,7 @@ function Get-UiDefinition {
         foreach ($param in $parameters) {
             $pName = $param.Name
 
-            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName) {
-                continue
-            }
-
-            if ($param.Type -and $param.Type -ne [string] -and $param.Type -ne [string[]]) {
+            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName -or $inputHelpers.UserPicker -contains $pName -or $inputHelpers.GroupPicker -contains $pName -or $inputHelpers.MemberPicker -contains $pName -or $inputHelpers.OUPicker -contains $pName) {
                 continue
             }
 
@@ -587,6 +599,18 @@ function Get-UiDefinition {
             }
             elseif ($pName -match '^Filter$|^Include$|^Exclude$') {
                 $inputHelpers.FilterBuilder[$pName] = $filterMode
+            }
+            elseif ($pName -match '^OU$|^SearchBase$|^BaseDN$|^SearchRoot$|^TargetOU$|OrganizationalUnit') {
+                $inputHelpers.OUPicker.Add($pName)
+            }
+            elseif ($pName -match '^Owner$|^Manager$|^User$|^UserName$|^SamAccountName$|^UserPrincipalName$|^UPN$') {
+                $inputHelpers.UserPicker.Add($pName)
+            }
+            elseif ($pName -match '^Group$|^GroupName$|^MemberOf$|^GroupDN$') {
+                $inputHelpers.GroupPicker.Add($pName)
+            }
+            elseif ($pName -match '^Member$|^Members$') {
+                $inputHelpers.MemberPicker.Add($pName)
             }
             elseif ($pName -match 'ComputerName|Computer|Server|ServerName|HostName|Host|^CN$|MachineName|Machine') {
                 $inputHelpers.ComputerPicker.Add($pName)

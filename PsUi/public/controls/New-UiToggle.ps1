@@ -56,9 +56,10 @@ function New-UiToggle {
     Write-Debug "Parent: $($parent.GetType().Name)"
 
     $checkBox = [System.Windows.Controls.CheckBox]@{
-        Content   = $Label
-        IsChecked = $Checked.IsPresent
-        Margin    = [System.Windows.Thickness]::new(4, 4, 4, 8)
+        Content           = $Label
+        IsChecked         = $Checked.IsPresent
+        Margin            = [System.Windows.Thickness]::new(4, 4, 4, 12)
+        VerticalAlignment = 'Bottom'
     }
     Set-CheckBoxStyle -CheckBox $checkBox
 

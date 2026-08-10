@@ -22,12 +22,12 @@ function New-UiTool {
 
         Execution runs on a background thread via AsyncExecutor, keeping the UI responsive.
         Results are displayed in a structured output viewer.
-        
-        This is parsing PowerShell's parameter binder output and building UI
-        from it. If Microsoft adds weird new validation attributes or changes how parameter
-        sets work, this code will need updates. We're fighting the binder, and the binder
-        usually has opinions. That said, it works for the common cases, and
-        "time to GUI" for a script drops to zero. That's the whole damn point.
+
+        This is parsing PowerShell's parameter binder output and building UI from it.
+        If Microsoft adds weird new validation attributes or changes how parameter sets
+        work, this code will need updates. We're fighting the system a bit here since it wasn't 
+        designed for this kind of dynamic UI generation. That said, it works for the common 
+        cases, and "time to GUI" for a script drops to zero. That's the point.
     .PARAMETER Command
         The name of the command to wrap. Can be a cmdlet, function, or alias.
     .PARAMETER Title
@@ -61,6 +61,14 @@ function New-UiTool {
         Parameter names that should get a folder browse button.
     .PARAMETER ComputerPickerParameters
         Parameter names that should get an AD computer picker button.
+    .PARAMETER UserPickerParameters
+        Parameter names that should get an AD user picker button.
+    .PARAMETER GroupPickerParameters
+        Parameter names that should get an AD group picker button.
+    .PARAMETER MemberPickerParameters
+        Parameter names that should get an AD user/group picker button.
+    .PARAMETER OUPickerParameters
+        Parameter names that should get an AD OU picker button.
     .PARAMETER NoAutoHelpers
         Disables automatic helper button detection for common parameter names
         like Path or ComputerName.
@@ -133,6 +141,14 @@ function New-UiTool {
 
         [string[]]$ComputerPickerParameters = @(),
 
+        [string[]]$UserPickerParameters = @(),
+
+        [string[]]$GroupPickerParameters = @(),
+
+        [string[]]$MemberPickerParameters = @(),
+
+        [string[]]$OUPickerParameters = @(),
+
         [switch]$NoAutoHelpers,
 
         # Layout options for parameter panel
@@ -163,15 +179,19 @@ function New-UiTool {
 
     Write-Debug "Introspecting command metadata"
     $defParams = @{
-        Command                 = $Command
-        ParameterSet            = $ParameterSet
-        ExcludeParameters       = $ExcludeParameters
-        IncludeCommonParameters = $IncludeCommonParameters
-        FilePickerParameters    = $FilePickerParameters
-        FolderPickerParameters  = $FolderPickerParameters
+        Command                  = $Command
+        ParameterSet             = $ParameterSet
+        ExcludeParameters        = $ExcludeParameters
+        IncludeCommonParameters  = $IncludeCommonParameters
+        FilePickerParameters     = $FilePickerParameters
+        FolderPickerParameters   = $FolderPickerParameters
         ComputerPickerParameters = $ComputerPickerParameters
-        NoAutoHelpers           = $NoAutoHelpers
-        CallerSessionState      = $callerSessionState
+        UserPickerParameters     = $UserPickerParameters
+        GroupPickerParameters    = $GroupPickerParameters
+        MemberPickerParameters   = $MemberPickerParameters
+        OUPickerParameters       = $OUPickerParameters
+        NoAutoHelpers            = $NoAutoHelpers
+        CallerSessionState       = $callerSessionState
     }
     $uiDef = Get-UiDefinition @defParams
     Write-Debug "Got definition: $($uiDef.Parameters.Count) parameters, sets: $($uiDef.ParameterSets -join ', ')"
@@ -209,16 +229,27 @@ function New-UiTool {
 
     Write-Debug "Rendering UI for '$commandDisplayName'"
 
-    # Detect if we're already inside a window context (embedded mode)
-    $existingSession = try { [PsUi.SessionManager]::Current } catch { $null }
-    $isEmbedded = $existingSession -and $existingSession.Window
-    Write-Debug "Embedded mode: $isEmbedded"
+    # Three display modes - embed inline while the host is still being built, spawn a child
+    # window from a click handler, or stand up a top-level window if no host exists.
+    # Window.IsLoaded gates the first two: false during build, true after Show().
+    # Get-UiSession not [SessionManager]::Current - the pool can switch threads and
+    # Current is ThreadStatic; Get-UiSession falls back to a per-runspace global.
+    $existingSession = try { Get-UiSession } catch { $null }
+    $hasWindow       = $existingSession -and $existingSession.Window
+    $hostIsLoaded    = $false
+    if ($hasWindow) {
+        try { $hostIsLoaded = [bool]$existingSession.Window.IsLoaded } catch { $hostIsLoaded = $false }
+    }
+    $isEmbedded    = $hasWindow -and !$hostIsLoaded
+    $isChildWindow = $hasWindow -and $hostIsLoaded
+    Write-Debug "Tool dispatch: embedded=$isEmbedded, childWindow=$isChildWindow, hostIsLoaded=$hostIsLoaded"
 
     # Copy variables to avoid GetNewClosure issues with ValidateSet attributes
     $capturedTheme           = if ($Theme) { $Theme } else { 'Light' }
     $capturedTitle           = $Title
     $capturedWidth           = $Width
     $capturedHeight          = $Height
+    $capturedWidthExplicit   = $PSBoundParameters.ContainsKey('Width')
     $capturedHeightExplicit  = $PSBoundParameters.ContainsKey('Height')
     $capturedHideThemeButton = $HideThemeButton
 
@@ -232,11 +263,19 @@ function New-UiTool {
         FilePicker      = [System.Collections.Generic.List[string]]::new()
         FolderPicker    = [System.Collections.Generic.List[string]]::new()
         ComputerPicker  = [System.Collections.Generic.List[string]]::new()
+        UserPicker      = [System.Collections.Generic.List[string]]::new()
+        GroupPicker     = [System.Collections.Generic.List[string]]::new()
+        MemberPicker    = [System.Collections.Generic.List[string]]::new()
+        OUPicker        = [System.Collections.Generic.List[string]]::new()
         FilterBuilder   = @{}  # Hashtable: ParamName -> FilterMode
     }
     if ($FilePickerParameters) { $inputHelpers.FilePicker.AddRange($FilePickerParameters) }
     if ($FolderPickerParameters) { $inputHelpers.FolderPicker.AddRange($FolderPickerParameters) }
     if ($ComputerPickerParameters) { $inputHelpers.ComputerPicker.AddRange($ComputerPickerParameters) }
+    if ($UserPickerParameters) { $inputHelpers.UserPicker.AddRange($UserPickerParameters) }
+    if ($GroupPickerParameters) { $inputHelpers.GroupPicker.AddRange($GroupPickerParameters) }
+    if ($MemberPickerParameters) { $inputHelpers.MemberPicker.AddRange($MemberPickerParameters) }
+    if ($OUPickerParameters) { $inputHelpers.OUPicker.AddRange($OUPickerParameters) }
 
     # Detect command type to determine filter mode
     $cmdName = $cmdInfo.Name
@@ -265,12 +304,7 @@ function New-UiTool {
             $pName = $param.Name
 
             # Skip if already manually specified
-            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName) {
-                continue
-            }
-
-            # Skip non-string types (helpers only make sense for text inputs)
-            if ($param.Type -and $param.Type -ne [string] -and $param.Type -ne [string[]]) {
+            if ($inputHelpers.FilePicker -contains $pName -or $inputHelpers.FolderPicker -contains $pName -or $inputHelpers.ComputerPicker -contains $pName -or $inputHelpers.UserPicker -contains $pName -or $inputHelpers.GroupPicker -contains $pName -or $inputHelpers.MemberPicker -contains $pName -or $inputHelpers.OUPicker -contains $pName) {
                 continue
             }
 
@@ -285,6 +319,22 @@ function New-UiTool {
             # Auto-detect filter parameters, apply detected mode
             elseif ($pName -match '^Filter$|^Include$|^Exclude$') {
                 $inputHelpers.FilterBuilder[$pName] = $filterMode
+            }
+            # Auto-detect OU parameters
+            elseif ($pName -match '^OU$|^SearchBase$|^BaseDN$|^SearchRoot$|^TargetOU$|OrganizationalUnit') {
+                $inputHelpers.OUPicker.Add($pName)
+            }
+            # Auto-detect user parameters
+            elseif ($pName -match '^Owner$|^Manager$|^User$|^UserName$|^SamAccountName$|^UserPrincipalName$|^UPN$') {
+                $inputHelpers.UserPicker.Add($pName)
+            }
+            # Auto-detect group parameters
+            elseif ($pName -match '^Group$|^GroupName$|^MemberOf$|^GroupDN$') {
+                $inputHelpers.GroupPicker.Add($pName)
+            }
+            # Auto-detect member parameters (users or groups)
+            elseif ($pName -match '^Member$|^Members$') {
+                $inputHelpers.MemberPicker.Add($pName)
             }
             # Auto-detect computer name parameters
             elseif ($pName -match 'ComputerName|Computer|Server|ServerName|HostName|Host|^CN$|MachineName|Machine') {
@@ -618,24 +668,29 @@ function New-UiTool {
         Update-UiToolRunButtonState
     }.GetNewClosure()
 
-    # Either embed the content directly or wrap in a new window
     if ($isEmbedded) {
-        # Already inside a window - just execute the content scriptblock
+        # Host build context - drop the controls straight in.
         & $toolContent
     }
+    elseif ($isChildWindow) {
+        # Click handler context - we're on the host UI thread (New-UiButton's AST
+        # flipped us). Default 600x500 is too cramped inside the child window's chrome.
+        $childParams = @{
+            Title  = $capturedTitle
+            Width  = if ($capturedWidthExplicit)  { $capturedWidth }  else { 800 }
+            Height = if ($capturedHeightExplicit) { $capturedHeight } else { 600 }
+        }
+        New-UiChildWindow @childParams -Content $toolContent
+    }
     else {
-        # Standalone mode - create a window
+        # No host - top-level standalone window.
         $windowParams = @{
             Title           = $capturedTitle
             Width           = $capturedWidth
             HideThemeButton = $capturedHideThemeButton
         }
-        
-        # Only pass Height if explicitly specified - otherwise let New-UiWindow auto-size
-        if ($capturedHeightExplicit) {
-            $windowParams.Height = $capturedHeight
-        }
-        if ($capturedTheme) { $windowParams.Theme = $capturedTheme }
+        if ($capturedHeightExplicit) { $windowParams.Height = $capturedHeight }
+        if ($capturedTheme)          { $windowParams.Theme  = $capturedTheme }
 
         New-UiWindow @windowParams -Content $toolContent
     }

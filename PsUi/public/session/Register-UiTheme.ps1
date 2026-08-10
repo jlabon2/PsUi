@@ -73,26 +73,18 @@ function Register-UiTheme {
     # Start with a copy of the base theme
     $baseColors = $themes[$BasedOn]
     $mergedTheme = @{}
-    foreach ($key in $baseColors.Keys) {
-        $mergedTheme[$key] = $baseColors[$key]
-    }
+    foreach ($key in $baseColors.Keys) {  $mergedTheme[$key] = $baseColors[$key] }
 
     # Overlay user-provided colors
-    foreach ($key in $Colors.Keys) {
-        $mergedTheme[$key] = $Colors[$key]
-    }
+    foreach ($key in $Colors.Keys) {  $mergedTheme[$key] = $Colors[$key]  }
 
     # Ensure Type is set correctly based on user input or base
-    if ($Colors.ContainsKey('Type')) {
-        $mergedTheme['Type'] = $Colors['Type']
-    }
+    if ($Colors.ContainsKey('Type')) {  $mergedTheme['Type'] = $Colors['Type'] }
 
-    # Sanity check — warn if core keys are missing from the merged result
+    # Warn if core keys are missing from the merged result; shouldn't happen.
     $requiredKeys = @('WindowBg', 'WindowFg', 'ControlBg', 'ControlFg', 'ButtonBg', 'ButtonFg', 'Accent', 'Border')
     $missingKeys  = $requiredKeys | Where-Object { !$mergedTheme.ContainsKey($_) }
-    if ($missingKeys) {
-        Write-Warning "Theme '$Name' is missing required color keys after merge: $($missingKeys -join ', '). This may cause runtime errors."
-    }
+    if ($missingKeys) {  Write-Warning "Theme '$Name' is missing required color keys after merge: $($missingKeys -join ', '). This may cause runtime errors." }
 
     $themes[$Name] = $mergedTheme
 

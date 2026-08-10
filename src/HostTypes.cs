@@ -64,6 +64,13 @@ namespace PsUi
         // Wrap a raw CLR exception for non-PowerShell errors
         public static PSErrorRecord FromException(Exception ex)
         {
+            // PS engine exceptions (RuntimeException n' friends) carry the real ErrorRecord: script line, offending code, script stack. Unwrap it so a user facing dialog gets the action's line instead of six frames of PipelineBase.Invoke plumbing.
+            var carrier = ex as IContainsErrorRecord;
+            if (carrier != null && carrier.ErrorRecord != null)
+            {
+                return FromErrorRecord(carrier.ErrorRecord);
+            }
+
             return new PSErrorRecord
             {
                 Message = ex != null ? ex.Message : "Unknown error",

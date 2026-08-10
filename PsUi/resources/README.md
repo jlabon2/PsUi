@@ -6,7 +6,7 @@ Runtime resources for the PsUi module - icons and XAML styles.
 
 ```
 resources/
-├── CharList.json           # Icon glyph Unicode mappings (Segoe MDL2 Assets)
+├── CharList.json           # Icon glyph Unicode mappings (Segoe MDL2 Assets / Segoe Fluent Icons)
 ├── README.md               # This file
 └── xaml/
     ├── Themes/
@@ -27,7 +27,7 @@ resources/
 
 ## CharList.json
 
-Maps icon names to Segoe MDL2 Assets Unicode characters. Used by `New-UiGlyph` and any control with an `-Icon` parameter.
+Maps icon names to Unicode characters from the active icon font (Segoe MDL2 Assets on Win10, Segoe Fluent Icons on Win11; switch with `Set-PsUiIconFont`). Used by `New-UiGlyph` and any control with an `-Icon` parameter.
 
 ```powershell
 # Example usage

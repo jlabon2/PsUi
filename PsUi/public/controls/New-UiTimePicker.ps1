@@ -169,7 +169,7 @@ function New-UiTimePicker {
     [PsUi.ThemeEngine]::RegisterElement($arrowBorder)
     $arrowText = [System.Windows.Controls.TextBlock]@{
         Text                = [PsUi.ModuleContext]::GetIcon('ChevronDown')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 10
         Foreground          = ConvertTo-UiBrush $colors.ControlFg
         HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center

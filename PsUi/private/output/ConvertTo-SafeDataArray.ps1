@@ -7,6 +7,7 @@ function ConvertTo-SafeDataArray {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
+        [AllowNull()]
         [object[]]$DataArray
     )
 

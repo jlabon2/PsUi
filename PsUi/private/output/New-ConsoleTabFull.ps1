@@ -177,7 +177,7 @@ function New-ConsoleTabFull {
 
     $findIcon = [System.Windows.Controls.TextBlock]@{
         Text              = [PsUi.ModuleContext]::GetIcon('Search')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 14
         VerticalAlignment = 'Center'
         Foreground        = ConvertTo-UiBrush $Colors.ControlFg
@@ -194,7 +194,7 @@ function New-ConsoleTabFull {
 
     $findPrevBtn = [System.Windows.Controls.Button]@{
         Content           = [PsUi.ModuleContext]::GetIcon('ChevronUp')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         Width             = 24
         Height            = 24
         Padding           = [System.Windows.Thickness]::new(0)
@@ -207,7 +207,7 @@ function New-ConsoleTabFull {
 
     $findNextBtn = [System.Windows.Controls.Button]@{
         Content           = [PsUi.ModuleContext]::GetIcon('ChevronDown')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         Width             = 24
         Height            = 24
         Padding           = [System.Windows.Thickness]::new(0)

@@ -53,7 +53,7 @@ function New-TaskbarOverlayIcon {
 
         # Create typeface for glyph rendering
         $typeface = [System.Windows.Media.Typeface]::new(
-            [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets'),
+            ([PsUi.ModuleContext]::ActiveIconFontFamily),
             [System.Windows.FontStyles]::Normal,
             [System.Windows.FontWeights]::Normal,
             [System.Windows.FontStretches]::Normal

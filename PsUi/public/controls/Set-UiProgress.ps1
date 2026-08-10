@@ -1,32 +1,106 @@
 function Set-UiProgress {
     <#
     .SYNOPSIS
-        Updates a progress bar value.
+        Updates a progress bar's value, label, severity tint, or mode.
     .PARAMETER Variable
-        Name of the progress bar control to update.
+        Name of the progress bar to update.
     .PARAMETER Value
-        Percentage value between 0 and 100.
+        New value. Clamped to the bar's Min/Max.
+    .PARAMETER Increment
+        Add this to the current value. If combined with -Value, adds to that.
+    .PARAMETER Label
+        Replace the label text above the bar (only works if built with -Label).
+    .PARAMETER Severity
+        Re-tint the bar: Info, Success, Warning, Error.
+    .PARAMETER Indeterminate
+        Toggle indeterminate mode on/off. Bar template is fixed at construction, so the first
+        toggle starts the animation cold. Pass -Indeterminate to New-UiProgress up front
+        for cleaner motion.
+    .EXAMPLE
+        Set-UiProgress -Variable 'progress' -Value 50
+    .EXAMPLE
+        Set-UiProgress -Variable 'files' -Increment 1 -Label "Processed $i of $total"
+    .EXAMPLE
+        Set-UiProgress -Variable 'job' -Severity Error -Label 'Failed'
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
         [string]$Variable,
-        
-        [Parameter(Mandatory)]
-        [ValidateRange(0, 100)]
-        [int]$Value
+
+        [double]$Value,
+
+        [double]$Increment,
+
+        [string]$Label,
+
+        [ValidateSet('Info', 'Success', 'Warning', 'Error')]
+        [string]$Severity,
+
+        # Bool can't be null, so PSBoundParameters.ContainsKey() is what tells us whether the caller actually asked to toggle the mode.
+        [bool]$Indeterminate
     )
 
-    Write-Debug "Setting '$Variable' to $Value%"
-
     $session = Get-UiSession
-    $progress = $session.Variables[$Variable]
-    
-    if ($progress) {
-        Invoke-OnUIThread { $progress.Value = $Value }
-        Write-Debug "Progress updated"
+    if (!$session) {
+        Write-Verbose "Set-UiProgress: no active session for '$Variable' - update dropped."
+        return
     }
-    else {
-        Write-Debug "Control '$Variable' not found in session"
+    $progress = $session.Variables[$Variable]
+    if (!$progress) {
+        Write-Verbose "Set-UiProgress: control '$Variable' not found in session - update dropped."
+        return
+    }
+
+    $hasValue     = $PSBoundParameters.ContainsKey('Value')
+    $hasIncrement = $PSBoundParameters.ContainsKey('Increment')
+    $hasLabel     = $PSBoundParameters.ContainsKey('Label')
+    $hasSeverity  = $PSBoundParameters.ContainsKey('Severity')
+    $hasIndeterm  = $PSBoundParameters.ContainsKey('Indeterminate')
+
+    # Nothing to do? Don't bother the dispatcher about it.
+    if (!($hasValue -or $hasIncrement -or $hasLabel -or $hasSeverity -or $hasIndeterm)) {
+        return
+    }
+
+    Invoke-OnUIThread {
+        if ($hasValue -or $hasIncrement) {
+            # Read $progress.Value here (inside the dispatcher) so -Increment alone sees the latest committed value, not whatever was current when the call queued. Matters when callers fire Set-UiProgress in tight loops.
+            $newValue = if ($hasValue) { $Value } else { $progress.Value }
+
+            if ($hasIncrement) { $newValue += $Increment }
+
+            # Clamp so callers don't have to think about it
+            if ($newValue -lt $progress.Minimum) { $newValue = $progress.Minimum }
+            if ($newValue -gt $progress.Maximum) { $newValue = $progress.Maximum }
+            $progress.Value = $newValue
+        }
+
+        if ($hasSeverity) {
+            # Map severity to brush key for theme-aware tinting
+            $brushKey = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault
+
+            # Clear local value so the resource binding wins
+            $progress.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
+            $progress.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, $brushKey)
+        }
+
+        $meta = $progress.Tag
+        if ($meta -is [hashtable]) {
+            if ($hasLabel) {
+                if ($meta.LabelBlock) { $meta.LabelBlock.Text = $Label }
+                else { Write-Verbose "Set-UiProgress: '$Variable' was created without -Label; skipping label update." }
+            }
+            if ($hasSeverity) {
+                $meta.Severity = $Severity
+                $meta.BrushTag = $brushKey
+            }
+        }
+
+        if ($hasIndeterm) {
+            # See .PARAMETER Indeterminate for the construction-time caveat.
+            $progress.IsIndeterminate = $Indeterminate
+            Write-Verbose "Set-UiProgress: toggled IsIndeterminate=$Indeterminate on '$Variable'."
+        }
     }
 }

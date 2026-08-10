@@ -234,7 +234,7 @@ $sourceCode
             $iconButton.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
 
             $iconBlock = [System.Windows.Controls.TextBlock]::new()
-            $iconBlock.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            $iconBlock.FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
             $iconBlock.FontSize = 12
             $iconBlock.HorizontalAlignment = 'Center'
             $iconBlock.VerticalAlignment = 'Center'

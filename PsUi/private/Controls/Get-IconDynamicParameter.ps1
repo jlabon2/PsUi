@@ -16,6 +16,13 @@ function Get-IconDynamicParameter {
     if ($iconDict -and $iconDict.Count -gt 0) { $iconNames = $iconDict.Keys | Sort-Object }
     else { $iconNames = @('Info', 'Warning', 'Error', 'Question', 'Settings', 'User') }
 
+    # When the author pinned the active font (no fallback), restrict IntelliSense + validation
+    # to glyphs that actually render. Default state keeps the full list because the fallback chain
+    # covers both fonts.
+    if ([PsUi.ModuleContext]::IconFontNoFallback) {
+        $iconNames = @($iconNames | Where-Object { [PsUi.ModuleContext]::IsGlyphAvailable($_) })
+    }
+
     # Create the dynamic parameter dictionary and attribute collection
     $paramDictionary     = [System.Management.Automation.RuntimeDefinedParameterDictionary]::new()
     $attributeCollection = [System.Collections.ObjectModel.Collection[System.Attribute]]::new()

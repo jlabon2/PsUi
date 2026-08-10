@@ -69,7 +69,7 @@ function New-UiExpander {
     # Chevron glyph rotates 90deg when content is visible
     $chevron = [System.Windows.Controls.TextBlock]@{
         Text                  = [PsUi.ModuleContext]::GetIcon('ChevronRight')
-        FontFamily            = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily            = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize              = 12
         Foreground            = ConvertTo-UiBrush $colors.SecondaryText
         VerticalAlignment     = 'Center'

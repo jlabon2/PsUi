@@ -18,17 +18,12 @@ PsUi/lib/net6.0-windows/
 .vscode/
 **/.vscode/settings.json
 
-# Reddit draft
-reddit-post.txt
-
 # Visual Studio
 *.user
 *.suo
 *.cache
 .vs/
 
-# JetBrains Rider
-.idea/
 
 # OS files
 Thumbs.db
@@ -48,6 +43,7 @@ Thumbs.db
 
 # Test outputs
 TestResults/
+testResults.xml
 
 # Development test scripts
 Tests/PsUiTests/
@@ -57,8 +53,5 @@ temp/
 
 # Scratch pad for dev testing
 scratch/
-# Keep copilot instructions local
-.github/copilot-instructions.md
 
-# Keep copilot instructions local
-.github/copilot-instructions.md
+PSScriptAnalyzerSettings.psd1

@@ -20,7 +20,7 @@ function New-FilterBoxWithClear {
     if ($IncludeIcon) {
         $result.Icon = [System.Windows.Controls.TextBlock]@{
             Text              = [PsUi.ModuleContext]::GetIcon('Search')
-            FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize          = 14
             VerticalAlignment = 'Center'
             Foreground        = ConvertTo-UiBrush $colors.ControlFg
@@ -56,7 +56,7 @@ function New-FilterBoxWithClear {
 
     $clearBtn = [System.Windows.Controls.Button]@{
         Content             = [PsUi.ModuleContext]::GetIcon('Cancel')
-        FontFamily          = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily          = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize            = 10
         Width               = 16
         Height              = 16

@@ -31,7 +31,11 @@ namespace PsUi
             "env", "NestedPromptLevel", "Profile", "PWD",
             
             // PsUi internal
-            "state", "session"
+            "state", "session",
+
+            // Per window session marker, set by NewUiWindowCommand per window runspace.
+            // CaptureCallerVariables must skip it or a nested New-UiWindow inherits the parent's session ID and Add(child) blows up on WPF thread affinity.
+            "__PsUiSessionId"
         };
 
         // PS variable names that shouldnt be touched during hydration - built dynamically from host + known automatic vars
@@ -90,7 +94,7 @@ namespace PsUi
             }
             catch (Exception)
             {
-                // If query fails, we still have AlwaysReserved as a baseline
+                // Query failure leaves AlwaysReserved as the baseline
             }
 
             return result;
@@ -102,17 +106,22 @@ namespace PsUi
             return ReservedVariables.Contains(name);
         }
         
-        // Regex pattern for valid PowerShell identifiers (prevents injection attacks)
-        // Allows: letters, digits, underscore, hyphen. Must start with letter or underscore.
-        private static readonly System.Text.RegularExpressions.Regex ValidIdentifierPattern = 
-            new System.Text.RegularExpressions.Regex(@"^[a-zA-Z_][a-zA-Z0-9_-]*$", 
+        // Valid PS variable identifiers (blocks injection). Hyphens stay in - ScriptBuilder emits ${name} = ${Global:name} so hyphenated -Variable names hydrate (bare $my-var parses as subtraction). Rejecting them silently killed v2.x names.
+        private static readonly System.Text.RegularExpressions.Regex ValidIdentifierPattern =
+            new System.Text.RegularExpressions.Regex(@"^[a-zA-Z_][a-zA-Z0-9_-]*$",
                 System.Text.RegularExpressions.RegexOptions.Compiled);
-        
+
         // Validates name is safe for generated PS code - prevents injection via semicolons, braces, backticks, etc.
         public static bool IsValidIdentifier(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return false;
             return ValidIdentifierPattern.IsMatch(name);
+        }
+
+        // Verb-Noun function names share the identifier rule (hyphens already admitted). Kept as a named entry point for the `function Global:{0} { ... }` call sites so the two can diverge later without touching those call sites.
+        public static bool IsValidFunctionName(string name)
+        {
+            return IsValidIdentifier(name);
         }
         
         public static string ValidateIdentifier(string name, string context = null)

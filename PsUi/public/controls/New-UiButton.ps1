@@ -28,7 +28,7 @@ function New-UiButton {
         are splatted as parameters. For other file types, values are passed as
         command-line arguments.
     .PARAMETER Icon
-        Optional icon name from Segoe MDL2 Assets shown before the text.
+        Optional icon name shown before the text. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER Accent
         Use accent color styling for the button.
     .PARAMETER Width
@@ -36,7 +36,9 @@ function New-UiButton {
     .PARAMETER Height
         Button height in pixels. Defaults to 28.
     .PARAMETER NoAsync
-        Execute synchronously on the UI thread (blocks UI).
+        Execute synchronously on the UI thread (blocks UI). Auto-set when the action
+        spawns a window so it renders on the host's dispatcher; pass -NoAsync:$false
+        to override.
     .PARAMETER NoWait
         Execute async with output window, but don't block the parent window.
         Other buttons remain clickable while this action runs. The clicked button
@@ -83,7 +85,11 @@ function New-UiButton {
         When specified, inputs using -SubmitButton with this name will trigger
         the button's click event when Enter is pressed.
     .PARAMETER ValidateScript
-        ScriptBlock for custom validation. Runs before the action, receives control values as variables.
+        A ScriptBlock that runs synchronously before the actual action runs, useful for custom validation. 
+        Attached code should generate an array of strings if validation fails, or return nothing if validation passes. 
+        Strings ('errors') are displayed to the user (shown in a 'Please fix the following issues' dialog). 
+        Throwing also blocks. It runs BEFORE control variable hydration, so it does NOT see $controlName
+        variables. For checks that need live control values, do them at the top  of the -Action instead.
     .PARAMETER WPFProperties
         Hashtable of WPF properties to apply to the button.
     .EXAMPLE
@@ -101,6 +107,14 @@ function New-UiButton {
             $loadTime = Get-Date
         }
         # In another button, $services and $loadTime are now available
+    .EXAMPLE
+        # Pre-flight gate: return error strings to block the click, return nothing to run.
+        New-UiButton -Text 'Deploy' -ValidateScript {
+            $problems = @()
+            if (!(Test-Path '\\deploy\staging$')) { $problems += 'Staging share is unreachable.' }
+            if (!(Test-Connection prod-web01 -Count 1 -Quiet)) { $problems += 'prod-web01 is not online.' }
+            $problems
+        } -Action { Publish-Build }
     .EXAMPLE
         # In a custom layout
         $toolbar = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
@@ -162,13 +176,9 @@ function New-UiButton {
         [hashtable]$WPFProperties
     )
 
-    DynamicParam {
-        Get-IconDynamicParameter -ParameterName 'Icon'
-    }
+    DynamicParam { Get-IconDynamicParameter -ParameterName 'Icon' }
 
-    begin {
-        $Icon = $PSBoundParameters['Icon']
-    }
+    begin { $Icon = $PSBoundParameters['Icon'] }
 
     process {
 
@@ -216,7 +226,7 @@ function New-UiButton {
 
         $iconBlock = [System.Windows.Controls.TextBlock]@{
             Text = $iconText
-            FontFamily = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
             FontSize = 12
             FontWeight = 'Light'
             VerticalAlignment = 'Center'
@@ -295,18 +305,12 @@ function New-UiButton {
             $viewBox.Child = $textBlock
             $button.Content = $viewBox
         }
-        else {
-            $button.Content = $textBlock
-        }
+        else { $button.Content = $textBlock }
     }
 
     # Apply grid positioning if specified
-    if ($GridColumn -ge 0) {
-        [System.Windows.Controls.Grid]::SetColumn($button, $GridColumn)
-    }
-    if ($GridRow -ge 0) {
-        [System.Windows.Controls.Grid]::SetRow($button, $GridRow)
-    }
+    if ($GridColumn -ge 0) { [System.Windows.Controls.Grid]::SetColumn($button, $GridColumn)}
+    if ($GridRow -ge 0) { [System.Windows.Controls.Grid]::SetRow($button, $GridRow) }
 
     # Context capture via Get-UiActionContext
     # Captures variables, functions, and modules from caller scope using AST analysis
@@ -323,6 +327,15 @@ function New-UiButton {
     $capturedFuncs = $actionContext.CapturedFuncs
     $resolvedModules = $actionContext.LinkedModules
 
+    # WPF windows on the async runspace's STA thread inevtiably die. If the action's AST has a window-spawner in it, flip to sync so the spawn lands on the host's dispatcher instead.
+    # Out-Datagrid / Out-CSVDataGrid / Out-TextEditor stay off this list - they each run the window on their own STA dispatcher (the caller's, or a spawned STA runspace when the caller is MTA), so the async caller is safe and the data fetch stays off the UI thread.
+    $windowSpawners = @('New-UiTool', 'New-UiChildWindow', 'New-UiWindow')
+    $detected = $actionContext.AutoDetectedFuncs | Where-Object { $windowSpawners -contains $_ }
+    if ($detected -and !$PSBoundParameters.ContainsKey('NoAsync')) {
+        Write-Debug "[New-UiButton] AST found $($detected -join ', '), forcing -NoAsync."
+        $NoAsync = $true
+    }
+
     # Store action context in button tag for click handler
     $displayTitle = if ($OutputTitle) { $OutputTitle } else { $Text }
 
@@ -332,6 +345,7 @@ function New-UiButton {
         WindowRef       = $session.Window
         Text            = $displayTitle
         NoAsync         = $NoAsync
+        NoAsyncExplicit = $PSBoundParameters.ContainsKey('NoAsync')
         NoWait          = $NoWait
         IsCSharpLoaded  = [PsUi.ModuleContext]::IsInitialized
         ResultActions   = $ResultActions
@@ -349,23 +363,22 @@ function New-UiButton {
     }
 
     # Apply accent styling AFTER Tag is set (so Set-ButtonStyle can merge IsAccent properly)
-    if ($Accent) {
-        Set-ButtonStyle -Button $button -Accent
-    }
+    if ($Accent) { Set-ButtonStyle -Button $button -Accent }
 
     # Click handler
     $button.Add_Click({
         param($sender, $eventArgs)
         $ctx = $this.Tag
-        if ($null -eq $ctx) {
-            Write-Warning "[New-UiButton] Tag is null - cannot execute action"
+        # IDictionary check, not just null: a Tag replaced after construction is non-null, sails past a null guard, and the click dies invoking a null Action ("expression after '&'...").
+        if ($ctx -isnot [System.Collections.IDictionary] -or !$ctx.Contains('Action')) {
+            Write-Warning "[New-UiButton] Tag no longer holds the action context (overwritten after construction?) - cannot execute action"
             return
         }
         Write-Debug "Click handler fired, Action is null: $($null -eq $ctx.Action)"
         $btn = $this
 
         $originalContent = $btn.Content
-        
+
         # Capture current button size before swapping content to spinner
         $originalMinWidth  = $btn.MinWidth
         $originalMinHeight = $btn.MinHeight
@@ -391,7 +404,7 @@ function New-UiButton {
         }
 
         $themeColors = Get-ThemeColors
-        
+
         # Use contrasting spinner color for accent buttons
         $isAccentButton = $btn.Tag -is [System.Collections.IDictionary] -and $btn.Tag['IsAccent']
         $spinnerColor = if ($isAccentButton) { $themeColors.AccentHeaderFg } else { $themeColors.Accent }
@@ -402,11 +415,15 @@ function New-UiButton {
         try {
             $forceSynchronous = $ctx.NoAsync
 
-            if (!$forceSynchronous -and $ctx.Action) {
-                $actionText = $ctx.Action.ToString()
-                if ($actionText -match 'New-UiChildWindow') {
-                    $forceSynchronous = $true
-                }
+            # Fallback for when the construction-time AST scan missed a window spawner. Skip it when the user set -NoAsync explicitly (incl. -NoAsync:$false to force async) - honor their call instead of second-guessing it from a substring in the action text.
+            if (!$forceSynchronous -and !$ctx.NoAsyncExplicit -and $ctx.Action) {
+                # Scan the AST for a real call, not a ToString() substring - the name also appears inside a string or comment (Write-Host "see New-UiWindow docs"), and a bare mention was freezing an async action for nothing.
+                $callsSpawner = @($ctx.Action.Ast.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.CommandAst] -and
+                    $node.GetCommandName() -in @('New-UiChildWindow', 'New-UiWindow', 'New-UiTool')
+                }, $true))
+                if ($callsSpawner.Count -gt 0) { $forceSynchronous = $true }
             }
 
             if ($forceSynchronous -eq $true) {
@@ -422,20 +439,23 @@ function New-UiButton {
             }
             elseif ($ctx.IsCSharpLoaded) {
                 $executor = [PsUi.AsyncExecutor]::new()
-                
+
                 # Store executor in session for Stop-UiAsync cancellation
                 $execSession = [PsUi.SessionManager]::Current
                 if ($execSession) { $execSession.ActiveExecutor = $executor }
-                
+
                 # Set the UI dispatcher for proper thread marshaling (critical for NoOutput mode)
                 $executor.UiDispatcher = $btn.Dispatcher
+
+                # Route the full running lifecycle (start, progress, errors, warnings, cancellation, completion) to any -AutoProgress / -AutoCancel status bar
+                if ($execSession) { Add-StatusBarAutoWiring -Executor $executor -Session $execSession -ActionName $ctx.Text }
 
                 $currentThemeColors = Get-ThemeColors
                 $varsWithTheme = if ($ctx.CapturedVars) { $ctx.CapturedVars.Clone() } else { @{} }
                 if ($currentThemeColors) {
                     $varsWithTheme['__WPFThemeColors'] = $currentThemeColors
                 }
-                
+
                 # Inject credentials from session.Variables at CLICK TIME (not capture time)
                 $clickSession = [PsUi.SessionManager]::Current
                 if ($clickSession) {
@@ -477,11 +497,8 @@ function New-UiButton {
                     # Wire up window close handler to prevent zombie executors
                     # If window closes while task runs, cancel executor to avoid crash on dead dispatcher
                     #
-                    # GetNewClosure() captures the entire scope into a dynamic module. If you are
-                    # doing something insane like creating 100 buttons in a loop where the scope has a
-                    # giant array, congrats - you now have 100 references to that array. For normal forms
-                    # with 5-20 buttons this is fine. We clean up on window close so nothing leaks after.
-                    # If you hit memory issues, refactor your loop or stop holding massive objects in scope.
+                    # GetNewClosure() captures the entire scope into a dynamic module. If you are doing something insane like creating 100 buttons in a loop where the scope has a giant array, congrats - you now have 100 references to that array. 
+                    # For normal forms with 5-20 buttons this is fine. We clean up on window close so nothing leaks after. If you hit memory issues, refactor your loop or stop holding massive objects in scope.
                     $parentWindow = $ctx.WindowRef
                     if ($parentWindow) {
                         $closedHandler = [System.EventHandler]{
@@ -650,7 +667,14 @@ function New-UiButton {
 
     # Apply custom WPF properties if specified
     if ($WPFProperties) {
-        Set-UiProperties -Control $button -Properties $WPFProperties
+        # Tag is reserved - the click handler reads its action context off it, so a caller Tag disarms the button. Warn and drop, same guard as New-UiProgress / New-UiStatusBar.
+        # Copy before Remove: [hashtable] binds the caller's own table by reference.
+        if ($WPFProperties.ContainsKey('Tag')) {
+            Write-Warning "New-UiButton: -WPFProperties Tag is reserved (stores the click action context). Ignoring."
+            $WPFProperties = @{} + $WPFProperties
+            [void]$WPFProperties.Remove('Tag')
+        }
+        if ($WPFProperties.Count -gt 0) { Set-UiProperties -Control $button -Properties $WPFProperties }
     }
 
     # Wire up conditional enabling if specified

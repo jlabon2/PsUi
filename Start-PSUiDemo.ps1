@@ -4,9 +4,7 @@ if (Test-Path $ModulePath) {
     Write-Host "Importing module from: $ModulePath" -ForegroundColor Cyan
     Import-Module $ModulePath -Force
 }
-else {
-    Import-Module PsUi -Force
-}
+else { Import-Module PsUi -Force }
 
 # Verify C# types loaded
 try {
@@ -172,17 +170,48 @@ function Test-ConnectionStatus {
     return $results
 }
 
-New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark -Width 1000 -Height 750 -Splash -Debug -Content {
+function Move-DemoAccount {
+    <#
+    .SYNOPSIS
+        Fake account mover. Exists so New-UiTool has somewhere to hang its AD picker buttons.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Identity,
+
+        [Parameter(Mandatory)]
+        [string]$TargetOU,
+
+        [string]$AddToGroup,
+
+        [switch]$WhatIfOnly
+    )
+
+    Write-Host "Identity:   $Identity" -ForegroundColor Cyan
+    Write-Host "Target OU:  $TargetOU" -ForegroundColor Cyan
+    if ($AddToGroup) { Write-Host "Add to:     $AddToGroup" -ForegroundColor Cyan }
+    Write-Host "Nothing was moved. This is a demo." -ForegroundColor Yellow
+
+    [PSCustomObject]@{
+        Identity = $Identity
+        TargetOU = $TargetOU
+        Group    = $AddToGroup
+        Applied  = !$WhatIfOnly
+    }
+}
+
+New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark -Width 1275 -Height 750 -TabAlignment Center -Splash -Content {
 
     # Window-level keyboard shortcuts
     Register-UiHotkey -Key "Ctrl+S" -NoAsync -Action {
         Show-UiDialog -Title "Save" -Message "Ctrl+S pressed! In a real app, this would save your work." -Type Info -Buttons OK
     }
-    
+
     Register-UiHotkey -Key "F5" -NoAsync -Action {
         Show-UiDialog -Title "Refresh" -Message "F5 pressed! Refresh action would go here." -Type Info -Buttons OK
     }
-    
+
     # Escape to cancel running async operations
     Register-UiHotkey -Key "Escape" -NoAsync -Action {
         $session = Get-UiSession
@@ -237,6 +266,12 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             New-UiToggle -Label "Mark as Favorite" -Variable "IsFavorite" -Checked
             New-UiToggle -Label "Send Email Notification" -Variable "SendEmail"
             New-UiRadioGroup -Label "Status" -Variable "Status" -Items @('Draft', 'Active', 'Complete') -Default 'Draft'
+
+            # -OnChange fires with the new value the moment the selection moves, no button needed
+            New-UiDropdown -Label "Environment (-OnChange)" -Variable "ctrlEnv" -Items @('Dev', 'Test', 'Staging', 'Prod') -Default 'Dev' -OnChange {
+                param($newValue)
+                Write-Status "Environment switched to $newValue" -Severity Info
+            }
         }
 
         New-UiPanel -Header "Dropdown Buttons" -ShowSourceButton -Content {
@@ -335,7 +370,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
 
         New-UiPanel -Header "Glyphs and Images" -ShowSourceButton -LayoutStyle Wrap -Content {
-            New-UiLabel -Text "New-UiGlyph displays icons from Segoe MDL2 Assets. New-UiImage displays files or base64:" -Style Body -FullWidth
+            New-UiLabel -Text "New-UiGlyph draws from the active icon font - Segoe Fluent Icons where it's installed, Segoe MDL2 Assets otherwise. New-UiImage displays files or base64:" -Style Body -FullWidth
 
             New-UiCard -Header "Glyph Icons" -Icon "Tiles" -Stretch -Content {
                 New-UiPanel -Orientation Horizontal -Content {
@@ -345,7 +380,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     New-UiGlyph -Name 'Warning' -Size 24 -Color 'Orange'
                     New-UiGlyph -Name 'Error' -Size 24 -Color 'Red'
                 }
-                New-UiLabel -Text "Use Show-UiGlyphBrowser to find icon names" -Style Note
+                New-UiLabel -Text "Use Show-UiGlyphBrowser to find icon names - tiles the active font can't draw show dimmed" -Style Note
             }
 
             New-UiCard -Header "Base64 Image" -Icon "Photo" -Stretch -Content {
@@ -365,14 +400,47 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
 
                 New-UiImage -Base64 $iconBase64 -Width 48
             }
+        }
 
-            New-UiCard -Header "Progress Bars" -Icon "Sync" -Stretch -Content {
-                New-UiLabel -Text "Static progress bars via New-UiProgress:" -Style Body
-                New-UiProgress -Variable "staticProgress" -Height 16
-                New-UiAction -Text "Set to 75%" -Icon "Accept" -NoAsync -Action {
-                    Set-UiProgress -Variable "staticProgress" -Value 75
+        New-UiPanel -Header "Progress Bars" -ShowSourceButton -Content {
+            New-UiLabel -Text "New-UiProgress takes a label, a value display, a severity tint, and a range of its own:" -Style Body -FullWidth
+
+            New-UiProgress -Variable "progPlain"  -Label "Plain bar" -Height 16
+            New-UiProgress -Variable "progValue"  -Label "Download" -ShowValue -Default 35
+            New-UiProgress -Variable "progFiles"  -Label "Files processed" -Maximum 250 -Default 80 -ShowValue -ValueFormat '{0:N0} / {1:N0}'
+            New-UiProgress -Variable "progSpin"   -Label "Talking to the server..." -Indeterminate
+
+            New-UiLabel -Text "Severity tints survive a theme switch. Try the palette button in the titlebar:" -Style Body -FullWidth
+
+            New-UiProgress -Variable "progGood" -Label "Healthy"  -Default 100 -Severity Success -ShowValue
+            New-UiProgress -Variable "progWarn" -Label "Filling up" -Default 78  -Severity Warning -ShowValue
+            New-UiProgress -Variable "progBad"  -Label "Degraded" -Default 35  -Severity Error   -ShowValue
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Animate" -Icon "Play" -NoOutput -Action {
+                    for ($i = 0; $i -le 100; $i += 4) {
+                        Set-UiProgress -Variable "progPlain" -Value $i
+                        Set-UiProgress -Variable "progValue" -Value $i
+                        Set-UiProgress -Variable "progFiles" -Value ($i * 2.5)
+                        Start-Sleep -Milliseconds 50
+                    }
+                    Set-UiProgress -Variable "progValue" -Severity Success -Label "Download complete"
+                }
+                New-UiButton -Text "Fail it" -Icon "Cancel" -NoOutput -Action {
+                    Set-UiProgress -Variable "progValue" -Severity Error -Label "Download failed"
+                }
+                New-UiButton -Text "Stop the spinner" -Icon "Accept" -NoOutput -Action {
+                    Set-UiProgress -Variable "progSpin" -Indeterminate $false -Value 100 -Severity Success -Label "Connected"
+                }
+                New-UiButton -Text "Reset" -Icon "Clear" -NoOutput -Action {
+                    Set-UiProgress -Variable "progPlain" -Value 0
+                    Set-UiProgress -Variable "progValue" -Value 0 -Severity Info -Label "Download"
+                    Set-UiProgress -Variable "progFiles" -Value 0
+                    Set-UiProgress -Variable "progSpin"  -Indeterminate $true -Severity Info -Label "Talking to the server..."
                 }
             }
+
+            New-UiLabel -Text "Set-UiProgress reaches value, label, severity, and indeterminate mode from a background runspace. Its -Indeterminate takes a bool, unlike the switch on New-UiProgress." -Style Note -FullWidth
         }
 
         New-UiPanel -Header "Validated Inputs" -ShowSourceButton -Content {
@@ -466,10 +534,43 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
 
         New-UiPanel -Header "Icon Gallery" -ShowSourceButton -Content {
-            New-UiLabel -Text "Browse 400+ icons from the Segoe MDL2 Assets font. Click any icon to copy its name." -Style Body
+            New-UiLabel -Text "Browse 1,700+ named icons across Segoe MDL2 Assets and Segoe Fluent Icons. The title counts what the active font can render. Click any icon to copy its name." -Style Body
             New-UiActionCard -Header "Glyph Browser" -Icon "Tiles" -NoAsync -Accent -ButtonText "Browse" -Description "Opens a searchable grid of all available icons" -Action {
                 Show-UiGlyphBrowser
             }
+        }
+
+        New-UiPanel -Header "Icon Fonts" -ShowSourceButton -Content {
+            New-UiLabel -Text "Windows 10 ships Segoe MDL2 Assets, Windows 11 ships Segoe Fluent Icons. Fluent carries practically every MDL2 glyph plus a couple hundred more, 125 of which PsUi has names for, and PsUi picks whichever is installed:" -Style Body -FullWidth
+
+            # The icon font functions aren't injected into async runspaces, so these all run -NoAsync
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Which font?" -Icon "Info" -NoAsync -Action {
+                    Write-Status "Active icon font: $(Get-PsUiIconFont)"
+                }
+                New-UiButton -Text "Force Fluent" -Icon "Tiles" -NoAsync -Action {
+                    Set-PsUiIconFont -FontName 'SegoeFluentIcons'
+                    Write-Status "Icon font set to Segoe Fluent Icons" -Severity Success
+                }
+                New-UiButton -Text "Force MDL2" -Icon "Tiles" -NoAsync -Action {
+                    Set-PsUiIconFont -FontName 'SegoeMDL2'
+                    Write-Status "Icon font set to Segoe MDL2 Assets" -Severity Success
+                }
+                New-UiButton -Text "Back to Auto" -Icon "Sync" -NoAsync -Action {
+                    Set-PsUiIconFont -FontName 'Auto'
+                    Write-Status "Icon font back on Auto" -Severity Success
+                }
+            }
+
+            New-UiButton -Text "Test a Fluent-only glyph" -Icon "Accept" -NoAsync -Action {
+                # CopilotVoice only exists in Fluent. Strict MDL2 reads False and draws a blank square.
+                $lines = foreach ($mode in 'Active', 'MDL2', 'Fluent', 'Either') {
+                    "{0,-7} {1}" -f $mode, (Test-PsUiIcon -Name 'CopilotVoice' -Font $mode)
+                }
+                Show-UiMessageDialog -Title "Test-PsUiIcon 'CopilotVoice'" -Message ($lines -join "`n")
+            }
+
+            New-UiLabel -Text "Controls already on screen keep the font they were drawn with, so reload the window for a full swap. Test-PsUiIcon catches a typo at write time instead of leaving you a blank square." -Style Note -FullWidth
         }
 
         New-UiPanel -Header "Multi-Window Test" -ShowSourceButton -Content {
@@ -479,15 +580,15 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     New-UiLabel -Text "Independent Session Test" -Style Title -FullWidth
                     New-UiLabel -Text "This window has its own session context." -Style Note -FullWidth
                     New-UiSeparator -FullWidth
-                    
+
                     New-UiInput -Label "Window 2 Input" -Variable "window2Input" -Placeholder "Type here..."
                     New-UiDropdown -Label "Window 2 Dropdown" -Variable "window2Choice" -Items @('Alpha', 'Beta', 'Gamma')
-                    
+
                     New-UiButton -Text "Show Values" -Icon "Info" -Accent -Action {
                         Write-Host "Window 2 Input: $window2Input" -ForegroundColor Cyan
                         Write-Host "Window 2 Choice: $window2Choice" -ForegroundColor Cyan
                     }
-                    
+
                     New-UiButton -Text "Check Session ID" -Icon "Info" -Action {
                         $session = Get-UiSession
                         Write-Host "Session ID: $($session.Id)" -ForegroundColor Green
@@ -496,7 +597,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     }
                 }
             }
-            
+
             New-UiButton -Text "Check Main Session" -Icon "Info" -Action {
                 $session = Get-UiSession
                 Write-Host "Main Window Session ID: $($session.Id)" -ForegroundColor Cyan
@@ -626,6 +727,41 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     Write-Host "No item selected. Click a node in the tree first." -ForegroundColor Yellow
                 }
             }
+        }
+
+        New-UiPanel -Header "Tree CheckBoxes" -ShowSourceButton -Content {
+            New-UiLabel -Text "-ParentCheckBoxes and -ChildCheckBoxes put boxes on branches, leaves, or both. With both on, checking a branch cascades to its enabled descendants:" -Style Body -FullWidth
+
+            # Same tree twice would collide on -Variable, so this one gets its own data
+            $checkData = @(
+                @{ Name = 'Prod'; Locked = $false; Children = @(
+                    @{ Name = 'SRV-APP-001'; Locked = $true;  Stopped = $false }
+                    @{ Name = 'SRV-APP-002'; Locked = $false; Stopped = $true  }
+                    @{ Name = 'SRV-DB-001';  Locked = $true;  Stopped = $false }
+                )}
+                @{ Name = 'Staging'; Locked = $false; Children = @(
+                    @{ Name = 'SRV-STG-001'; Locked = $false; Stopped = $true  }
+                    @{ Name = 'SRV-STG-002'; Locked = $false; Stopped = $false }
+                )}
+                @{ Name = 'Lab'; Locked = $false; Children = @(
+                    @{ Name = 'SRV-LAB-001'; Locked = $false; Stopped = $true }
+                )}
+            )
+
+            New-UiTree -Variable 'checkTree' -Items $checkData -Height 380 -ExpandAll -ParentCheckBoxes -ChildCheckBoxes -WhenEnabled { !$_.Locked } -Checked { $_.Stopped }
+
+            New-UiButton -Text 'Show Checked' -Icon 'Accept' -Action {
+                # With checkboxes on, hydration hands back the checked source items instead of the selection
+                $checked = @($checkTree)
+                if (!$checked.Count) {
+                    Write-Host "Nothing checked." -ForegroundColor Yellow
+                    return
+                }
+                Write-Host "$($checked.Count) item(s) checked:" -ForegroundColor Cyan
+                foreach ($item in $checked) { Write-Host "  $($item.Name)" -ForegroundColor Gray }
+            }
+
+            New-UiLabel -Text "WhenEnabled dims the locked servers and the cascade skips them, so checking Prod leaves them alone. Checked ticks the stopped ones up front. -NoCascade makes every box independent." -Style Note -FullWidth
         }
 
         New-UiPanel -Header "Line Chart" -ShowSourceButton -Content {
@@ -1036,15 +1172,15 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             New-UiLabel -Text "Use -OnComplete to update the UI when background work finishes." -Style Note -FullWidth
 
             New-UiInput -Label "Status" -Variable "asyncStatus" -Placeholder "Click the button to start..." -ReadOnly
-            
+
             New-UiButton -Text "Run with Invoke-UiAsync" -Icon "Play" -NoAsync -Action {
                 # Update status before starting background work
                 Set-UiValue -Variable 'asyncStatus' -Value "Working..."
-                
+
                 Invoke-UiAsync -ScriptBlock {
                     # Simulate background work
                     Start-Sleep -Seconds 2
-                    
+
                     # Return a result
                     return "Completed at $(Get-Date -Format 'HH:mm:ss')"
                 } -OnComplete {
@@ -1344,25 +1480,25 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     $host.UI.RawUI.WindowTitle = "Legacy Script Demo"
                     Write-Host "=== Legacy Script Simulation ===" -ForegroundColor Cyan
                     Write-Host ""
-                    
+
                     Write-Information "Script starting at $(Get-Date)"
-                    
+
                     Write-Host "Step 1: Gathering system info..." -ForegroundColor Yellow
                     $host.UI.RawUI.WindowTitle = "Step 1/3 - System Info"
                     @{ Computer = $env:COMPUTERNAME; User = $env:USERNAME } | Out-Host
-                    
+
                     Write-Host ""
                     Write-Host "Step 2: Processing data..." -ForegroundColor Yellow
                     $host.UI.RawUI.WindowTitle = "Step 2/3 - Processing"
                     Start-Sleep -Seconds 1
                     Write-Information "Data processing complete"
-                    
+
                     Write-Host ""
                     Write-Host "Step 3: Review results" -ForegroundColor Yellow
                     $host.UI.RawUI.WindowTitle = "Step 3/3 - Review"
                     Write-Host "Press any key to acknowledge..." -ForegroundColor Magenta
                     Pause
-                    
+
                     $host.UI.RawUI.WindowTitle = ""
                     Write-Host ""
                     Write-Host "=== Script Complete ===" -ForegroundColor Green
@@ -1602,19 +1738,14 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 }
             }
 
-            New-UiActionCard -Header "Multi-Tab DataSet" -Icon "MapLayers" -ButtonText "View" -Description "Multiple data types in one grid with tabs" -Action {
-                Out-Datagrid -TitleText "System Overview" -IsFilterable -DataScriptBlock {
-                    New-DataSet -Name "Processes" -Data (
-                        Get-Process | Select-Object Name, Id, CPU, WorkingSet
-                    )
-                    New-DataSet -Name "Services" -Data (
-                        Get-Service | Select-Object Name, DisplayName, Status
-                    )
-                    New-DataSet -Name "Drives" -Data (
-                        Get-PSDrive -PSProvider FileSystem | Where-Object Used |
-                            Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,1)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}}
-                    )
-                }
+            New-UiActionCard -Header "View Drives" -Icon "HardDrive" -ButtonText "View" -Description "Filesystem drives with usage stats" -Action {
+                Get-PSDrive -PSProvider FileSystem | Where-Object Used |
+                    Select-Object Name,
+                        @{N='UsedGB' ;E={[math]::Round($_.Used/1GB,1)}},
+                        @{N='FreeGB' ;E={[math]::Round($_.Free/1GB,1)}},
+                        @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}},
+                        DisplayRoot |
+                    Out-Datagrid -TitleText "Filesystem Drives" -IsFilterable
             }
         }
 
@@ -1674,6 +1805,19 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     $selection = Show-WindowsObjectPicker -ObjectType User, Group -MultiSelect
                     if ($selection) {
                         Show-UiMessageDialog -Title "Selected Objects" -Message "You selected:`n$($selection -join "`n")" -Icon Info
+                    }
+                }
+                catch {
+                    Show-UiMessageDialog -Title "Error" -Message $_.Exception.Message -Icon Error
+                }
+            }
+
+            New-UiActionCard -Header "Pick OU" -Icon "FolderOpen" -NoAsync -ButtonText "Pick" -Description "Browse the OU tree (domain only)" -Action {
+                try {
+                    # Returns Name, DistinguishedName, AdsPath. -Server and -Credential reach a domain you aren't joined to.
+                    $ou = Show-UiOuPicker -Title "Pick a target OU"
+                    if ($ou) {
+                        Show-UiMessageDialog -Title "Selected OU" -Message "$($ou.Name)`n`n$($ou.DistinguishedName)" -Icon Info
                     }
                 }
                 catch {
@@ -1793,6 +1937,24 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 New-UiButton -Text "Launch" -Icon "Internet" -NoAsync -Action {
                     New-UiChildWindow -Title "Connection Tester" -Width 700 -Height 550 -Content {
                         New-UiTool -Command 'Test-ConnectionStatus' -LayoutStyle Wrap -MaxColumns 2
+                    }
+                }
+            }
+
+            New-UiCard -Header "Move-DemoAccount" -Icon "Contact" -Stretch -Content {
+                New-UiLabel -Text "AD picker buttons on generated inputs. Domain only." -Style Body
+                New-UiButton -Text "Launch" -Icon "Contact" -NoAsync -Action {
+                    New-UiChildWindow -Title "Move Account" -Width 700 -Height 500 -Content {
+                        # Autodetection reads the parameter name. Spelled out here so the demo doesn't ride on the guess.
+                        $toolParams = @{
+                            Command               = 'Move-DemoAccount'
+                            LayoutStyle           = 'Wrap'
+                            MaxColumns            = 2
+                            UserPickerParameters  = 'Identity'
+                            OUPickerParameters    = 'TargetOU'
+                            GroupPickerParameters = 'AddToGroup'
+                        }
+                        New-UiTool @toolParams
                     }
                 }
             }
@@ -2010,8 +2172,8 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     Add-UiListItem -Variable "manipList" -Item "Added at $timestamp"
                 }
                 New-UiAction -Text "Remove Selected" -Icon "Remove" -NoAsync -Action {
-                    $selected = $manipList
-                    if ($selected) { Remove-UiListItem -Variable "manipList" -Item $selected }
+                    # Bare call on purpose: the helper reads the selection itself. A -NoAsync action runs without hydration, so $manipList would be null here.
+                    Remove-UiListItem -Variable "manipList"
                 }
                 New-UiButton -Text "Get All" -Icon "List" -Action {
                     $items = Get-UiListItems -Variable "manipList"
@@ -2036,4 +2198,348 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
 
     }
+
+    # TAB 9: Data Grid
+    New-UiTab -Header "Data Grid" -Content {
+        New-UiLabel -Text "Inline Data Grids" -Style Title -FullWidth
+        New-UiLabel -Text "New-UiDataGrid drops a full data grid into your window like any other control." -Style Note -FullWidth
+        New-UiSeparator -FullWidth
+
+        New-UiPanel -Header "Basics" -ShowSourceButton -Content {
+            New-UiLabel -Text "Columns come from the first row. Sort, filter, copy, export, and the column picker are all on by default:" -Style Body -FullWidth
+
+            New-UiDataGrid -Variable "gridServices" -Items (Get-Service | Select-Object Name, DisplayName, Status, StartType) -Height 200 -DefaultSort "Name"
+
+            New-UiButton -Text "Show Selected" -Icon "Info" -Action {
+                # The grid's -Variable hands the action its selected rows, not the control
+                $picked = @($gridServices)
+                if (!$picked.Count) {
+                    Write-Host "Nothing selected. Click a row, Ctrl-click for more." -ForegroundColor Yellow
+                    return
+                }
+                Write-Host "$($picked.Count) row(s) selected:" -ForegroundColor Cyan
+                foreach ($svc in $picked) { Write-Host "  $($svc.Name) - $($svc.Status)" -ForegroundColor Gray }
+            }
+        }
+
+        New-UiPanel -Header "Cells That Do Things" -ShowSourceButton -Content {
+            New-UiLabel -Text 'A column hashtable with Type = Button, Toggle, or Link puts a real control in every row. $_ inside the action is that row:' -Style Body -FullWidth
+
+            $nodeRows = @(
+                [PSCustomObject]@{ Name = 'web-01'; Role = 'Frontend'; Online = $true;  Runbook = 'https://learn.microsoft.com/iis/' }
+                [PSCustomObject]@{ Name = 'web-02'; Role = 'Frontend'; Online = $false; Runbook = 'https://learn.microsoft.com/iis/' }
+                [PSCustomObject]@{ Name = 'db-01';  Role = 'Database'; Online = $true;  Runbook = 'https://learn.microsoft.com/sql/' }
+                [PSCustomObject]@{ Name = 'db-02';  Role = 'Database'; Online = $false; Runbook = 'https://learn.microsoft.com/sql/' }
+            )
+
+            New-UiDataGrid -Variable "gridNodes" -Items $nodeRows -Height 180 -Editable -Columns @(
+                @{ Name = 'Name'; ReadOnly = $true; Width = '*' }
+                @{ Name = 'Role'; ReadOnly = $true }
+                @{ Header = 'Online'; Type = 'Toggle'; Binding = 'Online'; OnChange = {
+                        Write-Status "$($_.Name) online = $($_.Online)"
+                    }
+                }
+                @{ Header = 'Ping'; Type = 'Button'; Text = 'Ping'; Icon = 'NetworkAdapter'; Action = {
+                        Write-Host "Pinging $($_.Name)..." -ForegroundColor Cyan
+                        Start-Sleep -Milliseconds 400
+                        Write-Host "[OK] $($_.Name) replied" -ForegroundColor Green
+                    }
+                }
+                @{ Header = 'Runbook'; Type = 'Link'; Text = 'Open'; Url = '{Runbook}' }
+            )
+
+            New-UiLabel -Text "The toggle writes back to the row and reports to the status bar. The link substitutes the Runbook property at click time, and only http, https, mailto, and tel are allowed through." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Editing and Validation" -ShowSourceButton -Content {
+            New-UiLabel -Text "Cells edit in place. The editor follows the value type, and a Validator on the column can cancel the commit:" -Style Body -FullWidth
+
+            $editRows = @(
+                [PSCustomObject]@{ Server = 'SRV-APP-001'; Environment = 'Prod';    Cores = 8;  Monitored = $true  }
+                [PSCustomObject]@{ Server = 'SRV-APP-002'; Environment = 'Staging'; Cores = 4;  Monitored = $true  }
+                [PSCustomObject]@{ Server = 'SRV-DB-001';  Environment = 'Prod';    Cores = 16; Monitored = $false }
+            )
+
+            New-UiDataGrid -Variable "gridEdit" -Items $editRows -Height 160 -Editable -Columns @(
+                @{ Name = 'Server'; ReadOnly = $true; Width = '*' }
+                @{ Name = 'Environment'; EditorType = 'ComboBox'; Choices = @('Dev', 'Test', 'Staging', 'Prod') }
+                @{ Name = 'Cores'; Validator = {
+                        $parsed = 0
+                        if ([int]::TryParse($args[0], [ref]$parsed)) { return ($parsed -ge 1 -and $parsed -le 64) }
+                        return $false
+                    }
+                }
+                @{ Name = 'Monitored' }
+            ) -OnCellEdit {
+                param($row, $column, $newValue, $oldValue)
+                Write-Status "$($row.Server): $column went from $oldValue to $newValue" -Severity Success
+            }
+
+            New-UiLabel -Text "Environment gets a dropdown from its Choices, Monitored a checkbox because it holds a bool, Cores a text box that rejects anything outside 1-64. Try typing 500 into it." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Row Coloring, Row Details, Frozen Columns" -ShowSourceButton -Content {
+            New-UiLabel -Text "-RowBackground colors rows as they scroll into view, -RowDetailsTemplate builds a panel under the clicked row, -FrozenColumns pins the left edge:" -Style Body -FullWidth
+
+            $driveRows = Get-PSDrive -PSProvider FileSystem | Where-Object Used |
+                Select-Object Name,
+                    @{N='UsedGB'     ;E={[math]::Round($_.Used/1GB,1)}},
+                    @{N='FreeGB'     ;E={[math]::Round($_.Free/1GB,1)}},
+                    @{N='PercentUsed';E={[math]::Round(($_.Used / ($_.Used + $_.Free)) * 100, 0)}},
+                    DisplayRoot
+
+            New-UiDataGrid -Variable "gridDrives" -Items $driveRows -Height 200 -FrozenColumns 1 -RowBackground {
+                    if ($_.PercentUsed -ge 90) { '#33FF6B6B' }
+                    elseif ($_.PercentUsed -ge 75) { '#33FFD166' }
+                } -RowDetailsTemplate {
+                    New-UiLabel -Text "Drive $($_.Name)" -Style SubHeader
+                    New-UiLabel -Text "$($_.UsedGB) GB used, $($_.FreeGB) GB free, $($_.PercentUsed)% full" -Style Body
+                    New-UiLabel -Text "Root: $($_.DisplayRoot)" -Style Note
+                }
+
+            New-UiLabel -Text "Click a row to expand its details. Drives past 75% tint yellow, past 90% red. Scroll sideways and the Name column stays put." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Rightclick Actions" -ShowSourceButton -Content {
+            New-UiLabel -Text "Entries from -RowContextMenu sit above the standard menu. Select several rows first and the action runs against each one in turn:" -Style Body -FullWidth
+
+            $fleetRows = @(
+                [PSCustomObject]@{ Name = 'web-01'; Status = 'Running' }
+                [PSCustomObject]@{ Name = 'web-02'; Status = 'Stopped' }
+                [PSCustomObject]@{ Name = 'web-03'; Status = 'Failed'  }
+                [PSCustomObject]@{ Name = 'db-01';  Status = 'Running' }
+                [PSCustomObject]@{ Name = 'db-02';  Status = 'Stopped' }
+            )
+
+            New-UiDataGrid -Variable "gridFleet" -Items $fleetRows -Height 180 -RowContextMenu ([ordered]@{
+                'Restart' = @{
+                    Icon    = 'Refresh'
+                    Enabled = { $_.Status -ne 'Running' }
+                    Action  = {
+                        Write-Host "Restarting $($_.Name), was $($_.Status)..." -ForegroundColor Cyan
+                        Start-Sleep -Milliseconds 300
+                        $_.Status = 'Running'
+                        Write-Host "[OK] $($_.Name) is up" -ForegroundColor Green
+                    }
+                }
+                'Mark Failed' = @{
+                    Icon   = 'Cancel'
+                    Action = {
+                        $_.Status = 'Failed'
+                        Write-Host "Marked $($_.Name) failed" -ForegroundColor Yellow
+                    }
+                }
+                'Details' = @{
+                    Icon   = 'Info'
+                    Sync   = $true
+                    Action = { Show-UiMessageDialog -Title $_.Name -Message ($_ | Format-List | Out-String) }
+                }
+            })
+
+            New-UiLabel -Text "The Enabled scriptblock on Restart gets rerun for every row, so a mixed selection only touches the rows that aren't already Running. Details opens a dialog, which is what Sync is for." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Live Feed (-ItemsSource)" -ShowSourceButton -Content {
+            New-UiLabel -Text 'A plain ArrayList handed to -ItemsSource gets rebound to a threadsafe copy, so a background runspace can add to it directly. No [ref], no Dispatcher.Invoke:' -Style Body -FullWidth
+
+            $feedRows = [System.Collections.ArrayList]::new()
+
+            New-UiDataGrid -Variable "gridFeed" -ItemsSource $feedRows -Height 180 -EmptyMessage "Nothing yet. Start the feed."
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Start Feed" -Icon "Play" -NoOutput -Action {
+                    Write-Status "Feeding 20 rows..."
+                    1..20 | ForEach-Object {
+                        # $feedRows in here is the wrapped collection, not the ArrayList declared above
+                        [void]$feedRows.Add([PSCustomObject]@{
+                            Time  = Get-Date -Format 'HH:mm:ss'
+                            Event = "Event $_"
+                            Level = @('Info', 'Warning', 'Error')[(Get-Random -Maximum 3)]
+                        })
+                        Start-Sleep -Milliseconds 150
+                    }
+                    Write-Status "Feed done" -Severity Success
+                }
+                New-UiButton -Text "Add One" -Icon "Add" -NoOutput -Action {
+                    Add-UiDataGridItem -Variable "gridFeed" -Item @{ Time = (Get-Date -Format 'HH:mm:ss'); Event = 'Manual entry'; Level = 'Info' }
+                    Write-Status "One row appended"
+                }
+                New-UiButton -Text "Replace All" -Icon "Sync" -NoOutput -Action {
+                    Set-UiDataGridItems -Variable "gridFeed" -Items @(
+                        [PSCustomObject]@{ Time = (Get-Date -Format 'HH:mm:ss'); Event = 'Replaced the lot'; Level = 'Info' }
+                    )
+                    Write-Status "Replaced the whole set at once" -Severity Success
+                }
+                New-UiButton -Text "Clear" -Icon "Clear" -NoOutput -Action {
+                    Clear-UiDataGridItems -Variable "gridFeed"
+                    Write-Status "Grid emptied"
+                }
+            }
+
+            New-UiLabel -Text "Those last three buttons go through the helpers instead of the list. Replace All swaps the whole set at once rather than one row at a time." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Filling Vertical Space" -ShowSourceButton -Content {
+            New-UiLabel -Text "-Fill gives the grid whatever height is left and follows resizes. Anything declared after it stays pinned to the bottom:" -Style Body -FullWidth
+
+            New-UiButton -Text "Open a Filled Grid" -Icon "NewWindow" -NoAsync -Action {
+                New-UiChildWindow -Title "Processes (-Fill)" -Width 820 -Height 600 -Content {
+                    New-UiLabel -Text "Resize this window. The grid grows, the button and the bar stay where they are." -Style Note -FullWidth
+
+                    New-UiDataGrid -Variable "fillGrid" -Items (Get-Process | Select-Object Name, Id, WorkingSet, CPU) -Fill -MinFillHeight 120 -DefaultSort "Name"
+
+                    New-UiButton -Text "Refresh" -Icon "Sync" -NoOutput -Action {
+                        Set-UiDataGridItems -Variable "fillGrid" -Items (Get-Process | Select-Object Name, Id, WorkingSet, CPU)
+                        Write-Status "Process list refreshed" -Severity Success
+                    }
+
+                    New-UiStatusBar -DefaultText "Ready" -Intercept
+                }
+            }
+
+            New-UiLabel -Text "-MaxFillHeight caps the growth on a tall monitor, -MinFillHeight keeps a floor when a sibling turns greedy. Two -Fill controls in one panel split unevenly; wrap them in New-UiGrid -Rows '*,*' -Fill for an even split." -Style Note -FullWidth
+        }
+    }
+
+    # TAB 10: Status Bar
+    New-UiTab -Header "Status Bar" -Content {
+        New-UiLabel -Text "Status Bar" -Style Title -FullWidth
+        New-UiLabel -Text "The bar along the bottom of this window is live on every tab. These panels drive it on purpose." -Style Note -FullWidth
+        New-UiSeparator -FullWidth
+
+        New-UiPanel -Header "Write-Status" -ShowSourceButton -Content {
+            New-UiLabel -Text "Write-Status puts text on the bar the way Write-Host puts it on a console, and it works from any thread:" -Style Body -FullWidth
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Write a message" -NoOutput -Action { Write-Status "Hello from a button action" }
+                New-UiButton -Text "Write a long one" -NoOutput -Action {
+                    Write-Status "The bar clamps text past its max width with an ellipsis, so a long message never pushes the layout around no matter how much you throw at it."
+                }
+                New-UiButton -Text "Clear" -Icon "Clear" -NoOutput -Action { Clear-UiStatus }
+            }
+        }
+
+        New-UiPanel -Header "Severity and Timeouts" -ShowSourceButton -Content {
+            New-UiLabel -Text "Severity tints the bar and resets itself after five seconds. -Timeout changes the wait, and -Timeout 0 holds the tint until something else moves it:" -Style Body -FullWidth
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Info"    -NoOutput -Action { Write-Status "Just so you know."         -Severity Info    }
+                New-UiButton -Text "Success" -NoOutput -Action { Write-Status "Saved without conflicts."  -Severity Success }
+                New-UiButton -Text "Warning" -NoOutput -Action { Write-Status "Disk is at 87 percent."    -Severity Warning }
+                New-UiButton -Text "Error"   -NoOutput -Action { Write-Status "Could not reach the host." -Severity Error   }
+            }
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Warning for 12s"   -NoOutput -Action { Write-Status "Sticks around a while"      -Severity Warning -Timeout 12 }
+                New-UiButton -Text "Error until reset" -NoOutput -Action { Write-Status "Stays red until you fix it" -Severity Error   -Timeout 0  }
+                New-UiButton -Text "Back to neutral"   -NoOutput -Action { Write-Status "Nothing to see here"        -Severity Info }
+            }
+        }
+
+        New-UiPanel -Header "Progress and Cancel" -ShowSourceButton -Content {
+            New-UiLabel -Text "This window's bar was built with -AutoProgress and -AutoCancel, so plain Write-Progress fills the embedded bar and a Cancel button shows up while work runs:" -Style Body -FullWidth
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Run 50 steps" -Icon "Play" -NoOutput -Action {
+                    1..50 | ForEach-Object {
+                        Write-Progress -Activity "Crunching numbers" -Status "Item $_ of 50" -PercentComplete (2 * $_)
+                        Start-Sleep -Milliseconds 80
+                    }
+                    Write-Progress -Activity "Crunching numbers" -Completed
+                }
+                New-UiButton -Text "No percentage" -NoOutput -Action {
+                    Write-Progress -Activity "Working" -Status "Talking to the server"
+                    Start-Sleep -Seconds 3
+                    Write-Progress -Activity "Working" -Completed
+                }
+                New-UiButton -Text "Long task, try Cancel" -Icon "Timer" -NoOutput -Action {
+                    Write-Status "Started. The Cancel button is on the bar."
+                    1..40 | ForEach-Object {
+                        Write-Progress -Activity "Long task" -Status "Step $_ of 40" -PercentComplete (2.5 * $_)
+                        Start-Sleep -Milliseconds 250
+                    }
+                    Write-Progress -Activity "Long task" -Completed
+                    Write-Status "Finished without being cancelled" -Severity Success
+                }
+            }
+
+            New-UiLabel -Text "Or skip Write-Progress and drive the embedded bar by hand:" -Style Body -FullWidth
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "25%" -NoOutput -Action { Set-UiStatusBar -Text "Quarter" -Progress 25 }
+                New-UiButton -Text "75%" -NoOutput -Action { Set-UiStatusBar -Text "Almost"  -Progress 75 }
+                New-UiButton -Text "+10" -NoOutput -Action { Set-UiStatusBar -Text "Plus ten" -Increment 10 }
+                New-UiButton -Text "Indeterminate on"  -NoOutput -Action { Set-UiStatusBar -Text "Working..." -Indeterminate }
+                New-UiButton -Text "Indeterminate off" -NoOutput -Action { Set-UiStatusBar -Text "Done" -Indeterminate:$false -Progress 0 }
+            }
+        }
+
+        New-UiPanel -Header "Badges (-Intercept)" -ShowSourceButton -Content {
+            New-UiLabel -Text "With -Intercept, Write-Warning and Write-Error from your actions collect as clickable counters instead of scrolling past. -CaptureAll adds badges for the rest of the console: Write-Host and Write-Information share one, verbose and debug each get their own. Click a badge to read them:" -Style Body -FullWidth
+
+            New-UiPanel -LayoutStyle Wrap -Content {
+                New-UiButton -Text "Raise 3 warnings" -Icon "Warning" -NoOutput -Action {
+                    1..3 | ForEach-Object {
+                        Write-Warning "Warning number $_"
+                        Start-Sleep -Milliseconds 200
+                    }
+                }
+                New-UiButton -Text "Raise an error" -Icon "Error" -NoOutput -Action {
+                    Write-Error "Something went wrong and this is what it had to say about it"
+                }
+                New-UiButton -Text "Throw for real" -Icon "Cancel" -NoOutput -Action {
+                    Get-Item 'C:\this\path\does\not\exist' -ErrorAction Stop
+                }
+                New-UiButton -Text "Write-Information" -Icon "Info" -NoOutput -Action {
+                    # Rides the console badge - the information stream routes through the same path as Write-Host
+                    Write-Information "An information record, caught without a window"
+                }
+                New-UiButton -Text "Write-Verbose" -NoOutput -Action {
+                    # Gated by $VerbosePreference like a console - silent without this line
+                    $VerbosePreference = 'Continue'
+                    Write-Verbose "A verbose line for the verbose badge"
+                }
+                New-UiButton -Text "Write-Debug" -NoOutput -Action {
+                    $DebugPreference = 'Continue'
+                    Write-Debug "A debug line for the debug badge"
+                }
+                New-UiButton -Text "Reset badges" -Icon "Clear" -NoOutput -Action { Clear-UiStatus }
+            }
+
+            New-UiLabel -Text "The error popup keeps the exception type, the script, the line, and the stack. This bar has -Persist, so counts stack across clicks until Reset; without it every action starts the badges over. Warnings and errors from every tab land here too - go run the Comprehensive Output Test and watch the counters jump. -NoOutputOnly would limit the badges to windowless buttons so nothing gets counted twice. One caveat: New-UiWindow -Debug routes debug lines to the real console, so the debug badge only counts in windows without it (like this one)." -Style Note -FullWidth
+        }
+
+        New-UiPanel -Header "Inline Bars and Targeting" -ShowSourceButton -Content {
+            New-UiLabel -Text "-Inline docks a bar to the panel it sits in rather than the window. Name your bars and -Bar decides which one a message lands on:" -Style Body -FullWidth
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Hit the window bar" -NoOutput -Action { Write-Status "This went to the bottom bar" -Severity Info    -Bar "demoBar" }
+                New-UiButton -Text "Hit the local bar"  -NoOutput -Action { Write-Status "This went to the local bar"  -Severity Success -Bar "tabBar"  }
+                New-UiButton -Text "Hit both" -NoOutput -Action {
+                    Write-Status "Bottom bar got this"          -Severity Warning -Bar "demoBar"
+                    Write-Status "Local bar got something else" -Severity Success -Bar "tabBar"
+                }
+            }
+
+            New-UiPanel -Orientation Horizontal -Content {
+                New-UiButton -Text "Hide window bar" -NoOutput -Action { Hide-UiStatusBar -Variable "demoBar" }
+                New-UiButton -Text "Show window bar" -NoOutput -Action { Show-UiStatusBar -Variable "demoBar" }
+                New-UiButton -Text "Clear local bar" -NoOutput -Action { Clear-UiStatus -Variable "tabBar" }
+            }
+
+            New-UiLabel -Text "Each bar keeps its own severity timer and its own message list. A hidden bar keeps its state, so showing it again picks up where it left off." -Style Note -FullWidth
+
+            # A bar can hold most PsUi controls. New-UiSpacer eats the gap, so everything after it docks right.
+            New-UiStatusBar -Inline -Variable "tabBar" -DefaultText "Local bar ready" -Content {
+                New-UiGlyph -Name "Cloud" -Size 14
+                New-UiDropdown -Label "Env" -Variable "sbEnv" -Items @('dev', 'staging', 'prod') -Default 'dev' -WPFProperties @{ Width = 110 }
+                New-UiSpacer
+                New-UiGlyph -Name "Tag" -Size 12
+                New-UiLabel -Text "local"
+            }
+        }
+    }
+
+    # Bottom bar, live on every tab. Every card's warnings and errors badge here on top of their own output windows - a real tool would add -NoOutputOnly to count only windowless buttons. -CaptureAll adds the console/verbose/debug badges. -Persist lets the counts stack across clicks instead of resetting per action.
+    New-UiStatusBar -Variable "demoBar" -DefaultText "Ready" -AutoProgress -AutoCancel -Intercept -CaptureAll -Persist
 }

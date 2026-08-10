@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -91,6 +93,63 @@ namespace PsUi
             }
         }
 
+        private static readonly object _appCreateLock = new object();
+        private static readonly object _applyLock = new object();
+        private static PropertyInfo _windowsInternalProp;
+
+        // Window build sites call this on the thread that will own the window, so Application.Current ends up located with the window it themes. ApplyTheme deliberately no longer creates the Application. 
+        // A theme call on a thread with no window (eg Initialize-UITheme before New-UiWindow) would pin Application.Current there, and New-UiWindow, which builds on its own STA thread, would inherit that cross thread App and silently lose all
+        //  content theming. Returns false without creating on a thread that isn't STA (an MTA pinned App can never host a window) and whenever Current already exists, including a stale/dead Dispatcher one (recovery for that is the dead Dispatcher branch in ApplyTheme).
+        public static bool EnsureApplication()
+        {
+            if (Application.Current != null) { return false; }
+            if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA) { return false; }
+            lock (_appCreateLock)
+            {
+                if (Application.Current != null) { return false; }
+                try
+                {
+                    new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                    return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    // Lost a creation race, one App per AppDomain. Fine as long as one now exists.
+                    return Application.Current != null;
+                }
+            }
+        }
+
+        // Orphaned = Application alive on a diff thread that owns zero windows, nothing there worth marshaling to (its thread is typically seems to be parked in New-UiWindow's Join).
+        //  Application.Windows calls VerifyAccess and throws on any cross thread read, so read the internal WindowsInternal via reflection instead. Any failure defaults to not orphaned. Failsafe and keeps the marshal path.
+        public static bool IsApplicationOrphaned()
+        {
+            Application app = Application.Current;
+            if (app == null) { return false; }
+            if (app.Dispatcher == null) { return false; }
+            // Dead/stale Dispatcher is a seperate case (handled by the shutdown branch), not "orphaned"
+            if (app.Dispatcher.HasShutdownStarted || !app.Dispatcher.Thread.IsAlive) { return false; }
+            // Same thread = healthy inline case
+            if (app.Dispatcher.Thread == Thread.CurrentThread) { return false; }
+
+            try
+            {
+                if (_windowsInternalProp == null)
+                {
+                    _windowsInternalProp = typeof(Application).GetProperty(
+                        "WindowsInternal", BindingFlags.Instance | BindingFlags.NonPublic);
+                }
+                if (_windowsInternalProp == null) { return false; }
+                WindowCollection wc = _windowsInternalProp.GetValue(app, null) as WindowCollection;
+                if (wc == null) { return false; }
+                return wc.Count == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         // Main entry point - generates all brushes in memory from PS hashtable, no theme XAML files needed
         public static void ApplyTheme(string themeName, IDictionary colors)
         {
@@ -99,23 +158,25 @@ namespace PsUi
                 throw new ArgumentNullException("colors", "Theme colors hashtable cannot be null");
             }
 
-            // Create Application if we're running outside normal WPF context
+            // No Application yet = headless (import time theme set, Pester, a background runspace, aliens).
+            // Record the name and return without creating one. Creating it here would pin Application.Current to whatever thread made the call and orphan every later window (see EnsureApplication). ModuleContext.ActiveTheme is already set, so the real apply happens when a window is built. No ThemeChanged listener can exist without an App anyway.
             if (Application.Current == null)
             {
-                new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                _currentThemeName = themeName;
+                return;
             }
 
-            // Check if dispatcher is still operational (dead thread or explicit shutdown)
+            // Dead/stale Dispatcher or an App orphaned on another (blocked) thread... apply directly on this thread. Marshaling to an orphan's Dispatcher would just eat the 5s timeout below and fall through to this same direct apply.
             if (Application.Current.Dispatcher.HasShutdownStarted ||
-                !Application.Current.Dispatcher.Thread.IsAlive)
+                !Application.Current.Dispatcher.Thread.IsAlive ||
+                IsApplicationOrphaned())
             {
-                // Dispatcher is dead - apply directly on current thread (we're likely on a new STA thread)
                 ApplyThemeOnUIThread(themeName, colors);
                 return;
             }
 
-            // Marshal all UI work to the dispatcher thread (critical for PS 5.1)
-            // Use timeout to avoid hanging if dispatcher dies between our check and the invoke
+            // Marshal all UI work to the UI thread (critical for PS 5.1)
+            // Use timeout to avoid hanging if the UI thread dies between the check and the invoke
             try
             {
                 Application.Current.Dispatcher.Invoke(new Action(delegate
@@ -133,51 +194,55 @@ namespace PsUi
         // Applies theme on UI thread. Add-first/remove-second order avoids PS 5.1 resource bug.
         private static void ApplyThemeOnUIThread(string themeName, IDictionary colors)
         {
-            // Generate the resource dictionary from the hashtable
-            ResourceDictionary themeDict = GenerateResourceDictionary(colors);
-            themeDict[ThemeMarkerKey] = true;
-
-            var mergedDicts = Application.Current.Resources.MergedDictionaries;
-            
-            // Identify old theme dictionaries first
-            var toRemove = new List<ResourceDictionary>();
-            foreach (ResourceDictionary dict in mergedDicts)
+            // Serialize the swap. The orphan routing above lets a window thread and the App owner both reach here directly, and ResourceDictionary is not threadsafe. Nothing inside waits on another thread (RefreshRegisteredElements skips cross thread elements).
+            lock (_applyLock)
             {
-                if (dict.Contains(ThemeMarkerKey))
+                // Generate the resource dictionary from the hashtable
+                ResourceDictionary themeDict = GenerateResourceDictionary(colors);
+                themeDict[ThemeMarkerKey] = true;
+
+                var mergedDicts = Application.Current.Resources.MergedDictionaries;
+
+                // Identify old theme dictionaries first
+                var toRemove = new List<ResourceDictionary>();
+                foreach (ResourceDictionary dict in mergedDicts)
                 {
-                    toRemove.Add(dict);
+                    if (dict.Contains(ThemeMarkerKey))
+                    {
+                        toRemove.Add(dict);
+                    }
                 }
-            }
 
-            // ADD NEW FIRST - prevents "resource vacuum" where bindings detach in PS 5.1
-            // The window sees the new brush immediately, so bindings update instead of breaking
-            mergedDicts.Insert(0, themeDict);
+                // ADD NEW FIRST - prevents "resource vacuum" where bindings detach in PS 5.1
+                // The window sees the new brush immediately, so bindings update instead of breaking
+                mergedDicts.Insert(0, themeDict);
 
-            // REMOVE OLD SECOND - safe now because new resources already exist
-            foreach (ResourceDictionary dict in toRemove)
-            {
-                mergedDicts.Remove(dict);
-            }
-            
-            _currentThemeName = themeName;
-            
-            // Notify listeners on other threads (e.g., KeyCaptureDialog)
-            var handler = ThemeChanged;
-            if (handler != null)
-            {
-                try { handler(themeName); }
-                catch { /* ignore listener errors */ }
-            }
+                // REMOVE OLD SECOND - safe now because new resources already exist
+                foreach (ResourceDictionary dict in toRemove)
+                {
+                    mergedDicts.Remove(dict);
+                }
 
-            // Load control styles if not already loaded
-            if (!_stylesLoaded)
-            {
-                LoadStyles();
-                _stylesLoaded = true;
-            }
+                _currentThemeName = themeName;
 
-            // Re-bind all registered elements to trigger resource refresh
-            RefreshRegisteredElements();
+                // Notify listeners on other threads (e.g., KeyCaptureDialog)
+                var handler = ThemeChanged;
+                if (handler != null)
+                {
+                    try { handler(themeName); }
+                    catch { /* ignore listener errors */ }
+                }
+
+                // Load control styles if not already loaded
+                if (!_stylesLoaded)
+                {
+                    LoadStyles();
+                    _stylesLoaded = true;
+                }
+
+                // Re-bind all registered elements to trigger resource refresh
+                RefreshRegisteredElements();
+            }
         }
 
         // Generate ResourceDictionary from hashtable - maps short keys (WindowBg) to full names (WindowBackgroundBrush)
@@ -212,7 +277,9 @@ namespace PsUi
                 { "SecondaryText", new[] { "SecondaryTextBrush" } },
                 { "GroupBoxBg", new[] { "GroupBoxBackgroundBrush" } },
                 { "GroupBoxBorder", new[] { "GroupBoxBorderBrush" } },
-                { "FindHighlight", new[] { "FindHighlightBrush" } }
+                { "FindHighlight", new[] { "FindHighlightBrush" } },
+                // Without this entry, windows themed straight through ApplyTheme (the -ThemePath construction path skips Set-ActiveTheme's PS side patch) rendered every DynamicResource LinkBrush consumer with default foreground.
+                { "Link", new[] { "LinkBrush" } }
             };
             
             foreach (var mapping in brushMappings)
@@ -338,7 +405,12 @@ namespace PsUi
                 }
                 else
                 {
-                    double.TryParse(opacityValue.ToString(), out disabledOpacity);
+                    // A failed TryParse writes 0 into the out param, which would make disabled controls fully invisible. Only take the parsed value on success. Otherwise keep the 0.4 fallback.
+                    double parsedOpacity;
+                    if (double.TryParse(opacityValue.ToString(), out parsedOpacity))
+                    {
+                        disabledOpacity = parsedOpacity;
+                    }
                 }
             }
             dict["DisabledOpacity"] = disabledOpacity;
@@ -507,15 +579,21 @@ namespace PsUi
             else if (element is TextBlock)
             {
                 TextBlock textBlock = (TextBlock)element;
-                
+
                 // Tag can be a plain string ("AccentBrush") or a hashtable with a BrushTag key
                 string brushKey = textBlock.Tag as string;
                 if (brushKey == null)
                 {
                     Hashtable tagTable = textBlock.Tag as Hashtable;
-                    if (tagTable != null && tagTable.ContainsKey("BrushTag"))
+                    if (tagTable != null)
                     {
-                        brushKey = tagTable["BrushTag"] as string;
+                        // Badge text inside intercept pills, foreground is managed by Update-StatusBarTheme via Get-ContrastColor, not resource binding
+                        if (tagTable.ContainsKey("IsBadgeText")) return;
+
+                        if (tagTable.ContainsKey("BrushTag"))
+                        {
+                            brushKey = tagTable["BrushTag"] as string;
+                        }
                     }
                 }
                 
@@ -582,11 +660,30 @@ namespace PsUi
                 
                 if (border.Background != null && border.Background != Brushes.Transparent)
                 {
-                    // Check if this is a card header (set by New-UiCard)
                     string brushKey = "ControlBackgroundBrush";
                     var tag = border.Tag as System.Collections.IDictionary;
                     if (tag != null)
                     {
+                        // Badge pills own their background via the severity brush key
+                        if (tag.Contains("IsBadgePill"))
+                        {
+                            string badgeBrush = tag.Contains("BrushKey") ? tag["BrushKey"] as string : null;
+                            if (badgeBrush != null)
+                            {
+                                border.ClearValue(Border.BackgroundProperty);
+                                border.SetResourceReference(Border.BackgroundProperty, badgeBrush);
+                            }
+                            return;
+                        }
+
+                        // Status bars own their background via the severity system
+                        if (tag.Contains("IsStatusBar"))
+                        {
+                            border.SetResourceReference(Border.BackgroundProperty, "HeaderBackgroundBrush");
+                            border.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
+                            return;
+                        }
+
                         // Check for CardHeader type
                         object typeObj = tag.Contains("Type") ? tag["Type"] : null;
                         bool isCardHeader = typeObj != null && typeObj.ToString() == "CardHeader";
@@ -758,7 +855,7 @@ namespace PsUi
             }
         }
 
-        // Re-bind all registered elements, skipping any with dead dispatchers
+        // Re-bind all registered elements, skipping any with a dead Dispatcher
         private static void RefreshRegisteredElements()
         {
             var toRemove = new List<WeakReference<FrameworkElement>>();
@@ -782,7 +879,7 @@ namespace PsUi
                         continue;
                     }
                     
-                    // Skip elements with dead dispatchers
+                    // Skip elements with a dead Dispatcher
                     if (element.Dispatcher.HasShutdownStarted)
                     {
                         toRemove.Add(weakRef);
@@ -814,8 +911,7 @@ namespace PsUi
             FrameworkElement fe = element as FrameworkElement;
             if (fe != null)
             {
-                // Skip elements that are part of a ControlTemplate - they handle their own theming
-                // via DynamicResource in the template. We only bind "root" elements.
+                // Skip elements that are part of a ControlTemplate - they handle their own theming via DynamicResource in the template. We only bind "root" elements.
                 if (fe.TemplatedParent == null)
                 {
                     BindElementToResources(fe);

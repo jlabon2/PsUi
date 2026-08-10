@@ -15,6 +15,9 @@ function Set-CheckBoxStyle {
     $CheckBox.VerticalContentAlignment = 'Center'
     $CheckBox.Cursor = [System.Windows.Input.Cursors]::Hand
 
+    # Substitute the active icon font into the XAML template
+    $iconFontName = [PsUi.ModuleContext]::ActiveIconFontName
+
     $xaml = @"
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -38,7 +41,7 @@ function Set-CheckBoxStyle {
             <Grid>
                 <TextBlock x:Name="checkMark"
                            Text="&#xE73E;"
-                           FontFamily="Segoe MDL2 Assets"
+                           FontFamily="$iconFontName"
                            FontSize="9"
                            Margin="-2,0,0,0"
                            Foreground="{DynamicResource AccentBrush}"
@@ -81,14 +84,29 @@ function Set-CheckBoxStyle {
             <Setter TargetName="checkMark" Property="Visibility" Value="Collapsed"/>
             <Setter TargetName="indeterminateMark" Property="Visibility" Value="Visible"/>
         </Trigger>
+
+        <!-- Inside a selected DataGridRow the accent selection brush matches the checked fill -
+             swap to SelectionTextBrush so the box stays visible against the row highlight. -->
+        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}, AncestorLevel=1}, Path=IsSelected, FallbackValue=False}" Value="True">
+            <Setter TargetName="checkBoxBorder" Property="BorderBrush" Value="{DynamicResource SelectionTextBrush}"/>
+        </DataTrigger>
+        <MultiDataTrigger>
+            <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}, AncestorLevel=1}, Path=IsSelected, FallbackValue=False}" Value="True"/>
+                <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=IsChecked}" Value="True"/>
+            </MultiDataTrigger.Conditions>
+            <Setter TargetName="checkBoxBorder" Property="Background" Value="{DynamicResource SelectionTextBrush}"/>
+            <Setter TargetName="checkMark" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        </MultiDataTrigger>
     </ControlTemplate.Triggers>
 </ControlTemplate>
 "@
 
     try {
-        # Parse once per session, reuse for every checkbox (saves ~3-5ms per call)
-        if (!$script:_checkBoxTemplate) {
+        # Re-parse if icon font changed since last cache
+        if (!$script:_checkBoxTemplate -or $script:_checkBoxTemplateFontName -ne $iconFontName) {
             $script:_checkBoxTemplate = [System.Windows.Markup.XamlReader]::Parse($xaml)
+            $script:_checkBoxTemplateFontName = $iconFontName
         }
         $CheckBox.Template = $script:_checkBoxTemplate
         

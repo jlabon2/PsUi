@@ -30,6 +30,5 @@ function Stop-UiAsync {
 
     Write-Debug "Cancelling active async operation"
     $executor.Cancel()
-    
-    # Note: ActiveExecutor gets cleared by the executor's completion handlers
+
 }

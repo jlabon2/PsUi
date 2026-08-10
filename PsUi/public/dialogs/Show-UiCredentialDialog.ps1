@@ -115,7 +115,7 @@ function Show-UiCredentialDialog {
     }
     $capsIcon = [System.Windows.Controls.TextBlock]@{
         Text              = [PsUi.ModuleContext]::GetIcon('Alert')
-        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
         FontSize          = 12
         Foreground        = ConvertTo-UiBrush $colors.Warning
         Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
