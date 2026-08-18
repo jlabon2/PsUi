@@ -11,16 +11,13 @@ function Set-ContextMenuStyle {
     
     $colors = Get-ThemeColors
     
-    # Try to apply the implicit style from Application resources first
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            # Look for implicit ContextMenu style (keyed by type)
-            $style = [System.Windows.Application]::Current.TryFindResource([System.Windows.Controls.ContextMenu])
-            if ($null -ne $style -and $style -is [System.Windows.Style]) {
-                $ContextMenu.Style = $style
-                $styleApplied = $true
-            }
+        # Implicit ContextMenu style, keyed by type
+        $style = [PsUi.ThemeEngine]::FindStyleResource([System.Windows.Controls.ContextMenu])
+        if ($null -ne $style -and $style -is [System.Windows.Style]) {
+            $ContextMenu.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

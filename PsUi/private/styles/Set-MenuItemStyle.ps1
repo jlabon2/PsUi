@@ -13,15 +13,12 @@ function Set-MenuItemStyle {
     
     if (!$Colors) { $Colors = Get-ThemeColors }
     
-    # Try to apply the implicit style from Application resources first
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource([System.Windows.Controls.MenuItem])
-            if ($null -ne $style -and $style -is [System.Windows.Style]) {
-                $MenuItem.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource([System.Windows.Controls.MenuItem])
+        if ($null -ne $style -and $style -is [System.Windows.Style]) {
+            $MenuItem.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

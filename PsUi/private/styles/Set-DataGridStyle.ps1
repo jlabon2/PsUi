@@ -15,12 +15,10 @@ function Set-DataGridStyle {
     # Try to apply the Modern XAML style
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource('ModernDataGridStyle')
-            if ($null -ne $style) {
-                $Grid.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource('ModernDataGridStyle')
+        if ($null -ne $style) {
+            $Grid.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

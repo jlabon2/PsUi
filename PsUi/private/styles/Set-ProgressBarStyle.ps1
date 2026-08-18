@@ -9,10 +9,9 @@ function Set-ProgressBarStyle {
         [System.Windows.Controls.ProgressBar]$ProgressBar
     )
 
-    # Indeterminate skips the custom template - WPF's native indeterminate animation is fine and honestly nicer than anything hand-rolled here.
-    # Use DynamicResource so theme switches still redraw, and honor a severity brush via Tag.
+    # Indeterminate skips the custom template. WPF's native indeterminate animation is fine and honestly nicer than anything built by hand here.
+    # DynamicResource so a theme switch still reaches it, and Tag carries the severity brush.
     if ($ProgressBar.IsIndeterminate) {
-  
         $fgKey = 'AccentBrush'
         if ($ProgressBar.Tag -is [hashtable] -and $ProgressBar.Tag.BrushTag) {
             $fgKey = [string]$ProgressBar.Tag.BrushTag
@@ -20,8 +19,8 @@ function Set-ProgressBarStyle {
 
         $ProgressBar.SetResourceReference(
             [System.Windows.Controls.Control]::ForegroundProperty, $fgKey)
-        
-            # BorderBrush mirrors what ThemeEngine.ApplyTheme does on switches - keep them in lockstep.
+
+        # BorderBrush mirrors what ThemeEngine.ApplyTheme does on switches, keep them in lockstep.
         $ProgressBar.SetResourceReference(
             [System.Windows.Controls.Control]::BackgroundProperty, 'BorderBrush')
         $ProgressBar.Height = 6
@@ -33,12 +32,10 @@ function Set-ProgressBarStyle {
     # Determinate: apply the modern template
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource('ModernProgressBarStyle')
-            if ($null -ne $style) {
-                $ProgressBar.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource('ModernProgressBarStyle')
+        if ($null -ne $style) {
+            $ProgressBar.Style = $style
+            $styleApplied = $true
         }
     }
     catch {  Write-Verbose "Failed to apply ModernProgressBarStyle: $_"

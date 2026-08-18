@@ -1,7 +1,7 @@
 function ConvertTo-UiDefinitionArray {
     <#
     .SYNOPSIS
-        Normalizes builder scriptblock, array, or hashtable input into a plain hashtable array.
+        Normalizes standin scriptblock, array, or hashtable input into a plain hashtable array.
     #>
     [CmdletBinding()]
     param(
@@ -21,7 +21,7 @@ function ConvertTo-UiDefinitionArray {
 
     if ($null -eq $InputObject) { return $null }
 
-    # Legacy dictionary form (RowContextMenu's [ordered]@{} keyed by label) passes through whole, order and identity intact. A bare builder item is also a dictionary, but a string Text plus a scriptblock Action can't be the legacy form (legacy values are scriptblocks or nested dicts), so that one falls through to normalization instead of rendering as two bogus menu entries.
+    # Legacy dictionary form (RowContextMenu's [ordered]@{} keyed by label) passes through whole, order and identity intact. A bare standin item is also a dictionary, but a string Text plus a scriptblock Action can't be the legacy form (legacy values are scriptblocks or nested dicts), so that one falls through to normalization instead of rendering as two bogus menu entries.
     if ($PassThruDictionary -and $InputObject -is [System.Collections.IDictionary]) {
         if (!($InputObject['Text'] -is [string] -and $InputObject['Action'] -is [scriptblock])) { return $InputObject }
     }
@@ -60,7 +60,7 @@ function ConvertTo-UiDefinitionArray {
             continue
         }
 
-        throw "$CallerName`: $ParameterName entries must be hashtables (from the New-Ui builder functions or written by hand). Got [$($definition.GetType().Name)]."
+        throw "$CallerName`: $ParameterName entries must be hashtables (from the New-Ui standin functions or written by hand). Got [$($definition.GetType().Name)]."
     }
 
     # Comma here so a one-item result survives the return as an array. A bare hashtable's .Count is its key count, which silently missizes anything counting entries.

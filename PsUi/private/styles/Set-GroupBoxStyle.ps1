@@ -12,12 +12,10 @@ function Set-GroupBoxStyle {
     # Try to apply Modern XAML style
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource('ModernGroupBoxStyle')
-            if ($null -ne $style) {
-                $GroupBox.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource('ModernGroupBoxStyle')
+        if ($null -ne $style) {
+            $GroupBox.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

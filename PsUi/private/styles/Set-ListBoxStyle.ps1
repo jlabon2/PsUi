@@ -12,12 +12,10 @@ function Set-ListBoxStyle {
     # Try to apply XAML style
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource('ModernListBoxStyle')
-            if ($null -ne $style) {
-                $ListBox.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource('ModernListBoxStyle')
+        if ($null -ne $style) {
+            $ListBox.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

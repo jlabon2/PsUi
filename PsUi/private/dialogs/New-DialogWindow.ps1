@@ -35,6 +35,10 @@ function New-DialogWindow {
         [object]$ThemeColors
     )
 
+    # First PsUi UI in the process means no Application, so no control styles. Every text and password box draws with no border and no background.
+    # Can't fix that by creating one. It would outlive the dialog owning no windows, and the next New-UiWindow builds on its own STA thread and drops to degraded theming.
+    $dialogNeedsOwnTheme = $null -eq [System.Windows.Application]::Current
+
     $colors = if ($ThemeColors) { $ThemeColors } else { Get-ThemeColors }
     $overlayColorFinal = if ($OverlayColor) { $OverlayColor } else { $colors.Accent }
 
@@ -58,6 +62,9 @@ function New-DialogWindow {
         AllowsTransparency    = $true
         Opacity               = 0
     }
+
+    # Brushes and control styles go straight onto the window when there is no Application to hold them.
+    if ($dialogNeedsOwnTheme) { [PsUi.ThemeEngine]::ApplyStandaloneTheme($window, $colors) }
 
     # Attach to parent so dialog stays with its owner
     $null = Set-WindowOwner -Window $window

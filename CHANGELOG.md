@@ -2,15 +2,15 @@
 
 All changes to PsUi will be documented in this file.
 
-## [Unreleased]
+## [1.1.1] - 2026-08-18
 
-Functions for building the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something.
+Functions that standin for the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something.
 
 ### Added
 
-#### Builders
+#### Standin functions
 
-Five parameters took nested hashtables and told you nothing when a key was misspelled: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Neat, but somewhat ineffective. Each one now has a function behind it, so keys are real parameters with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. All three forms work everywhere, and the legacy hashtable form is still accepted.
+Five parameters took nested hashtables and told you nothing when a key was misspelled: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Neat, and useless the moment you typo a key. Each one now has a function behind it, so keys are real parameters with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. All three forms work everywhere, and the legacy hashtable form is still accepted.
 
 - **New-UiMenuItem**: one `-RowContextMenu` entry. `-Text`, `-Action`, `-Icon`, `-Sync`, and `-Enabled` taking a literal bool or a per row scriptblock. A misspelled `Enabled` used to cast to `$true` and quietly enable everything; a non-bool throws now.
 - **New-UiResultAction**: one entry in the output window's Actions dropdown. `-Confirm` (a format string, `{0}` is the selection count) and `-ObjectType` (show the action only on matching result tabs) were both consumed by the code and documented nowhere until now.
@@ -38,6 +38,8 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **Closing a modal child window could throw**: the title bar X set DialogResult and then called Close(), and the second close landed on a window already tearing down.
 - **`-Columns @{ Width = 'Auto' }`** warned about an unparseable width and fell back to a default. Auto is a documented spelling and now behaves like one.
 - **New-UiGrid**: `-FormLayout` unwrapping fired on grids that never asked for it, and a row definition shorter than the child count pushed children into row 0.
+- **Dialogs opened before any window came up unstyled**: a bare `Show-UiMessageDialog`, or a `Show-UiCredentialDialog` you call before your first `New-UiWindow`, drew its text and password boxes with no border and no background. The control styles only ever loaded into a WPF Application, and no dialog created one. A dialog with no Application now themes itself off its own window, which also leaves `Application.Current` free for the next real window to claim on its own thread.
+- **`New-UiProgress -Severity` gave every bar the accent blue**: Success, Warning, and Error all came out the same color. The severity brush went into the bar's Tag, and the theme pass that reads Tags for everything else had the ProgressBar branch hardcoded to the accent. The tint follows the severity now.
 
 ## [1.1.0] - 2026-08-08
 

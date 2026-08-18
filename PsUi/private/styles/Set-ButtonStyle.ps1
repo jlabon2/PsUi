@@ -24,18 +24,17 @@ function Set-ButtonStyle {
 
     $styleApplied = $false
     try {
-        if ([System.Windows.Application]::Current -and [System.Windows.Application]::Current.Resources) {
-            if ([System.Windows.Application]::Current.Resources.Contains("ModernButtonStyle")) {
-                $Button.Style = [System.Windows.Application]::Current.Resources["ModernButtonStyle"]
+        $buttonStyle = [PsUi.ThemeEngine]::FindStyleResource('ModernButtonStyle')
+        if ($null -ne $buttonStyle) {
+            $Button.Style = $buttonStyle
 
-                # Clear local values so the Style triggers can work properly
-                $Button.ClearValue([System.Windows.Controls.Control]::BackgroundProperty)
-                $Button.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
-                $Button.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
+            # Clear local values so the Style triggers can work properly
+            $Button.ClearValue([System.Windows.Controls.Control]::BackgroundProperty)
+            $Button.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
+            $Button.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
 
-                $styleApplied = $true
-                Write-Verbose "Applied ModernButtonStyle from XAML resources"
-            }
+            $styleApplied = $true
+            Write-Verbose "Applied ModernButtonStyle from XAML resources"
         }
     }
     catch {

@@ -25,12 +25,10 @@ function Set-TextBoxStyle {
     $styleApplied = $false
     $styleName    = if ($isPasswordBox) { 'ModernPasswordBoxStyle' } else { 'ModernTextBoxStyle' }
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource($styleName)
-            if ($null -ne $style) {
-                $control.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource($styleName)
+        if ($null -ne $style) {
+            $control.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

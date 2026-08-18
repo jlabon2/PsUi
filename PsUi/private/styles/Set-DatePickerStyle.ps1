@@ -8,12 +8,10 @@ function Set-DatePickerStyle {
     # Try to apply the Modern XAML style
     $styleApplied = $false
     try {
-        if ($null -ne [System.Windows.Application]::Current) {
-            $style = [System.Windows.Application]::Current.TryFindResource('ModernDatePickerStyle')
-            if ($null -ne $style) {
-                $DatePicker.Style = $style
-                $styleApplied = $true
-            }
+        $style = [PsUi.ThemeEngine]::FindStyleResource('ModernDatePickerStyle')
+        if ($null -ne $style) {
+            $DatePicker.Style = $style
+            $styleApplied = $true
         }
     }
     catch {

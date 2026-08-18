@@ -12,7 +12,7 @@
 RootModule = '.\PsUi.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.1.0'
+ModuleVersion = '1.1.1'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -195,6 +195,15 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+Version 1.1.1:
+- Functions that standin for the five parameters that took nested hashtables: New-UiMenuItem,
+  New-UiResultAction, New-UiDialogButton, New-UiColumn, New-UiHeaderAction. Keys are real
+  parameters with tab completion and Get-Help. The legacy hashtable form still binds.
+- -WPFProperties attached properties ('Grid.Row', 'DockPanel.Dock') apply instead of being
+  silently skipped, and string values convert to the target type.
+- Dialogs opened before any window drew their inputs with no border or fill.
+- New-UiProgress -Severity gave every bar the accent blue.
+
 Version 1.1.0:
 - DataGrid overhaul: New-UiDataGrid as an embeddable grid, cell-embedded Button/Toggle/Link
   controls, opt-in editing, RowDetailsTemplate, RowBackground, FrozenColumns, EmptyMessage,
