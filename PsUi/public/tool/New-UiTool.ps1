@@ -1,41 +1,36 @@
 function New-UiTool {
     <#
     .SYNOPSIS
-        Transforms any PowerShell command into a GUI application automatically.
+        Builds a form from a command's parameter metadata.
     .DESCRIPTION
-        New-UiTool introspects a command's parameter metadata and generates a responsive
-        GUI with matching controls for each parameter type. It maps types and validation
-        attributes to visual controls:
+        New-UiTool reads a command's parameter metadata and builds a form with a matching
+        control per parameter:
 
-        - [ValidateSet] → Dropdown
-        - [switch] → Toggle checkbox
-        - [int]/[double] with ValidateRange → Slider
-        - [int]/[double] → Number input
-        - [string] → Text input
-        - [string[]] → Multi-line text area
-        - [datetime] → Date picker
-        - [SecureString] → Password input
-        - [PSCredential] → Credential dialog button
-        - [bool] → Toggle
-        - Mandatory → Required field validation
-        - HelpMessage → Tooltip
+        - [ValidateSet] becomes a dropdown
+        - [switch] and [bool] become toggles
+        - [int]/[double] become number inputs, or a slider when ValidateRange spans 10 steps or fewer
+        - [string] becomes a text input, [string[]] a multi-line text area
+        - [datetime] becomes a date picker
+        - [SecureString] becomes a password input, [PSCredential] a username and password pair
+        - Mandatory parameters gate the run button
+        - .PARAMETER help text becomes the caption under each control
 
-        Execution runs on a background thread via AsyncExecutor, keeping the UI responsive.
-        Results are displayed in a structured output viewer.
+        Execution runs on a background thread, so the window stays alive during long commands.
+        Results land in a sortable output grid.
 
-        This is parsing PowerShell's parameter binder output and building UI from it.
-        If Microsoft adds weird new validation attributes or changes how parameter sets
-        work, this code will need updates. We're fighting the system a bit here since it wasn't 
-        designed for this kind of dynamic UI generation. That said, it works for the common 
-        cases, and "time to GUI" for a script drops to zero. That's the point.
+        All of this reads static parameter metadata. Dynamic parameters and validation that
+        depends on live state don't survive inspection; build those forms by hand with the
+        regular controls. For everything else, "time to GUI" for a script is one line.
     .PARAMETER Command
-        The name of the command to wrap. Can be a cmdlet, function, or alias.
+        The command to wrap: a cmdlet, function, alias, script path, or a CommandInfo object.
     .PARAMETER Title
         Window title. Defaults to the command name.
     .PARAMETER Width
-        Window width in pixels. Default 600.
+        Window width in pixels. Standalone windows default to 600. Inside a host window
+        the child opens at 800 unless you pass one.
     .PARAMETER Height
-        Window height in pixels. Default 500.
+        Window height in pixels. Only applied when you pass it. Inside a host window the
+        child otherwise opens at 600, standalone the window sizes itself.
     .PARAMETER ParameterSet
         If the command has multiple parameter sets, specify which one to use.
         If not specified, uses the default parameter set or shows a selector.
@@ -46,9 +41,10 @@ function New-UiTool {
     .PARAMETER IncludeCommonParameters
         Include common parameters like -Verbose, -Debug, etc. Default is false.
     .PARAMETER ResultActions
-        Array of hashtables defining action buttons for the results grid.
-        Each hashtable should have 'Text' (button label) and 'Action' (scriptblock).
-        The scriptblock receives $_ as the selected row(s).
+        Actions offered against selected rows in the results grid. Pass a
+        { New-UiResultAction ... } definition block, an array of New-UiResultAction output,
+        or the legacy hashtable array (Text + Action required; optional: Icon, Confirm, ObjectType
+        optional). The scriptblock receives $_ as the selected row(s).
     .PARAMETER SingleSelect
         When used with ResultActions, limits selection to a single row.
     .PARAMETER HideThemeButton
@@ -89,17 +85,19 @@ function New-UiTool {
 
         Creates a service stopper using a specific parameter set.
     .EXAMPLE
-        New-UiTool -Command 'Get-Process' -ResultActions @(
-            @{ Text = 'Stop'; Icon = 'Stop'; Action = { $_ | Stop-Process -Force } }
-        )
+        New-UiTool -Command 'Get-Process' -ResultActions {
+            New-UiResultAction 'Stop' -Icon Stop -Confirm 'Stop {0} processes?' -Action { $_ | Stop-Process -Force }
+        }
 
-        Creates a process viewer with a Stop button that kills selected processes.
+        Creates a process viewer with a Stop action that kills selected processes after a
+        confirm. The legacy hashtable form still works:
+        -ResultActions @( @{ Text = 'Stop'; Icon = 'Stop'; Action = { $_ | Stop-Process -Force } } )
     .EXAMPLE
         # Local function - no need to register globally
         function My-CustomTool { param([string]$Name) Write-Host "Hello $Name" }
         New-UiTool -Command 'My-CustomTool'
 
-        Creates a GUI for a locally-defined function (auto-detected from caller scope).
+        Creates a GUI for a function defined in your script (detected from the calling scope).
     .EXAMPLE
         New-UiTool -Command '.\MyScript.ps1'
 
@@ -130,7 +128,8 @@ function New-UiTool {
 
         [switch]$ShowParamType,
 
-        [hashtable[]]$ResultActions,
+        # Untyped: takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array
+        [object]$ResultActions,
 
         [switch]$SingleSelect,
 
@@ -160,6 +159,11 @@ function New-UiTool {
     )
 
     Write-Debug "Starting for command '$Command', Width=$Width, Height=$Height"
+
+    # Normalized now, not when the deferred content block runs mid window build. The user's definition block should execute at call time and errors should name this function.
+    if ($null -ne $ResultActions) {
+        $ResultActions = [hashtable[]](ConvertTo-UiDefinitionArray -InputObject $ResultActions -ParameterName '-ResultActions' -CallerName 'New-UiTool')
+    }
 
     # Get caller's SessionState for local function lookup
     $callerSessionState = $null

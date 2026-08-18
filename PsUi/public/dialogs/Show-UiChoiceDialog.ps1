@@ -5,7 +5,7 @@ function Show-UiChoiceDialog {
     .DESCRIPTION
         Displays a themed dialog with multiple choice buttons. Used to intercept
         -Confirm prompts and $PSCmdlet.ShouldProcess() calls in async button actions.
-        This is a wrapper around Show-UiMessageDialog with custom buttons.
+        This runs through Show-UiMessageDialog with custom buttons.
         If any choice has a HelpMessage, a Help (?) button is added.
     .PARAMETER Caption
         The caption/title of the dialog.

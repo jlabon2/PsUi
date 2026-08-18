@@ -16,29 +16,40 @@ function Show-UiMessageDialog {
         When used, displays the message in a PowerShell console-styled code viewer.
         Uses Consolas font, blue background (#012456), white text, and makes the dialog
         larger (700x500) and resizable with horizontal/vertical scrollbars.
-        Ideal for displaying source code or command snippets.
+        For source code and command snippets.
     .PARAMETER CustomButtons
-        Array of hashtables defining custom buttons. Each hashtable should have:
+        Custom buttons, rendered left to right in declaration order. Pass a
+        { New-UiDialogButton ... } definition block, an array of New-UiDialogButton output,
+        or the legacy hashtable array where each hashtable has:
         - Label: The button text (required)
         - Value: The value returned when clicked (required)
-        - IsDefault: If true, this button is the default (optional)
+        - IsDefault: If true, Enter activates this button (optional)
         - IsAccent: If true, button uses accent color (optional)
+        - IsCancel: If true, Esc activates this button (optional)
+
         When provided, the -Buttons parameter is ignored.
     .PARAMETER ThemeColors
         Override theme colors for this dialog. Pass a colors hashtable directly.
     .EXAMPLE
         Show-UiMessageDialog -Title 'Confirmation' -Message 'Are you sure?' -Buttons YesNo -Icon Question
     .EXAMPLE
-        $buttons = @(
-            @{ Label = 'Save'; Value = 'Save'; IsAccent = $true; IsDefault = $true }
-            @{ Label = 'Discard'; Value = 'Discard' }
-            @{ Label = 'Cancel'; Value = 'Cancel' }
-        )
-        Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -CustomButtons $buttons -Icon Question
+        $answer = Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -Icon Question -CustomButtons {
+            New-UiDialogButton 'Save' -Accent -Default
+            New-UiDialogButton 'Discard'
+            New-UiDialogButton 'Cancel' -Cancel
+        }
     .EXAMPLE
         $result = Show-UiMessageDialog -Title 'Success' -Message 'Operation completed!' -Buttons OK -Icon Info
     .EXAMPLE
         Show-UiMessageDialog -Title 'Source Code' -Message $scriptBlock.ToString() -PowerShell
+    .EXAMPLE
+        # Legacy hashtable form, still supported
+        $buttons = @(
+            @{ Label = 'Save'; Value = 'Save'; IsAccent = $true; IsDefault = $true }
+            @{ Label = 'Discard'; Value = 'Discard' }
+            @{ Label = 'Cancel'; Value = 'Cancel'; IsCancel = $true }
+        )
+        Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -CustomButtons $buttons -Icon Question
     #>
     [CmdletBinding()]
     param(
@@ -57,10 +68,15 @@ function Show-UiMessageDialog {
         
         [switch]$PowerShell,
 
-        [array]$CustomButtons
+        # Untyped: takes a New-UiDialogButton definition block, an array of definitions, or the legacy hashtable array. [array] would swallow a definition block as a one-element array wrapping the scriptblock.
+        [object]$CustomButtons
     )
 
     Write-Debug "Title='$Title' Buttons='$Buttons' Icon='$Icon' PowerShell=$PowerShell"
+
+    if ($null -ne $CustomButtons) {
+        $CustomButtons = ConvertTo-UiDefinitionArray -InputObject $CustomButtons -ParameterName '-CustomButtons' -CallerName 'Show-UiMessageDialog'
+    }
 
     # Calculate width based on button count - each button is ~90px wide
     $buttonCount   = if ($CustomButtons) { $CustomButtons.Count } else { 3 }
@@ -145,7 +161,7 @@ function Show-UiMessageDialog {
         [void]$copyContent.Children.Add($copyText)
         $copyBtn.Content = $copyContent
         
-        # Apply standard styling and wire up click
+        # Apply standard styling and hook click
         Set-ButtonStyle -Button $copyBtn
         $copyBtn.Tag = $Message
         $copyBtn.Add_Click({
@@ -347,7 +363,7 @@ function Show-UiMessageDialog {
         }
     }
 
-    # Wire up standard fade-in behavior
+    # Attach the standard fade-in
     Initialize-UiWindowLoaded -Window $window -TitleBarBackground $colors.HeaderBackground -TitleBarForeground $colors.HeaderForeground
 
     # Position and show

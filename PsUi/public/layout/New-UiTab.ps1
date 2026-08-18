@@ -2,6 +2,10 @@ function New-UiTab {
     <#
     .SYNOPSIS
         Creates a tab item within a TabControl, enabling responsive child layouts.
+    .DESCRIPTION
+        Tabs declared at the same level share one TabControl, so a window becomes tabbed just by
+        listing New-UiTab blocks in its Content. -EnabledWhen gates a tab until another control
+        or captured variable turns truthy (locking later tabs until a connection exists, say).
     .PARAMETER Header
         The text label displayed on the tab header.
     .PARAMETER Content
@@ -10,11 +14,14 @@ function New-UiTab {
         Control name or session variable name that determines when this tab is enabled.
         When the referenced value is truthy, the tab is enabled; when falsy, disabled.
         Supports both control references (e.g., 'showAdvanced') and -Capture variables
-        (e.g., 'VCSAConnection') for gated workflows.
+        (e.g., 'VCSAConnection').
+    .PARAMETER Icon
+        Optional icon name shown on the tab header. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
-        Invalid properties will generate warnings but not stop execution.
+        Bad values warn and get skipped. A property name that does not exist on the control is
+        skipped silently (-Verbose shows it). Nothing stops execution.
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         New-UiTab -Header "Settings" -EnabledWhen 'isConnected' -Content {
@@ -23,10 +30,12 @@ function New-UiTab {
 
         Creates a tab that is disabled until the 'isConnected' variable is truthy.
     .EXAMPLE
-        New-UiTab -Header "Tab" -Content { } -WPFProperties @{
-            ToolTip = "Custom tooltip"
-            Cursor = "Hand"
-            Opacity = 0.8
+        # Tabs listed together share one TabControl; -Icon puts a glyph on the header
+        New-UiTab -Header 'General' -Icon 'Settings' -Content {
+            New-UiLabel -Text 'General settings'
+        }
+        New-UiTab -Header 'History' -Icon 'History' -Content {
+            New-UiLabel -Text 'Run history'
         }
     #>
     [CmdletBinding()]
@@ -129,6 +138,26 @@ function New-UiTab {
         elseif ($parent -is [System.Windows.Controls.ContentControl]) { $parent.Content = $targetTabControl }
     }
     $tabItem = [System.Windows.Controls.TabItem]@{ Header = $Header }
+
+    # -Icon swaps the string header for glyph + text (the same layout New-UiButton builds). No local Foreground on either block, so the style's selected/hover colors inherit into both.
+    $iconText = if ($Icon) { [PsUi.ModuleContext]::GetIcon($Icon) } else { $null }
+    if ($iconText) {
+        $headerPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
+        $iconBlock = [System.Windows.Controls.TextBlock]@{
+            Text              = $iconText
+            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
+            FontSize          = 12
+            VerticalAlignment = 'Center'
+            Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
+        }
+        $headerBlock = [System.Windows.Controls.TextBlock]@{
+            Text              = $Header
+            VerticalAlignment = 'Center'
+        }
+        [void]$headerPanel.Children.Add($iconBlock)
+        [void]$headerPanel.Children.Add($headerBlock)
+        $tabItem.Header = $headerPanel
+    }
     Set-TabItemStyle -TabItem $tabItem
 
     # Respect LayoutMode from session

@@ -6,9 +6,10 @@ function Out-Datagrid {
         Pipe objects in and receive a sortable filterable grid. Add -PassThru and you get the
         selected rows back on OK. Closing the window or clicking Cancel returns nothing.
 
-        Filter, sort, copy, export to CSV, and a column picker are in the toolbar.
+        Filter, copy, export to CSV, and a column picker are in the toolbar. Sort by
+        clicking column headers.
 
-        Opens the window in place when the caller can host one directly (ISE, PsUi -Sync
+        Opens the window in place when the calling session can host one directly (ISE, PsUi -NoAsync
         actions). From a console session that can't, spins up a dedicated UI host and shows
         the window there. Either way the call blocks until you close it.
 
@@ -407,7 +408,7 @@ function Out-Datagrid {
                 $iconFontSnap = $null
             }
 
-            # Emit the final result after cleanup. The MTA path reads this through $ps.Invoke() output. Cross runspace AddArgument marshaling of $context.SharedResult is within the same process so the hashtable mutation usually round-trips, but emit is the contract.
+            # Emit the final result after cleanup. The MTA path reads this through $ps.Invoke() output. AddArgument passes $context.SharedResult in the same process so the hashtable mutation usually round-trips, but the emit is the guarantee.
             [PSCustomObject]@{
                 OK        = [bool]$context.SharedResult.OK
                 Selection = $context.SharedResult.Selection

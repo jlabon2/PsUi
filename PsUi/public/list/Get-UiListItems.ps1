@@ -2,6 +2,9 @@ function Get-UiListItems {
     <#
     .SYNOPSIS
         Gets all items from a UiList control.
+    .DESCRIPTION
+        Returns a snapshot of the list's current contents as a plain array. Items hidden
+        by an active filter are still included.
     .PARAMETER Variable
         The variable name of the list control.
     .EXAMPLE

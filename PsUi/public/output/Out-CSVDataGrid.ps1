@@ -22,7 +22,7 @@ function Out-CSVDataGrid {
         Kept for v2.x call sites. The filter box is always on now, so this switch
         changes nothing.
     .PARAMETER IsResizeable
-        Adds the corner resize grip. The window resizes either way - kept for v2.x
+        Adds the corner resize grip. The window resizes either way. Kept for v2.x
         call sites.
     .PARAMETER ColumnsToPopupOnSelection
         Column names that pop a separate viewer when clicked. Use for long values
@@ -32,11 +32,7 @@ function Out-CSVDataGrid {
         column name, value is either an array of allowed values or a hashtable
         @{ Values = @(...); DefaultValue = '...' }.
 
-        Example:
-            @{
-                Status   = @('Active', 'Inactive')
-                Priority = @{ Values = @('Low', 'High'); DefaultValue = 'Low' }
-            }
+        Example: @{ Priority = @{ Values = @('Low', 'High'); DefaultValue = 'Low' } }
 
         A column can't be in both this and ColumnsToPopupOnSelection - that throws at startup.
     .PARAMETER ReadOnlyColumns
@@ -52,8 +48,8 @@ function Out-CSVDataGrid {
         Color theme. See Get-UiThemeTemplate for the list. When not given, follows
         the session's active theme if one is loaded, otherwise Light.
     .PARAMETER Delimiter
-        Column separator character. Defaults to comma. Use ';' for semicolon delimited
-        files or "`t" for tab-delimited files.
+        Column separator character. Defaults to comma. Use ';' for semicolon-delimited
+        files or ``"`t"`` for tab-delimited files.
     .PARAMETER NoHeader
         Treat the first row as data, not headers. Columns get named Column1..ColumnN.
     .PARAMETER IconFont
@@ -351,7 +347,7 @@ function Out-CSVDataGrid {
             try {
                 $csvGlyph = [PsUi.ModuleContext]::GetIcon('Document')
                 $overlayIcon = New-TaskbarOverlayIcon -GlyphChar $csvGlyph -Color $colors.Accent
-                # Stash the glyph in Resources so the theme handler can redraw it on theme switch.
+                # Stash the glyph in Resources so the theme handler can rebuild the overlay on theme switch.
                 $window.Resources['OverlayGlyph'] = $csvGlyph
             }
             catch { Write-Debug "Taskbar overlay failed: $_" }
@@ -685,7 +681,7 @@ function Out-CSVDataGrid {
                                     $Script:CurrentCSVData[$script:currentFileName].Modified = $true
                                 }
 
-                                # PSCustomObject doesn't notify on property change. Refresh + UpdateLayout + a selection bounce is the smallest combo that reliably redraws the cell.
+                                # PSCustomObject doesn't notify on property change. Refresh + UpdateLayout + a selection bounce is the smallest combo that reliably gets the cell showing the new value.
                                 if ($script:collectionView) { $script:collectionView.Refresh() }
                                 $dataGrid.Items.Refresh()
                                 $dataGrid.UpdateLayout()

@@ -2,6 +2,9 @@ function Remove-UiListItem {
     <#
     .SYNOPSIS
         Removes an item from a UiList control.
+    .DESCRIPTION
+        Removes one item: a specific one when -Item is passed, otherwise whatever row
+        is currently selected.
     .PARAMETER Variable
         The variable name of the list control.
     .PARAMETER Item

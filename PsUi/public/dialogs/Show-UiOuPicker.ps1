@@ -24,12 +24,16 @@ function Show-UiOuPicker {
         Include hidden containers (CN=System, CN=Configuration, etc.).
     .PARAMETER NoButtons
         Hide the expand/collapse buttons.
+    .PARAMETER IgnoreTreatAsLeaf
+        Makes the dialog ignore treatAsLeaf display specifiers, so containers they mark
+        as leaf objects still expand. Worth trying when a custom -Root or -Server leaves
+        the tree refusing to expand things that clearly have children.
     .PARAMETER ParentWindow
         WPF window to use as the modal parent. Falls back to the active session window.
     .PARAMETER Credential
         Alternate credentials for accessing a directory the local machine is not
-        joined to. Uses LogonUser impersonation (LOGON32_LOGON_NEW_CREDENTIALS) -
-        no special privileges required.
+        joined to. Handed to the native dialog's own credential fields. No
+        impersonation involved, no special privileges required.
     .EXAMPLE
         $ou = Show-UiOuPicker -Title 'Pick a target OU'
         if ($ou) { New-ADUser -Path $ou.DistinguishedName -Name 'jdoe' }
@@ -39,7 +43,8 @@ function Show-UiOuPicker {
         $cred = Get-Credential 'CORP\admin'
         $ou = Show-UiOuPicker -Credential $cred -Server 'dc01.corp.local'
     .OUTPUTS
-        PSCustomObject with Name, DistinguishedName, AdsPath. $null on cancel.
+        PSCustomObject
+        Name, DistinguishedName, AdsPath. $null on cancel.
     #>
     [CmdletBinding()]
     param(
@@ -50,21 +55,18 @@ function Show-UiOuPicker {
         [switch]$IncludeEntireDirectory,
         [switch]$IncludeHidden,
         [switch]$NoButtons,
-        # Auto-enabled when -Server or -Root is set (display specifiers lie
-        # with a non-null root). Override with -IgnoreTreatAsLeaf:$false.
+        # Maps to DSBI_IGNORETREATASLEAF. Display specifiers lie with a non-null root. This makes containers they mark as leaves expand anyway.
         [switch]$IgnoreTreatAsLeaf,
         [System.Windows.Window]$ParentWindow,
 
         # Alternate credentials for accessing a domain the machine isn't joined to.
-        # Uses LogonUser impersonation (LOGON32_LOGON_NEW_CREDENTIALS) - no special
-        # privileges are required.
+        # These go through the native struct's pUserName/pPassword fields (DSBI_HASCREDENTIALS), not impersonation.
         [PSCredential]$Credential
     )
 
     Write-Debug "Title='$Title' Root='$Root' Server='$Server'"
 
-    # Pull creds early - the RootDSE query and pre-flight bind need them before the
-    # dialog even opens.
+    # Pull creds early - the RootDSE query and the up-front bind check need them before the dialog even opens.
     $credUser = $null; $credPass = $null
     if ($Credential) {
         $credUser = $Credential.UserName
@@ -185,7 +187,7 @@ function Show-UiOuPicker {
         }.GetNewClosure())
     }
     else {
-        # No session, or already on UI thread - OuPicker.cs handles STA marshaling internally
+        # No session, or already on UI thread. OuPicker.cs runs its own STA thread internally.
         $raw = [PsUi.OuPicker]::Show($hwnd, $Title, $Prompt, $rootAds,
             $IncludeEntireDirectory.IsPresent, $IncludeHidden.IsPresent, $NoButtons.IsPresent,
             $ignoreTreatAsLeaf, $credUser, $credPass)

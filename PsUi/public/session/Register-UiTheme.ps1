@@ -3,8 +3,8 @@ function Register-UiTheme {
     .SYNOPSIS
         Registers a custom theme for use in PsUi windows.
     .DESCRIPTION
-        Adds a user-defined theme to the available themes collection. Once registered,
-        the theme can be activated with Set-ActiveTheme or selected from the theme picker.
+        Adds a user-defined theme to the available set. Once registered, pass the name to
+        -Theme on New-UiWindow (or any Out-* window), or pick it from the theme picker.
         
         Themes are hashtables mapping color keys to hex color values. At minimum, provide
         Type (Light/Dark), WindowBg, WindowFg, ControlBg, ControlFg, Accent, and Border.

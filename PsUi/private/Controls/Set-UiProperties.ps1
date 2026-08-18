@@ -33,7 +33,8 @@ function Set-UiProperties {
                 )
                 
                 foreach ($ns in $namespaces) {
-                    $ownerType = [Type]::GetType("$ns.$ownerTypeName")
+                    # -as [type] resolves through PowerShell, which scans loaded assemblies. [Type]::GetType wants an assembly-qualified name and returns $null for every WPF type from here.
+                    $ownerType = "$ns.$ownerTypeName" -as [type]
                     if ($ownerType) { break }
                 }
                 
@@ -51,7 +52,15 @@ function Set-UiProperties {
                     continue
                 }
                 
-                $Control.SetValue($dpField.GetValue($null), $propValue)
+                $dp = $dpField.GetValue($null)
+
+                # Attached values convert like instance properties do. 'DockPanel.Dock' = 'Left' arrives as a string and SetValue wants the enum.
+                if ($null -ne $propValue -and $propValue -isnot $dp.PropertyType) {
+                    $propValue = ConvertTo-WpfValue -Value $propValue -TargetType $dp.PropertyType -PropertyName $propName
+                    if ($null -eq $propValue) { continue }
+                }
+
+                $Control.SetValue($dp, $propValue)
                 Write-Verbose "[Set-UiProperties] Set attached '$propName' = '$propValue'"
             }
             else {

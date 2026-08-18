@@ -2,6 +2,43 @@
 
 All changes to PsUi will be documented in this file.
 
+## [Unreleased]
+
+Functions for building the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something.
+
+### Added
+
+#### Builders
+
+Five parameters took nested hashtables and told you nothing when a key was misspelled: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Neat, but somewhat ineffective. Each one now has a function behind it, so keys are real parameters with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. All three forms work everywhere, and the legacy hashtable form is still accepted.
+
+- **New-UiMenuItem**: one `-RowContextMenu` entry. `-Text`, `-Action`, `-Icon`, `-Sync`, and `-Enabled` taking a literal bool or a per row scriptblock. A misspelled `Enabled` used to cast to `$true` and quietly enable everything; a non-bool throws now.
+- **New-UiResultAction**: one entry in the output window's Actions dropdown. `-Confirm` (a format string, `{0}` is the selection count) and `-ObjectType` (show the action only on matching result tabs) were both consumed by the code and documented nowhere until now.
+- **New-UiDialogButton**: one `Show-UiMessageDialog -CustomButtons` entry. `-Label`, `-Value` (defaults to the label, so a forgotten Value no longer returns `$null`), `-Default`, `-Accent`, and `-Cancel`, which answers Esc.
+- **New-UiColumn**: one `-Columns` definition, covering all four column kinds. Toggle without a `-Binding` and Link without a `-Url` or `-Action` throw when you define them, not when the grid builds.
+- **New-UiHeaderAction**: the `New-UiPanel -HeaderAction` button.
+
+```powershell
+New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
+    New-UiMenuItem 'Restart' -Icon Refresh -Enabled { $_.Status -eq 'Running' } -Action { Restart-Service $_.Name }
+    New-UiMenuItem 'Details' -Sync -Action { Show-UiMessageDialog -Message ($_ | Out-String) }
+}
+```
+
+#### Other
+
+- **New-UiCredential `-NoPeek`**: the password field grew the same hold to reveal eye button `New-UiInput -Password` has. `-NoPeek` takes it away for tools that run on a screen other people watch.
+- **New-UiTab `-Icon`**: the parameter existed and drew nothing. Tab headers render the glyph next to the text now.
+
+### Fixed
+
+- **Attached properties in `-WPFProperties` never applied**: `'Grid.Row' = 1` looked right but did nothing and warned about nothing. The type lookup used an unqualified name that always came back null. Attached values also convert like normal ones now, so `'DockPanel.Dock' = 'Left'` and `'Grid.Row' = '1'` land instead of silently skipping.
+- **Charts with a custom `-LabelProperty` came up empty**: the data got converted twice, and the second pass dropped every row. Grouped objects with `-LabelProperty Name -ValueProperty Count` chart correctly now.
+- **New-UiWebView navigation callbacks got nulls**: `-OnNavigating` and such fired with empty values because a nested closure captured the wrong scope.
+- **Closing a modal child window could throw**: the title bar X set DialogResult and then called Close(), and the second close landed on a window already tearing down.
+- **`-Columns @{ Width = 'Auto' }`** warned about an unparseable width and fell back to a default. Auto is a documented spelling and now behaves like one.
+- **New-UiGrid**: `-FormLayout` unwrapping fired on grids that never asked for it, and a row definition shorter than the child count pushed children into row 0.
+
 ## [1.1.0] - 2026-08-08
 
 - **New-UiDataGrid**: a full datagrid suite with cell buttons / toggles / links, cell editing, row details, row coloring, frozen columns, live `-ItemsSource` binding from background runspaces
@@ -22,9 +59,9 @@ All changes to PsUi will be documented in this file.
 - **`-Columns`**: omit for automatic column generation, a `string[]` to pick and reorder, hashtables for per-column control (`Name`, `Header`, `Width`, `Format`, `ReadOnly`, editors, validators, cell control `Type`).
 - **Cell controls**: `Type = 'Button'`, `'Toggle'`, or `'Link'` in a column hashtable. `$_` in a button's `Action` is the row, a toggle reads and writes the row's value, a link substitutes `{PropName}` into its URL. Buttons and links can pull their label from a row property instead of static `Text`. Actions run async like `New-UiButton`; `Sync = $true` for the rare ones that can't (child windows, mostly).
 - **Editable cells**: `-Editable` turns it on, per-column `Editable` narrows it (a bool, a scriptblock, or a property name). Editors follow the value type - bools get a checkbox, enums a dropdown, dates a date picker, everything else text. `Validator` runs before the commit and `$false` cancels it; `-OnCellEdit` and `-OnRowEdit` fire after.
-- **`-ItemsSource` binds your variable**: pass a plain `ArrayList`, `List[T]`, array, or `ObservableCollection` and your variable gets rebound to a thread-safe copy the grid watches - `$list.Add(...)` from any runspace just shows up, no `[ref]` ceremony. Handing it 10k rows redraws once, not 10k times. The rebind can't reach what it can't see (property values, hashtable entries, expressions); a warning fires when nothing could be rebound, and `-NoBind` opts out.
+- **`-ItemsSource` binds your variable**: pass a plain `ArrayList`, `List[T]`, array, or `ObservableCollection` and your variable gets rebound to a threadsafe copy the grid watches - `$list.Add(...)` from any runspace just shows up, no `[ref]` ceremony. Handing it 10k rows redraws once, not 10k times. The rebind can't reach what it can't see (property values, hashtable entries, expressions); a warning fires when nothing could be rebound, and `-NoBind` opts out.
 - **Add-UiDataGridItem / Set-UiDataGridItems / Clear-UiDataGridItems**: append, replace, or empty a grid from any button action. Hashtable rows convert to PSCustomObject on the way in; `-PassThru` hands back what landed.
-- **`-RowContextMenu`**: your own entries above the standard menu - label to scriptblock, `$_` is the right-clicked row. A click inside a multi-selection runs the action against each selected row in turn; Cancel stops the rest, and failures collect into one error dialog. The hashtable form adds `Enabled`, `Icon`, and `Sync`.
+- **`-RowContextMenu`**: your own entries above the standard menu - label to scriptblock, `$_` is the rightclicked row. A click inside a multi-selection runs the action against each selected row in turn; Cancel stops the rest, and failures collect into one error dialog. The hashtable form adds `Enabled`, `Icon`, and `Sync`.
 - **`-RowDetailsTemplate`**: a scriptblock that builds an expandable panel under the clicked row with the usual PsUi controls; `$_` is the row. Heavy lookups belong in `Invoke-UiAsync` inside it.
 - **`-RowBackground`**: scriptblock gets the row, returns a color (or `$null` for the default).
 - **`-FrozenColumns N`**: the leftmost N columns stay put under horizontal scroll.
@@ -32,7 +69,7 @@ All changes to PsUi will be documented in this file.
 - **`-DefaultSort`**: `'Name'`, `'Name -Descending'`, or an array of them for a multi-key sort.
 - **`-RowHeight`**: fixed row height for denser grids.
 - **`-SanitizeFormulas`**: quotes copied and exported cells that start like Excel formulas (`=`, `+`, `-`, `@`) so they open as text. Off by default so it leaves clean data alone; turn it on when the rows hold untrusted values.
-- **Visual defaults are all opt-out**: striped rows, glyphs for bools, a hatch effect over empty read-only cells. `-NoAlternatingRowBrush`, `-NoVisualValues`, `-NoMarkEmptyCells`.
+- **Visual defaults are all opt-out**: striped rows, glyphs for bools, a hatch effect over empty readonly cells. `-NoAlternatingRowBrush`, `-NoVisualValues`, `-NoMarkEmptyCells`.
 - **Output window parity flags**: `-DefaultPropertiesOnly`, `-HideEmptyColumns`, `-NoArrayPopup`, `-NoDictionaryPopup`, `-NoSafeWrap`.
 - **Filtering**: the toolbar filter hides rows without touching your source list.
 - **Column picker**: rebuilt each time it opens, so a grid that starts empty still grows one. Entries show a populated count (`Owner (12/50)`), and "Has Data" hides the all-empty columns. Warns when a bulk reveal would push the grid past ~10k cells.
@@ -108,7 +145,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 - **Show-UiOuPicker**: wraps the native OU picker ADUC uses. Returns Name, DistinguishedName, AdsPath; alternate credentials, custom root DN, target DC; works from any thread. The dialog itself is pretty horrendous - it lazy-loads containers and shows a (+) on empty OUs. Placeholder until a hand-rolled replacement lands.
 - **New-UiWindow `-Theme Auto`** is the new default: follows the system light/dark setting, Light if the registry key is missing.
 - **New-UiDropdown `-OnChange`**: fires with the new value on selection change, matching `New-UiDropdownButton`.
-- **New-UiDropdown** items ride the same thread-safe list as everything else now, so `Add-UiListItem` and friends work on dropdowns from background runspaces too.
+- **New-UiDropdown** items ride the same threadsafe list as everything else now, so `Add-UiListItem` and friends work on dropdowns from background runspaces too.
 - **net452 target**: a .NET 4.5.2 build for WinPE and older Windows (no WebView2 there). The build verifies all three output DLLs.
 - **New-UiChildWindow**: the title bar shows the resolved window icon next to the title. Borderless child windows never get the OS-drawn icon, so the custom chrome draws its own; no icon if `-Icon` doesn't resolve.
 
@@ -116,7 +153,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 - 40+ new Pester tests over the status bar surface: parameters, severity validation, badges, popups, Clear resets, brush mapping, PS 5.1 clamping.
 - 14 for New-UiProgress / Set-UiProgress: indeterminate mode, clamping, severity, labels, the no-params and missing-control paths.
-- The DataGrid suites: construction, variable binding, the overhaul regressions, the thread-safe collection's mirror and cross-thread behavior, null rows through the public API, Invoke-UiAsync capture and cancel.
+- The DataGrid suites: construction, variable binding, the overhaul regressions, the threadsafe collection's mirror and cross-thread behavior, null rows through the public API, Invoke-UiAsync capture and cancel.
 
 ### Fixed
 
@@ -124,7 +161,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 - **Cross-thread adds could throw**: a background loop adding to a list or grid the window is showing could die with `Cannot change ObservableCollection during a CollectionChanged event`. Mutations queue onto the window's thread in order now. Hammer away.
 - **Second window, dead collection**: a collection made in a second window pinned itself to the first window's thread - adds went through, nothing showed. It homes to its own window now, and creating one on a background thread now throws up front instead of silently dropping everything.
-- **Second window, dead callbacks**: the companion bug - async completions in a second window queued onto the first window's exited thread and vanished, while the action itself ran fine. A context menu edit changed the row and the cell kept its old text. Callbacks land on their own window now.
+- **Second window, dead callbacks**: async completions in a second window queued onto the first window's exited thread and vanished, while the action itself ran fine. A context menu edit changed the row and the cell kept its old text. Callbacks land on their own window now.
 - **Actions that edit a row**: search and filter kept matching the old values after a rightclick action or cell toggle changed them. They see the new ones now.
 - **`-DefaultSort` on an empty start**: a grid that began empty lost its sort the moment the first rows landed. It sticks now.
 - **Toggle ticks landed on the copy**: with `-Items`, a cell toggle wrote to the grid's snapshot, so a Save button reading your objects saw nothing changed. Ticks land on the original now.
@@ -157,7 +194,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 #### Other
 
 - **One error ate the run**: a single `Write-Error` midrun routed the whole run to OnError and threw away the pipeline output that worked. OnError still fires; OnComplete gets the results too.
-- **Copy/export leaked internals**: every copy path - toolbar Copy and Export, right-click copy, CSV export, Ctrl+C - wrote the raw rows, so the grid's internal search properties rode along as extra columns. One shared path strips them now, on `Out-Datagrid` and the output window alike.
+- **Copy/export leaked internals**: every copy path - toolbar Copy and Export, rightclick copy, CSV export, Ctrl+C - wrote the raw rows, so the grid's internal search properties rode along as extra columns. One shared path strips them now, on `Out-Datagrid` and the output window alike.
 - **Link color stuck after theme switch**: expandable-cell links froze at their build-time color, so Dark then Light meant white on white. They follow the theme live now.
 - **ConvertTo-UiBrush**: the brush cache could be null on the first call from a button action, so color lookups there threw. It initializes itself now, whichever copy of the function ends up running.
 - **New-UiButton**: `-WPFProperties Tag` is rejected with a warning - a custom Tag silently disarmed the click handler, and every click died in a cryptic "expression after '&'" dialog. Swapping the Tag after construction gets the same warning.

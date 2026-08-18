@@ -27,11 +27,10 @@ function Invoke-UiAsync {
     .PARAMETER Capture
         Variable names to capture from the runspace after execution completes.
         Captured variables are stored in the session and available to subsequent
-        async calls, and persist in global scope after the window closes.
-    .PARAMETER AutoCapture
-        Automatically capture variables used in ScriptBlock from caller scope. Default: $true
+        async calls. They reach the calling script's scope after close only when the
+        window was opened with -ExportOnClose.
     .PARAMETER NoAutoCapture
-        Disables automatic variable capture from caller scope. Use when you want
+        Disables automatic variable capture from the calling scope. Use when you want
         full control over what's passed in.
     .PARAMETER NoActiveExecutor
         Leaves the session's ActiveExecutor slot alone, so Stop-UiAsync and the status

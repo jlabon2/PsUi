@@ -2,12 +2,17 @@ function Get-PsUiIcon {
     <#
     .SYNOPSIS
         Gets an icon glyph by name.
+    .DESCRIPTION
+        Resolves an icon name to its glyph character from the shared icon map. Both icon
+        fonts (Segoe MDL2 Assets and Segoe Fluent Icons) read the same map, so a name can
+        resolve to a glyph the active font doesn't carry - Test-PsUiIcon says which ones.
+        Warns and returns nothing for unknown names.
     .PARAMETER Name
         The icon name (e.g., 'Save', 'Delete', 'Check').
     .EXAMPLE
         Get-PsUiIcon -Name 'Save'
     .EXAMPLE
-        New-UiGlyph -Icon (Get-PsUiIcon Check)
+        New-UiLabel -Text ((Get-PsUiIcon Check) + ' Done')
     #>
     [CmdletBinding()]
     param(

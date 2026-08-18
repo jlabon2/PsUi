@@ -2,6 +2,10 @@ function New-UiPanel {
     <#
     .SYNOPSIS
         Creates a panel container for organizing child controls.
+    .DESCRIPTION
+        The workhorse container. Stacks children vertically or horizontally, or wraps them
+        into responsive columns when -LayoutStyle is Wrap (-MaxColumns caps the count).
+        -Header puts the whole thing in a themed GroupBox.
     .PARAMETER Content
         ScriptBlock containing child controls to render inside the panel.
     .PARAMETER Header
@@ -17,34 +21,38 @@ function New-UiPanel {
     .PARAMETER MaxColumns
         Maximum responsive columns for Wrap layout (1-4). Children resize automatically.
     .PARAMETER HeaderAction
-        Optional hashtable defining a custom action button in the panel header.
-        Requires -Header parameter to be set.
-        Hashtable should contain: Icon (string), Tooltip (string), Action (scriptblock).
+        Optional action button in the panel header. Requires -Header to be set.
+        Pass New-UiHeaderAction output, or the legacy hashtable containing: Icon (string),
+        Tooltip (string), Action (scriptblock).
     .PARAMETER ShowSourceButton
         When used with -Header, automatically adds a "View Source Code" button that displays
         the Content scriptblock in a PowerShell-styled dialog.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
-        Invalid properties will generate warnings but not stop execution.
+        Bad values warn and get skipped. A property name that does not exist on the control is
+        skipped silently (-Verbose shows it). Nothing stops execution.
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         New-UiPanel -Header "Example Panel" -ShowSourceButton -Content {
             New-UiLabel -Text "This code can be viewed by clicking the button"
         }
     .EXAMPLE
-        New-UiPanel -Header "Custom Action" -HeaderAction @{
-            Icon = "Info"
-            Tooltip = "Show Help"
-            Action = { Show-UiMessageDialog -Title "Help" -Message "This is help text" }
-        } -Content {
+        New-UiPanel -Header "Custom Action" -HeaderAction (
+            New-UiHeaderAction -Icon Info -Tooltip 'Show Help' -Action { Show-UiMessageDialog -Message 'Help text' }
+        ) -Content {
             New-UiLabel -Text "Panel content"
         }
+
+        The legacy hashtable form still works:
+        -HeaderAction @{ Icon = 'Info'; Tooltip = 'Show Help'; Action = { ... } }
     .EXAMPLE
-        New-UiPanel -Content { } -WPFProperties @{
-            ToolTip = "Custom tooltip"
-            Cursor = "Hand"
-            Opacity = 0.8
+        # Wrap layout: children flow into columns, capped at two here
+        New-UiPanel -LayoutStyle Wrap -MaxColumns 2 -Content {
+            New-UiToggle -Label 'Wake on LAN' -Variable 'wol'
+            New-UiToggle -Label 'Remote registry' -Variable 'remoteReg'
+            New-UiToggle -Label 'ICMP echo' -Variable 'icmp'
+            New-UiToggle -Label 'SMB v1' -Variable 'smb1'
         }
     .EXAMPLE
         New-UiPanel -Content { } -WPFProperties @{

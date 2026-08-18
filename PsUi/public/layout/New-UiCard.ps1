@@ -1,10 +1,10 @@
 function New-UiCard {
     <#
     .SYNOPSIS
-        Creates a bordered card container for content display.
+        Creates a bordered card container with optional header.
     .DESCRIPTION
         Creates a styled card container with optional header, icon, and accent color.
-        Ideal for dashboard tiles, summary boxes, status displays, and grouped information.
+        Dashboard tiles and summary boxes, mostly.
     .PARAMETER Header
         Optional header text displayed at the top of the card.
     .PARAMETER Content
@@ -12,7 +12,7 @@ function New-UiCard {
     .PARAMETER Icon
         Optional icon name to display in the header. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER Accent
-        Use the theme's accent color for the card header/border.
+        Use the theme's accent color for the card header.
     .PARAMETER HeaderBackground
         Custom background color for the header (hex color like '#0078D4').
     .PARAMETER MinWidth
@@ -23,7 +23,7 @@ function New-UiCard {
         When present, the card expands to fill the full width of its container.
     .PARAMETER Stretch
         When present, the card participates in the responsive column system.
-        Cards will resize dynamically based on window width and MaxColumns setting.
+        Cards resize with window width, two per row.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
     .EXAMPLE

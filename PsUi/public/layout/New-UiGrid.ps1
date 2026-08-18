@@ -4,13 +4,14 @@ function New-UiGrid {
         Creates a Grid layout container with simplified column/row management.
     .DESCRIPTION
         Provides a declarative Grid control that auto-flows children into cells.
-        Supports column sizing via simple syntax, FormLayout for label unwrapping,
-        and AutoLayout for simple single-column stacking.
+        Column sizing uses the short syntax below. FormLayout unwraps label+control
+        pairs into two columns. AutoLayout stacks one control per row.
     .PARAMETER Columns
         Column definitions in flexible formats:
         - Integer: Number of equal-width columns (e.g., 3)
         - String: Comma-separated definitions (e.g., 'Auto,*' or 'Auto, *, 100')
         - Array: Array of definitions (e.g., @('Auto', '*', '2*', '100'))
+
         Valid definitions: 'Auto', '*' (star), '2*' (weighted star), or number (fixed pixels).
     .PARAMETER Rows
         Row definitions in same flexible formats as Columns.
@@ -69,15 +70,17 @@ function New-UiGrid {
         # Each control gets its own row, labels handled internally
     .EXAMPLE
         New-UiGrid -Columns 'Auto, *, 100' -Content {
-            New-UiLabel -Text "Name:"
-            New-UiInput -Variable "name"
-            New-UiButton -Text "..."
+            New-UiGlyph -Name 'Folder' -Size 20
+            New-UiInput -Label 'Target folder' -Variable targetFolder
+            New-UiButton -Text 'Browse' -Action { Show-UiFilePicker }
         }
     .EXAMPLE
-        New-UiGrid -Columns 2 -Rows '*, Auto' -Content {
-            # Content area spanning top
-            New-UiLabel -Text "Main content here"
-            # Button row at bottom with fixed height
+        # Star row takes the leftover height, Auto row hugs the buttons at the bottom
+        New-UiGrid -Columns 2 -Rows '*, Auto' -Fill -Content {
+            New-UiTextArea -Label 'Notes' -Variable 'notes'
+            New-UiTextArea -Label 'Follow ups' -Variable 'followUps'
+            New-UiButton -Text 'Save' -Action { }
+            New-UiButton -Text 'Discard' -Action { }
         }
     #>
     [CmdletBinding()]
@@ -248,9 +251,9 @@ function New-UiGrid {
         foreach ($child in $childrenToProcess) {
             Write-Debug "Processing child: $($child.GetType().FullName)"
             
-            # Check for FormControl tag (preferred method)
+            # Check for FormControl tag (preferred method). Only -FormLayout unwraps. A positional grid keeps the labeled composite in one cell, where the user put it.
             $formTag = $null
-            if (!$skipUnwrap -and $child -is [System.Windows.Controls.StackPanel]) {
+            if ($FormLayout -and !$skipUnwrap -and $child -is [System.Windows.Controls.StackPanel]) {
                 $tagValue = $child.Tag
                 if ($tagValue -is [hashtable] -and $tagValue.FormControl -eq $true) {
                     $formTag = $tagValue
@@ -363,6 +366,13 @@ function New-UiGrid {
             # Add child to grid
             [void]$grid.Children.Add($child)
 
+            # WPF clamps Grid.Row past the definition count, so a partially filled last row would land on top of the row above unless its definition exists before layout.
+            if ($ctx.Row -gt 0) {
+                while ($grid.RowDefinitions.Count -le $ctx.Row) {
+                    [void]$grid.RowDefinitions.Add([System.Windows.Controls.RowDefinition]@{ Height = [System.Windows.GridLength]::Auto })
+                }
+            }
+
             [System.Windows.Controls.Grid]::SetRow($child, $ctx.Row)
             [System.Windows.Controls.Grid]::SetColumn($child, $ctx.Col)
 
@@ -399,14 +409,6 @@ function New-UiGrid {
         if ($ctx.Col -ge $columnCount) {
             $ctx.Col = 0
             $ctx.Row++
-
-            # Add row definition if needed
-            if ($ctx.Row -ge $grid.RowDefinitions.Count) {
-                $newRow = [System.Windows.Controls.RowDefinition]@{
-                    Height = [System.Windows.GridLength]::Auto
-                }
-                [void]$grid.RowDefinitions.Add($newRow)
-            }
         }
     }
 

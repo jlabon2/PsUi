@@ -18,7 +18,7 @@ function Write-UiHostDirect {
     .PARAMETER NoNewline
         Don't append a newline.
     .PARAMETER Separator
-        Separator between multiple objects.
+        Accepted so Write-Host calls swap over without edits. Not used.
     .EXAMPLE
         Write-UiHostDirect "This goes to console, not the UI panel"
     .EXAMPLE

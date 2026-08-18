@@ -13,7 +13,7 @@ function Set-PsUiIconFont {
         to the primary only (missing glyphs render as tofu).
 
         Affects newly-created controls only. Existing controls keep the font they were
-        built with - reload the window to apply a font change to UI that's already on screen.
+        built with. Reload the window to apply a font change to UI that's already on screen.
     .PARAMETER FontName
         The icon font to use: Auto, SegoeMDL2, or SegoeFluentIcons.
     .PARAMETER NoIconFontFallback
@@ -21,20 +21,20 @@ function Set-PsUiIconFont {
         chosen font render as tofu.
 
         On a Win10 box with only MDL2 installed there's no secondary font to fall back to, so
-        this is a rendering no-op. Its remaining effect there: tighter IntelliSense for -Icon
-        parameters via Get-IconDynamicParameter - tofu names get filtered out of the dropdown.
-        Also forward-looking - matters if CharList.json ever picks up single-font-exclusive
-        entries, or if MS ships a third icon font.
+        this changes nothing on screen. Its remaining effect there: tighter tab completion
+        for -Icon parameters (names that would render tofu drop out of the completion list).
+        Also matters later if CharList.json ever picks up entries only one font carries, or if
+        MS ships a third icon font.
     .EXAMPLE
         Set-PsUiIconFont -FontName 'SegoeFluentIcons'
     .EXAMPLE
         Set-PsUiIconFont -FontName 'SegoeMDL2' -NoIconFontFallback
         # Strict MDL2 - won't borrow Fluent glyphs as fallback.
     .NOTES
-        Mixed-vintage rendering caveat: 125 names in CharList.json (Blocked, Effects,
+        Rendering caveat: 125 names in CharList.json (Blocked, Effects,
         PhotoCollection, ...) only live in Fluent. With MDL2 active and fallback on they
-        still render - WPF substitutes from Fluent - which means a Fluent-vintage glyph
-        sneaks into an otherwise MDL2-styled app. Use -NoIconFontFallback for strict
+        still render (WPF substitutes from Fluent), so a glyph drawn in Fluent's newer style
+        sneaks into an otherwise MDL2 app. Use -NoIconFontFallback for strict
         consistency; the Fluent-only names will tofu instead, telling you which ones
         to swap.
     #>

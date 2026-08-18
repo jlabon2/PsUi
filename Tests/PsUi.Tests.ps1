@@ -724,8 +724,8 @@ Describe 'AsyncExecutor Events' {
         $output | Should -Contain 3
     }
 
-    # NOTE: Queue mode test removed - .NET List<T> iteration behaves unreliably in Pester's test context.
-    # The feature works correctly in production; test verification is not feasible.
+    # Queue mode test removed - .NET List<T> iteration behaves unreliably in Pester's test context.
+    # The feature works in production. Test verification is not feasible.
 
     It 'Should track IsRunning state correctly' {
         $executor = [PsUi.AsyncExecutor]::new()
@@ -1677,7 +1677,7 @@ Describe 'Clear-UiStatus / Hide-UiStatusBar / Show-UiStatusBar parameter surface
 # Status bar clamping uses manual if-checks, not [Math]::Clamp (PS 5.1 compat)
 Describe 'Status Bar Clamping (PS 5.1 Safe)' {
     It 'Set-UiStatusBar source does not use [Math]::Clamp' {
-        $src = Get-Content (Join-Path $PSScriptRoot '..\PsUi\public\controls\Set-UiStatusBar.ps1') -Raw
+        $src = Get-Content (Join-Path $PSScriptRoot '..\PsUi\public\controls\status\Set-UiStatusBar.ps1') -Raw
         $src | Should -Not -Match '\[Math\]::Clamp'
     }
 
@@ -2516,7 +2516,7 @@ Describe 'AsyncObservableCollection - Mirror behavior' {
     }
 
     It 'IList.Add (cast-and-call) marshals through the virtual override' {
-        # Regression guard against the new method bypass. Adding via the IList interface MUST still go through marshaling+mirror because InsertItem is overridden, not just `new` hidden behind Add.
+        # Regression guard against the new method bypass. Adding via the IList interface MUST still queue onto the owning thread and push the mirror because InsertItem is overridden, not just `new` hidden behind Add.
         $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
         $wrapper = [PsUi.AsyncObservableCollection[object]]::new($script:disp)
         $wrapper.AttachMirror($mirror)
@@ -2607,7 +2607,7 @@ Describe 'AsyncObservableCollection - Mirror behavior' {
 Describe 'AsyncObservableCollection - Cross-thread marshaling' {
 
     BeforeAll {
-        # Helper that runs a script in a fresh MTA runspace and returns the async invocation handle. The runspace has its own thread (background, non UI) so wrapper.Add there goes through the !_dispatcher.CheckAccess() branch and marshals back through Invoke.
+        # Helper that runs a script in a fresh MTA runspace and returns the async invocation handle. The runspace has its own thread (background, non UI) so wrapper.Add there goes through the !_dispatcher.CheckAccess() branch and comes back through Invoke.
         function Start-BackgroundAdd {
             param($Wrapper, $Item)
             $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -3127,7 +3127,397 @@ Describe 'Null-element rows through the public API' -Tag 'RequiresSession' {
     }
 }
 
-# End to end on the PS async wrapper. Last in the file on purpose: the cancel test needs an Application (Cancel marshals OnCancelled to a dispatcher), and the Application is a process wide singleton, so creating it here keeps it out of the WPF control tests above.
+# Builders emit definition hashtables and never touch the session, so the whole block runs without creating one. Downstream gates test -is [hashtable] and .Contains().
+Describe 'Builder functions - output shape' {
+    It 'New-UiMenuItem returns a plain hashtable with only bound keys' {
+        $item = New-UiMenuItem 'Restart' -Action { $_ } -Icon Refresh
+        $item.GetType() | Should -Be ([hashtable])
+        $item.Text | Should -Be 'Restart'
+        $item.Action | Should -BeOfType [scriptblock]
+        $item.Icon | Should -Be 'Refresh'
+        $item.Contains('Sync') | Should -BeFalse
+        $item.Contains('Enabled') | Should -BeFalse
+    }
+
+    It 'New-UiMenuItem -Enabled $false survives as a present key' {
+        $item = New-UiMenuItem 'X' { 1 } -Enabled $false
+        $item.Contains('Enabled') | Should -BeTrue
+        $item.Enabled | Should -BeFalse
+    }
+
+    It 'New-UiMenuItem -Sync:$false still emits the key' {
+        # Emission tracks binding, not truthiness. A bound $false still lands in the hashtable.
+        $item = New-UiMenuItem 'X' { 1 } -Sync:$false
+        $item.Contains('Sync') | Should -BeTrue
+        $item.Sync | Should -BeFalse
+    }
+
+    It 'New-UiMenuItem rejects a string -Enabled' {
+        # the menu builder casts non-scriptblocks to [bool] and 'false' would cast truthy
+        { New-UiMenuItem 'X' { 1 } -Enabled 'false' } | Should -Throw '*-Enabled takes*'
+    }
+
+    It 'New-UiMenuItem passes a scriptblock -Enabled through' {
+        (New-UiMenuItem 'X' { 1 } -Enabled { $_.Ok }).Enabled | Should -BeOfType [scriptblock]
+    }
+
+    It 'New-UiResultAction carries Confirm and ObjectType only when bound' {
+        $entry = New-UiResultAction 'Stop' { $_ } -Confirm 'Stop {0}?' -ObjectType 'Process'
+        $entry.GetType() | Should -Be ([hashtable])
+        $entry.Confirm | Should -Be 'Stop {0}?'
+        $entry.ObjectType -is [string[]] | Should -BeTrue
+
+        $bare = New-UiResultAction 'Tag' { $_ }
+        $bare.Contains('Confirm') | Should -BeFalse
+        $bare.Contains('ObjectType') | Should -BeFalse
+        $bare.Contains('Icon') | Should -BeFalse
+    }
+
+    It 'New-UiDialogButton defaults Value to the label' {
+        (New-UiDialogButton 'Save').Value | Should -Be 'Save'
+        (New-UiDialogButton 'Save' 'other').Value | Should -Be 'other'
+    }
+
+    It 'New-UiDialogButton switches emit keys only when present' {
+        $btn = New-UiDialogButton 'Save' -Accent -Default
+        $btn.IsAccent | Should -BeTrue
+        $btn.IsDefault | Should -BeTrue
+        $btn.Contains('IsCancel') | Should -BeFalse
+    }
+
+    It 'New-UiColumn mirrors bound parameters into keys and flattens switches' {
+        $col = New-UiColumn Name -ReadOnly -Width '2*' -Verbose
+        $col.Name | Should -Be 'Name'
+        $col.ReadOnly | Should -BeOfType [bool]
+        $col.ReadOnly | Should -BeTrue
+        $col.Width | Should -Be '2*'
+        $col.Contains('Sync') | Should -BeFalse
+        # common params never leak into the definition
+        $col.Contains('Verbose') | Should -BeFalse
+    }
+
+    It 'New-UiColumn throws at definition time on the combos the grid rejects later' {
+        { New-UiColumn -Header 'On' -Type Toggle } | Should -Throw '*needs -Binding*'
+        { New-UiColumn -Header 'Open' -Type Link } | Should -Throw '*-Url or -Action*'
+        { New-UiColumn -Type Button -Text 'Go' -Action { 1 } } | Should -Throw '*or -Header*'
+    }
+
+    It 'New-UiColumn Icon rejects a bogus name via the dynamic ValidateSet' {
+        { New-UiColumn -Header 'Go' -Type Button -Action { 1 } -Icon 'NotARealGlyphName' } | Should -Throw
+    }
+
+    It 'New-UiHeaderAction emits Icon and Tooltip only when bound' {
+        $headerAction = New-UiHeaderAction -Action { 1 }
+        $headerAction.Action | Should -BeOfType [scriptblock]
+        $headerAction.Contains('Icon') | Should -BeFalse
+        $headerAction.Contains('Tooltip') | Should -BeFalse
+    }
+}
+
+InModuleScope PsUi {
+    Describe 'ConvertTo-UiDefinitionArray' -Tag 'RequiresSession' {
+        BeforeAll {
+            $script:normSessionId = [PsUi.SessionManager]::CreateSession()
+            [PsUi.SessionManager]::SetCurrentSession($script:normSessionId)
+            $script:normSession = [PsUi.SessionManager]::Current
+            $script:normSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+        }
+
+        AfterAll {
+            [PsUi.SessionManager]::DisposeSession($script:normSessionId)
+        }
+
+        It 'collects scriptblock emissions in order' {
+            $result = ConvertTo-UiDefinitionArray -InputObject { @{ A = 1 }; @{ B = 2 } } -ParameterName '-X' -CallerName 'T'
+            $result.Count | Should -Be 2
+            $result[0].A | Should -Be 1
+            $result[1].B | Should -Be 2
+        }
+
+        It 'a single emission comes back as a one-element array, not a bare hashtable' {
+            # Without the unary comma return this would be a 2-key hashtable whose .Count is 2
+            $result = ConvertTo-UiDefinitionArray -InputObject { @{ A = 1; B = 2 } } -ParameterName '-X' -CallerName 'T'
+            $result -is [array] | Should -BeTrue
+            $result.Count | Should -Be 1
+        }
+
+        It 'passes a legacy ordered dictionary through untouched' {
+            $legacy = [ordered]@{ 'A' = @{ Action = { 1 } } }
+            $result = ConvertTo-UiDefinitionArray -InputObject $legacy -ParameterName '-X' -CallerName 'T' -PassThruDictionary
+            [object]::ReferenceEquals($result, $legacy) | Should -BeTrue
+        }
+
+        It 'wraps a single bare hashtable' {
+            $result = ConvertTo-UiDefinitionArray -InputObject @{ A = 1 } -ParameterName '-X' -CallerName 'T'
+            $result -is [array] | Should -BeTrue
+            $result.Count | Should -Be 1
+        }
+
+        It 'copies an [ordered] element into a plain hashtable' {
+            $result = ConvertTo-UiDefinitionArray -InputObject ([ordered]@{ A = 1 }) -ParameterName '-X' -CallerName 'T'
+            $result[0].GetType() | Should -Be ([hashtable])
+        }
+
+        It 'rejects a non-dictionary element, naming the owning function and parameter' {
+            { ConvertTo-UiDefinitionArray -InputObject @(@{ A = 1 }, 42) -ParameterName '-Things' -CallerName 'New-UiWhatever' } | Should -Throw '*New-UiWhatever*-Things*'
+        }
+
+        It 'allows string elements only with -AllowString' {
+            { ConvertTo-UiDefinitionArray -InputObject @('Name') -ParameterName '-X' -CallerName 'T' } | Should -Throw
+            (ConvertTo-UiDefinitionArray -InputObject @('Name') -ParameterName '-X' -CallerName 'T' -AllowString)[0] | Should -Be 'Name'
+        }
+
+        It 'nulls CurrentParent inside a definition block and restores it after' {
+            $parentBefore = $script:normSession.CurrentParent
+            $probe = @{}
+            $null = ConvertTo-UiDefinitionArray -InputObject { $probe.Parent = [PsUi.SessionManager]::Current.CurrentParent; @{ A = 1 } } -ParameterName '-X' -CallerName 'T'
+            $probe.Parent | Should -BeNullOrEmpty
+            $script:normSession.CurrentParent | Should -Be $parentBefore
+        }
+
+        It 'restores CurrentParent when the block throws' {
+            $parentBefore = $script:normSession.CurrentParent
+            { ConvertTo-UiDefinitionArray -InputObject { throw 'boom' } -ParameterName '-X' -CallerName 'T' } | Should -Throw 'boom'
+            $script:normSession.CurrentParent | Should -Be $parentBefore
+        }
+
+        It 'a stray control call inside a definition block throws via Assert-UiSession' {
+            { ConvertTo-UiDefinitionArray -InputObject { New-UiLabel -Text 'oops' } -ParameterName '-X' -CallerName 'T' } | Should -Throw '*content block*'
+        }
+    }
+}
+
+Describe 'New-UiDataGrid - RowContextMenu builder input' -Tag 'RequiresSession' {
+    BeforeAll {
+        $script:rcmSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:rcmSessionId)
+        $script:rcmSession = [PsUi.SessionManager]::Current
+        $script:rcmSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+        $script:rcmRows = @(
+            [pscustomobject]@{ Name = 'web01'; Online = $true }
+            [pscustomobject]@{ Name = 'sql01'; Online = $false }
+        )
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:rcmSessionId)
+    }
+
+    It 'builds MenuItems in emission order ahead of the standard entries' {
+        New-UiDataGrid -Variable 'rcmBuilder' -Items $script:rcmRows -RowContextMenu {
+            New-UiMenuItem 'Ping' -Action { $_ } -Enabled { $_.Online }
+            New-UiMenuItem 'Wake' -Action { $_ } -Enabled $false
+        }
+        $menu = ($script:rcmSession.GetControl('rcmBuilder')).ContextMenu
+        $headers = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] } | ForEach-Object { $_.Header })
+        $headers[0] | Should -Be 'Ping'
+        $headers[1] | Should -Be 'Wake'
+    }
+
+    It '-Enabled $false lands as StaticEnabled on the MenuItem tag' {
+        # Proves an explicit $false survived the fold into the ordered form instead of collapsing into "no Enabled clause". Builds its own grid so the It stands alone.
+        New-UiDataGrid -Variable 'rcmStatic' -Items $script:rcmRows -RowContextMenu {
+            New-UiMenuItem 'Wake' -Action { $_ } -Enabled $false
+        }
+        $menu = ($script:rcmSession.GetControl('rcmStatic')).ContextMenu
+        $wakeItem = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] -and $_.Header -eq 'Wake' })[0]
+        $wakeItem.Tag.ContainsKey('StaticEnabled') | Should -BeTrue
+        $wakeItem.Tag.StaticEnabled | Should -BeFalse
+    }
+
+    It 'a bare New-UiMenuItem outside any block or array still lands as one labeled item' {
+        # A builder item is itself a dictionary, so the legacy passthrough would eat it and render menu entries literally named 'Text' and 'Action'
+        New-UiDataGrid -Variable 'rcmBare' -Items $script:rcmRows -RowContextMenu (New-UiMenuItem 'Solo' -Action { 1 })
+        $menu = ($script:rcmSession.GetControl('rcmBare')).ContextMenu
+        $headers = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] } | ForEach-Object { $_.Header })
+        $headers[0] | Should -Be 'Solo'
+        $headers | Should -Not -Contain 'Action'
+    }
+
+    It 'the array form works the same as the block form' {
+        New-UiDataGrid -Variable 'rcmArray' -Items $script:rcmRows -RowContextMenu @(
+            (New-UiMenuItem 'First' -Action { 1 }),
+            (New-UiMenuItem 'Second' -Action { 2 })
+        )
+        $menu = ($script:rcmSession.GetControl('rcmArray')).ContextMenu
+        $headers = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] } | ForEach-Object { $_.Header })
+        $headers[0] | Should -Be 'First'
+        $headers[1] | Should -Be 'Second'
+    }
+
+    It 'duplicate labels throw, case-insensitively' {
+        {
+            New-UiDataGrid -Variable 'rcmDup' -Items $script:rcmRows -RowContextMenu {
+                New-UiMenuItem 'Ping' -Action { 1 }
+                New-UiMenuItem 'ping' -Action { 2 }
+            }
+        } | Should -Throw '*duplicate*'
+    }
+
+    It 'an item hashtable without Text throws with the builder hint' {
+        { New-UiDataGrid -Variable 'rcmNoText' -Items $script:rcmRows -RowContextMenu @(@{ Action = { 1 } }) } | Should -Throw '*New-UiMenuItem*'
+    }
+
+    It 'the legacy ordered form still renders in declared order' {
+        New-UiDataGrid -Variable 'rcmLegacy' -Items $script:rcmRows -RowContextMenu ([ordered]@{
+            'B first'  = { $_ }
+            'A second' = @{ Action = { $_ }; Sync = $true }
+        })
+        $menu = ($script:rcmSession.GetControl('rcmLegacy')).ContextMenu
+        $headers = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] } | ForEach-Object { $_.Header })
+        $headers[0] | Should -Be 'B first'
+        $headers[1] | Should -Be 'A second'
+    }
+
+    It 'a stray control call inside the menu block throws instead of landing in the panel' {
+        $countBefore = $script:rcmSession.CurrentParent.Children.Count
+        {
+            New-UiDataGrid -Variable 'rcmStray' -Items $script:rcmRows -RowContextMenu {
+                New-UiLabel -Text 'oops'
+                New-UiMenuItem 'X' -Action { 1 }
+            }
+        } | Should -Throw '*content block*'
+        $script:rcmSession.CurrentParent.Children.Count | Should -Be $countBefore
+    }
+}
+
+Describe 'New-UiDataGrid - Columns builder input' -Tag 'RequiresSession' {
+    BeforeAll {
+        $script:colSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:colSessionId)
+        $script:colSession = [PsUi.SessionManager]::Current
+        $script:colSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+        $script:colRows = @(
+            [pscustomobject]@{ Name = 'web01'; Role = 'IIS' }
+            [pscustomobject]@{ Name = 'sql01'; Role = 'SQL' }
+        )
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:colSessionId)
+    }
+
+    It 'the scriptblock form builds the declared columns' {
+        New-UiDataGrid -Variable 'colBuilder' -Items $script:colRows -Columns {
+            New-UiColumn Name -ReadOnly
+            New-UiColumn -Header 'Go' -Type Button -Text 'Go' -Action { $_ }
+        }
+        $grid = $script:colSession.GetControl('colBuilder')
+        $grid.Columns.Count | Should -Be 2
+        $grid.Columns[1].Header | Should -Be 'Go'
+    }
+
+    It 'strings and builder output mix in one array' {
+        New-UiDataGrid -Variable 'colMixed' -Items $script:colRows -Columns @(
+            'Name'
+            (New-UiColumn Role -Header 'Duty')
+        )
+        $grid = $script:colSession.GetControl('colMixed')
+        $grid.Columns.Count | Should -Be 2
+        $grid.Columns[1].Header | Should -Be 'Duty'
+    }
+
+    It 'a pure string array still acts as a column filter' {
+        # Filter mode hides rather than removes: every property gets a column, only the listed ones show
+        New-UiDataGrid -Variable 'colFilter' -Items $script:colRows -Columns @('Name')
+        $grid = $script:colSession.GetControl('colFilter')
+        $visible = @($grid.Columns | Where-Object { $_.Visibility -eq [System.Windows.Visibility]::Visible })
+        $visible.Count | Should -Be 1
+        $visible[0].Header | Should -Be 'Name'
+    }
+
+    It 'an empty definition block falls back to auto columns' {
+        New-UiDataGrid -Variable 'colEmpty' -Items $script:colRows -Columns { }
+        ($script:colSession.GetControl('colEmpty')).Columns.Count | Should -Be 2
+    }
+}
+
+Describe 'ResultActions builder input' -Tag 'RequiresSession' {
+    BeforeAll {
+        $script:raSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:raSessionId)
+        $script:raSession = [PsUi.SessionManager]::Current
+        $script:raSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:raSessionId)
+    }
+
+    It 'New-UiButton stores the normalized hashtable array on the button context' {
+        New-UiButton -Text 'RA1' -Action { 1 } -ResultActions {
+            New-UiResultAction 'Stop' { $_ } -Confirm 'Stop {0}?'
+            New-UiResultAction 'Tag' { $_ }
+        }
+        $button = @($script:raSession.CurrentParent.Children | Where-Object { $_ -is [System.Windows.Controls.Button] })[-1]
+        $actions = $button.Tag.ResultActions
+        @($actions).Count | Should -Be 2
+        $actions[0] | Should -BeOfType [hashtable]
+        $actions[0].Text | Should -Be 'Stop'
+        $actions[0].Confirm | Should -Be 'Stop {0}?'
+        $actions[1].Text | Should -Be 'Tag'
+    }
+
+    It 'a single emission binds as a one-element array' {
+        New-UiButton -Text 'RA2' -Action { 1 } -ResultActions { New-UiResultAction 'Solo' { $_ } }
+        $button = @($script:raSession.CurrentParent.Children | Where-Object { $_ -is [System.Windows.Controls.Button] })[-1]
+        @($button.Tag.ResultActions).Count | Should -Be 1
+    }
+
+    It 'the legacy hashtable array still binds' {
+        New-UiButton -Text 'RA3' -Action { 1 } -ResultActions @(@{ Text = 'L'; Action = { $_ } })
+        $button = @($script:raSession.CurrentParent.Children | Where-Object { $_ -is [System.Windows.Controls.Button] })[-1]
+        $button.Tag.ResultActions[0].Text | Should -Be 'L'
+    }
+
+    It 'New-UiButtonCard and New-UiTool take untyped -ResultActions so definition blocks bind' {
+        (Get-Command New-UiButtonCard).Parameters['ResultActions'].ParameterType | Should -Be ([object])
+        (Get-Command New-UiTool).Parameters['ResultActions'].ParameterType | Should -Be ([object])
+    }
+}
+
+# Modal - can't invoke it under Pester, so pin the binding surface the builders rely on.
+Describe 'Show-UiMessageDialog -CustomButtons surface' {
+    It '-CustomButtons is untyped so a New-UiDialogButton definition block binds' {
+        (Get-Command Show-UiMessageDialog).Parameters['CustomButtons'].ParameterType | Should -Be ([object])
+    }
+}
+
+Describe 'WPFProperties attached properties' -Tag 'RequiresSession' {
+    BeforeAll {
+        $script:wpSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:wpSessionId)
+        $script:wpSession = [PsUi.SessionManager]::Current
+        $script:wpSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:wpSessionId)
+    }
+
+    It 'Grid.Row and Grid.Column land on the control' {
+        # [Type]::GetType returned $null for every WPF owner type, so this silently skipped for the module's whole life before the -as [type] fix
+        $parent = $script:wpSession.CurrentParent
+        New-UiPanel -Content { } -WPFProperties @{ 'Grid.Row' = 1; 'Grid.Column' = 2 }
+        $child = $parent.Children[$parent.Children.Count - 1]
+        [System.Windows.Controls.Grid]::GetRow($child) | Should -Be 1
+        [System.Windows.Controls.Grid]::GetColumn($child) | Should -Be 2
+    }
+
+    It 'attached values convert like instance properties' {
+        $parent = $script:wpSession.CurrentParent
+        New-UiPanel -Content { } -WPFProperties @{ 'DockPanel.Dock' = 'Left'; 'Grid.Row' = '1' }
+        $child = $parent.Children[$parent.Children.Count - 1]
+        [System.Windows.Controls.DockPanel]::GetDock($child) | Should -Be ([System.Windows.Controls.Dock]::Left)
+        [System.Windows.Controls.Grid]::GetRow($child) | Should -Be 1
+    }
+
+    It 'an unknown owner type skips without throwing' {
+        { New-UiPanel -Content { } -WPFProperties @{ 'Bogus.Thing' = 1 } } | Should -Not -Throw
+    }
+}
+
+# End to end on Invoke-UiAsync. Last in the file on purpose: the cancel test needs an Application (Cancel queues OnCancelled onto a Dispatcher), and the Application is a process wide singleton, so creating it here keeps it out of the WPF control tests above.
 Describe 'Invoke-UiAsync - capture and cancel lifecycle' {
     BeforeAll {
         if (![System.Windows.Application]::Current) { $null = New-Object System.Windows.Application }
@@ -3147,7 +3537,7 @@ Describe 'Invoke-UiAsync - capture and cancel lifecycle' {
         Start-Sleep -Milliseconds 250
         $handle.Executor.Cancel()
 
-        # Pump the dispatcher so the marshaled OnCancelled disposer runs. Bounded so it can't hang.
+        # Process Dispatcher messages so the queued OnCancelled disposer runs. Bounded so it can't hang.
         $frame = [System.Windows.Threading.DispatcherFrame]::new()
         $timer = [System.Windows.Threading.DispatcherTimer]::new()
         $timer.Interval = [timespan]::FromMilliseconds(700)

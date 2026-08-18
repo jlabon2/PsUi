@@ -2,6 +2,9 @@ function Show-UiSaveDialog {
     <#
     .SYNOPSIS
         Shows a file save dialog.
+    .DESCRIPTION
+        Show-UiFilePicker's counterpart for picking a destination, parented the same way.
+        Returns the target path, $null on cancel. Writing the file is still your job.
     .PARAMETER Title
         Dialog title.
     .PARAMETER Filter

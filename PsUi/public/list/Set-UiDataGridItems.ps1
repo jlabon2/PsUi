@@ -5,7 +5,7 @@ function Set-UiDataGridItems {
     .DESCRIPTION
         Swaps the entire row set on the grid identified by -Variable. Works on both -Items
         grids (PsUi owns the collection) and -ItemsSource grids (PsUi shares your collection).
-        One repaint for the whole swap, not one per row. PowerShell added properties stay
+        One Reset for the whole swap, not one per row. PowerShell added properties stay
         visible. Filter and sort reapply.
     .PARAMETER Variable
         The -Variable name passed to the originating New-UiDataGrid.
@@ -17,7 +17,7 @@ function Set-UiDataGridItems {
         Return the rows as they ended up in the grid. On -Items grids that's the copies PsUi
         displays. On -ItemsSource grids it's your array with null rows removed and any hashtable
         rows swapped for their converted PSCustomObjects. Changing a property on a returned row
-        won't repaint the cell on its own - PSCustomObject rows raise no change notifications, so
+        won't show in the cell on its own - PSCustomObject rows raise no change notifications, so
         rerun Set-UiDataGridItems to show the change.
     .EXAMPLE
         New-UiButton -Text 'Refresh' -Action {
@@ -25,7 +25,7 @@ function Set-UiDataGridItems {
         }
     .EXAMPLE
         $liveRows = Set-UiDataGridItems -Variable procs -Items $batch -PassThru
-        $liveRows[0].Status = 'Reviewed'   # updates the object. Reset the grid to repaint
+        $liveRows[0].Status = 'Reviewed'   # updates the object. Set the grid again to show it
     #>
     [CmdletBinding()]
     param(

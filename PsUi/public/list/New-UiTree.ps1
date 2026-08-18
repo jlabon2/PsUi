@@ -38,8 +38,9 @@ function New-UiTree {
     .PARAMETER ExpandAll
         Expand all nodes on load.
     .PARAMETER ParentCheckBoxes
-        Checkbox on every item with children. Click a parent to toggle enabled descendants.
-        Combine with -ChildCheckBoxes for the full picker.
+        Checkbox on every item with children. Alone, each box flips only itself. With
+        -ChildCheckBoxes alongside, clicking a parent toggles enabled descendants (the
+        full picker).
     .PARAMETER ChildCheckBoxes
         Checkbox on every leaf. Alone, parents become unselectable - the box is the only way in.
     .PARAMETER WhenEnabled

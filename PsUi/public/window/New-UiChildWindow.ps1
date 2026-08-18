@@ -14,7 +14,8 @@ function New-UiChildWindow {
         Child windows called from buttons run synchronously on the UI thread.
         No threading gymnastics required.
     .PARAMETER Parent
-        Parent window object.Can be omitted to create an independent window.
+        Parent window. Omit it and the session's window is picked up automatically; with
+        no session window open, the child stands alone.
     .PARAMETER Title
         Window title bar text.
     .PARAMETER Content
@@ -40,17 +41,17 @@ function New-UiChildWindow {
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
-        Invalid properties will generate warnings but not stop execution.
+        Bad values warn and get skipped. A property name that does not exist on the control is
+        skipped silently (-Verbose shows it). Nothing stops execution.
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         # Modal dialog - parent is auto-detected from session
         New-UiButton -Text "Open Settings" -NoAsync -Action {
             $result = New-UiChildWindow -Title 'Settings' -Modal -Content {
                 New-UiLabel -Text 'Configure settings'
-                New-UiButton -Text 'Save' -Action {
-                    $session = Get-UiSession
-                    $session.Window.DialogResult = $true
-                    $session.Window.Close()
+                New-UiButton -Text 'Save' -NoAsync -Action {
+                    # Setting DialogResult closes a modal by itself. Do NOT also call Close(). The second close lands on a window mid teardown and throws.
+                    (Get-UiSession).Window.DialogResult = $true
                 }
             }
             if ($result) { Write-Host "User clicked Save" }
@@ -59,8 +60,8 @@ function New-UiChildWindow {
         # Non-modal window - parent auto-detected
         New-UiButton -Text "Show Monitor" -NoAsync -Action {
             New-UiChildWindow -Title 'Status Monitor' -Width 300 -Height 200 -Content {
-                New-UiLabel -Text 'Monitoring...' -Variable statusLabel
-                New-UiButton -Text "Close" -Action {
+                New-UiLabel -Text 'Monitoring...'
+                New-UiButton -Text "Close" -NoAsync -Action {
                     (Get-UiSession).Window.Close()
                 }
             }
@@ -70,10 +71,9 @@ function New-UiChildWindow {
         $counter = @{ Value = 0 }
         New-UiButton -Text "Open Counter" -LinkedVariables 'counter' -NoAsync -Action {
             New-UiChildWindow -Title "Counter" -Content {
-                $label = New-UiLabel -Text "Count: 0" -Style SubHeader
-                New-UiButton -Text "Increment" -Action {
+                New-UiButton -Text "Increment" -NoAsync -Action {
                     $counter.Value++
-                    $label.Text = "Count: $($counter.Value)"
+                    (Get-UiSession).Window.Title = "Counter: $($counter.Value)"
                 }
             }
         }
@@ -348,8 +348,9 @@ function New-UiChildWindow {
     $capturedWindow = $window
     $capturedModal  = $Modal
     $closeBtn.Add_Click({
-        if ($capturedModal) {  $capturedWindow.DialogResult = $false }
-        $capturedWindow.Close()
+        # Setting DialogResult already closes a modal. Close() on top of it re-enters teardown on a disposing window and throws an NRE out of the second pass.
+        if ($capturedModal) { $capturedWindow.DialogResult = $false }
+        else { $capturedWindow.Close() }
     }.GetNewClosure())
     [void]$titleGrid.Children.Add($closeBtn)
 

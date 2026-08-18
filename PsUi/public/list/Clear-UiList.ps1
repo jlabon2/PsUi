@@ -2,6 +2,9 @@ function Clear-UiList {
     <#
     .SYNOPSIS
         Clears all items from a UiList control.
+    .DESCRIPTION
+        On a list built with -ItemsSource this empties your own collection, not a copy of it.
+        Rebuild with Add-UiListItem.
     .PARAMETER Variable
         The variable name of the list control.
     .EXAMPLE

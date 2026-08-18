@@ -13,7 +13,7 @@ function New-UiList {
         Array of static items to display. Mutually exclusive with ItemsSource.
     .PARAMETER ItemsSource
         A collection (e.g., ObservableCollection) to bind as the list's data source.
-        Use this for dynamic collections that update at runtime.
+        Use this for lists that change at runtime.
     .PARAMETER DisplayFormat
         Format string for displaying objects. Use property names in braces.
         Example: "{Username} ({AccountType})" shows "jsmith (Admin)".
@@ -22,7 +22,7 @@ function New-UiList {
         Allow multiple selection.
     .PARAMETER Filterable
         Adds a filter textbox above the list. As the user types, items are filtered
-        in real-time. Includes a clear button (X) that appears when text is entered.
+        in real time. Includes a clear button (X) that appears when text is entered.
     .PARAMETER SelectionControls
         Adds "All" and "None" buttons for quick select/deselect operations.
         Most useful with -MultiSelect. Buttons appear in the filter toolbar.
@@ -34,7 +34,7 @@ function New-UiList {
     .PARAMETER Height
         Fixed height in pixels. Defaults to 150. Ignored when -Fill is set.
     .PARAMETER Fill
-        Grow to the rest of the window's vertical view port instead of the fixed -Height.
+        Grow to the rest of the window's vertical viewport instead of the fixed -Height.
         List resizes with the window. Use when the list is the dominant content in the view.
     .PARAMETER FullWidth
         Stretches the list to fill available width.

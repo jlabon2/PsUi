@@ -22,7 +22,7 @@ function Add-UiDataGridItem {
         Add-UiDataGridItem -Variable queue -Item @{ User='john'; Status='Pending' }
     .EXAMPLE
         $row = Add-UiDataGridItem -Variable queue -Item $entry -PassThru
-        $row.Status = 'Done'   # updates the object - set the grid again to redraw it
+        $row.Status = 'Done'   # updates the object - set the grid again to show the change
     #>
     [CmdletBinding()]
     param(

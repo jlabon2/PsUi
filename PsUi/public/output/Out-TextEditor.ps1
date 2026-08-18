@@ -8,11 +8,13 @@ function Out-TextEditor {
     .PARAMETER InputObject
         Text to display. Accepts string array from pipeline.
     .PARAMETER InitialText
-        Initial text content (alias for backward compatibility).
+        Initial text content. Kept for older call sites; pipeline input wins when both
+        are given.
     .PARAMETER TitleText
         Window title.
     .PARAMETER Theme
-        Color theme to use. Defaults to Light.
+        Color theme. When not given, follows the session's active theme if one is loaded,
+        otherwise Light.
     .PARAMETER ReadOnly
         When specified, the text editor opens in read-only mode. The Save button is hidden
         and the Cancel button becomes "Close" with accent styling.
