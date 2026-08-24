@@ -5,7 +5,7 @@ function Show-UiOuPicker {
     .DESCRIPTION
         Wraps DsBrowseForContainerW (dsuiext.dll) - the same OU picker that ADUC,
         Group Policy Management, and every other Microsoft AD tool uses. Returns a
-        PSCustomObject with the selected OU's name, DN, and ADsPath. Returns $null
+        PSCustomObject with Name, DistinguishedName, and AdsPath. Returns $null
         if the user cancels.
     .PARAMETER Title
         Caption shown in the dialog title bar.
@@ -44,7 +44,6 @@ function Show-UiOuPicker {
         $ou = Show-UiOuPicker -Credential $cred -Server 'dc01.corp.local'
     .OUTPUTS
         PSCustomObject
-        Name, DistinguishedName, AdsPath. $null on cancel.
     #>
     [CmdletBinding()]
     param(

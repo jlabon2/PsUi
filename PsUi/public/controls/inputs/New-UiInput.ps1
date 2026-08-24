@@ -68,8 +68,9 @@ function New-UiInput {
     .PARAMETER FullWidth
         Stretches the control to fill available width instead of fixed sizing.
     .PARAMETER HelperButton
-        Adds a picker button next to the input. Supports FilePicker, FolderPicker,
-        ComputerPicker, UserPicker, GroupPicker, etc.
+        Adds a picker button next to the input. One of None, FilePicker, FolderPicker,
+        AdvancedFolderPicker, ComputerPicker, UserPicker, GroupPicker, UserGroupPicker,
+        or OUPicker.
     .PARAMETER HelperOptions
         Hashtable that is inevitably splatted into the underlying Show-* picker at click time.
         Any param the picker takes is fair game. String values get looked up against

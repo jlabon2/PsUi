@@ -7,9 +7,8 @@ function Update-UiChart {
         button actions - the update lands on the UI thread on its own.
 
         This is the explicit update path. Charts also update automatically when
-        you assign new data to the chart variable inside a button action:
-
-            $myChart = [ordered]@{ "A" = 10; "B" = 20 }
+        you assign an ordered hashtable of new data to the chart variable inside a
+        button action.
 
     .PARAMETER Variable
         The variable name of the chart to update (matches -Variable on New-UiChart).

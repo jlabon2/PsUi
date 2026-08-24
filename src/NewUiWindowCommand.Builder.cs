@@ -319,7 +319,7 @@ namespace PsUi
                 // Apply custom WPF properties
                 if (p.WPFProperties != null && p.WPFProperties.Count > 0)
                 {
-                    ApplyWpfProperties(window, p.WPFProperties);
+                    ApplyWpfProperties(window, p.WPFProperties, windowRunspace);
                 }
                 
                 // Force taskbar icon before showing window
@@ -1669,28 +1669,46 @@ namespace PsUi
             return null;
         }
 
-        // Apply -WPFProperties hashtable values via reflection
-        private void ApplyWpfProperties(FrameworkElement element, Hashtable properties)
+        // -WPFProperties goes through Set-UiProperties: attached property dot notation, string to type conversion (Cursor = 'Hand').
+        // The runspace is UseCurrentThread and this runs on the window's STA thread.
+        private void ApplyWpfProperties(FrameworkElement element, Hashtable properties, Runspace runspace)
         {
-            if (element == null || properties == null) return;
+            if (element == null || properties == null || properties.Count == 0 || runspace == null) return;
 
-            foreach (DictionaryEntry kvp in properties)
+            // Tag holds the chrome hashtable (theme button, status bar lookups).
+            if (properties.ContainsKey("Tag"))
             {
-                try
-                {
-                    string propName = kvp.Key.ToString();
-                    object propValue = kvp.Value;
+                Console.WriteLine("[PsUi] Warning: New-UiWindow -WPFProperties Tag is reserved (it holds the window chrome). Ignoring.");
+                properties = (Hashtable)properties.Clone();
+                properties.Remove("Tag");
+                if (properties.Count == 0) return;
+            }
 
-                    var propInfo = element.GetType().GetProperty(propName);
-                    if (propInfo != null && propInfo.CanWrite)
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddCommand("Set-UiProperties");
+                    ps.AddParameter("Control", element);
+                    ps.AddParameter("Properties", properties);
+                    ps.Invoke();
+
+                    // WriteWarning is unsafe off the cmdlet processing thread.
+                    foreach (WarningRecord warning in ps.Streams.Warning)
                     {
-                        propInfo.SetValue(element, propValue);
+                        Console.WriteLine("[PsUi] Warning: " + warning.Message);
+                    }
+                    foreach (ErrorRecord error in ps.Streams.Error)
+                    {
+                        string msg = error.Exception != null ? error.Exception.Message : error.ToString();
+                        Console.WriteLine("[PsUi] Warning: -WPFProperties: " + msg);
                     }
                 }
-                catch (Exception ex)
-                {
-                    DebugLog("WINDOW", "ApplyWpfProperties failed for '" + kvp.Key + "': " + ex.Message);
-                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("WINDOW", "ApplyWpfProperties failed: " + ex.Message);
             }
         }
         

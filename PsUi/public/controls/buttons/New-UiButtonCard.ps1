@@ -66,7 +66,7 @@ function New-UiButtonCard {
     .PARAMETER WPFProperties
         Hashtable of WPF properties to apply to the card container.
     .EXAMPLE
-        New-UiButtonCard -Header "Get Processes" -Icon "Processing" -Action { Get-Process }
+        New-UiButtonCard -Header "Get Processes" -Icon "Processing" -Action { Get-Process | Select-Object Name, Id, WS }
     .EXAMPLE
         New-UiButtonCard -Header "Save Data" -Description "Saves current state" -Icon "Save" -ButtonText "SAVE" -Accent -Action { Save-Data }
     .EXAMPLE

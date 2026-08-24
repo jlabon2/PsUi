@@ -70,7 +70,7 @@ function New-UiStatusBar {
         New-UiStatusBar -Content {
             New-UiLabel -Text 'Working...'
             New-UiSpacer
-            New-UiButton -Text 'Cancel' -NoOutput -Action { Stop-UiAsync }
+            New-UiButton -Text 'Cancel' -NoAsync -Action { Stop-UiAsync }
         }
     .EXAMPLE
         New-UiStatusBar -DefaultText 'Ready' -AutoProgress -AutoCancel

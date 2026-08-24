@@ -14,6 +14,46 @@ BeforeAll {
     # Force-import so we always test the local build, not some stale installed copy
     $modulePath = Join-Path $PSScriptRoot '..\PsUi\PsUi.psd1'
     Import-Module $modulePath -Force
+
+    # File level so the list Describe can use it too, not just the AsyncObservableCollection one.
+    # Runs a script in a fresh MTA runspace and returns the async invocation handle. The runspace has its own thread (background, non UI) so wrapper.Add there goes through the !_dispatcher.CheckAccess() branch and comes back through Invoke.
+    function Start-BackgroundAdd {
+        param($Wrapper, $Item)
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+        $rs.ThreadOptions  = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
+        $rs.Open()
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({ param($w, $i) $w.Add($i) }).AddArgument($Wrapper).AddArgument($Item)
+        @{ PS = $ps; RS = $rs; Handle = $ps.BeginInvoke() }
+    }
+
+    function Complete-BackgroundAdd {
+        param($Invocation, [int]$TimeoutMs = 2000)
+        $ok = $Invocation.Handle.AsyncWaitHandle.WaitOne($TimeoutMs)
+        try   { [void]$Invocation.PS.EndInvoke($Invocation.Handle) }
+        catch { Write-Debug "EndInvoke threw: $_" }
+        $Invocation.PS.Dispose()
+        $Invocation.RS.Close()
+        $Invocation.RS.Dispose()
+        return $ok
+    }
+
+    # The message loop from the cross thread It, shared for the same reason. A single PushFrame with an ApplicationIdle sentinel races: empty queue, idle fires, frame exits, worker queues into the void. Loop until the BeginInvoke handle signals or the deadline expires.
+    function Wait-BackgroundAdd {
+        param($Invocation, [int]$TimeoutSec = 2)
+        $disp     = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ((Get-Date) -lt $deadline -and !$Invocation.Handle.IsCompleted) {
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            [void]$disp.BeginInvoke(
+                [System.Windows.Threading.DispatcherPriority]::ApplicationIdle,
+                [Action]{ $frame.Continue = $false })
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+            if (!$Invocation.Handle.IsCompleted) { [System.Threading.Thread]::Sleep(20) }
+        }
+    }
 }
 
 # Sanity checks - if these fail, nothing else matters
@@ -1494,6 +1534,127 @@ Describe 'Control Creation - List Controls' {
             New-UiList -Variable 'conflicted' -Items @(1, 2) -ItemsSource @(3, 4)
         } | Should -Throw '*cannot use both*'
     }
+
+    # Regression cover for the -Items seed fix in New-UiList.
+    It '-Items registers an AsyncObservableCollection' {
+        New-UiList -Variable 'wrapStatic' -Items @('a', 'b', 'c')
+        $coll = $script:session.GetListCollection('wrapStatic')
+        $coll.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        $coll.Count | Should -Be 3
+    }
+
+    It 'the no-items branch registers an AsyncObservableCollection' {
+        New-UiList -Variable 'wrapEmpty'
+        $coll = $script:session.GetListCollection('wrapEmpty')
+        $coll.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        $coll.Count | Should -Be 0
+    }
+
+    It 'the list collection never reads as grid owned' {
+        # Grid and list share one registry keyed by variable name, and Test-UiDataGridOwned is exact string equality on the GridOwnedCollection type. A list that matched it would make Add-UiDataGridItem snapshot list rows.
+        $coll = $script:session.GetListCollection('wrapStatic')
+        $coll.GetType().ToString() | Should -Not -Be 'PsUi.GridOwnedCollection`1[System.Object]'
+    }
+
+    It '-Items with one empty string keeps the item' {
+        # @('') was falsy under the old truthiness check and fell into the no items branch, silently dropping the item.
+        New-UiList -Variable 'wrapBlank' -Items @('')
+        ($script:session.GetListCollection('wrapBlank')).Count | Should -Be 1
+    }
+
+    It '-ItemsSource with a plain ObservableCollection wraps and mirrors' {
+        # -WarningAction stays quiet: under Pester the variable repoint legitimately matches nothing (module scope walk can't reach Pester locals), so the 'could not repoint' warning always fires here.
+        $original = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $original.Add('seed')
+        New-UiList -Variable 'wrapBound' -ItemsSource $original -WarningAction SilentlyContinue
+
+        $wrap = $script:session.GetListCollection('wrapBound')
+        $wrap.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        [object]::ReferenceEquals($wrap, $original) | Should -BeFalse
+
+        Add-UiListItem -Variable 'wrapBound' -Item 'added'
+        $wrap.Count     | Should -Be 2
+        $original.Count | Should -Be 2
+        $original[1]    | Should -Be 'added'
+    }
+
+    It '-ItemsSource with a fixed size array wraps without a mirror and Add works' {
+        New-UiList -Variable 'wrapArray' -ItemsSource @('x', 'y') -WarningAction SilentlyContinue
+        { Add-UiListItem -Variable 'wrapArray' -Item 'z' } | Should -Not -Throw
+        ($script:session.GetListCollection('wrapArray')).Count | Should -Be 3
+    }
+
+    It '-ItemsSource passes an AsyncObservableCollection through by reference' {
+        $async = [PsUi.AsyncObservableCollection[object]]::new()
+        $async.Add('q')
+        New-UiList -Variable 'wrapPass' -ItemsSource $async
+        [object]::ReferenceEquals($script:session.GetListCollection('wrapPass'), $async) | Should -BeTrue
+    }
+
+    It '-NoBind leaves the calling script variable untouched but still binds the wrap' {
+        $mine = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        New-UiList -Variable 'wrapNoBind' -ItemsSource $mine -NoBind
+        $mine.GetType().FullName | Should -Match '^System\.Collections\.ObjectModel\.ObservableCollection'
+        ($script:session.GetListCollection('wrapNoBind')).GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+    }
+
+    It 'a property held source warns that nothing was repointed' {
+        $holder = [pscustomobject]@{ Items = [System.Collections.ArrayList]::new() }
+        $warnings = @()
+        New-UiList -Variable 'wrapNoHandle' -ItemsSource $holder.Items -WarningVariable warnings -WarningAction SilentlyContinue
+        ($warnings -join ' ') | Should -Match 'could not repoint'
+    }
+
+    It 'Remove-UiListItem with no -Item takes the selection off the proxy' {
+        # The old path read SelectedItem off the raw ListBox out of session.Variables, which throws from any async action.
+        New-UiList -Variable 'rmSelected' -Items @('keep', 'drop')
+        $listBox = $script:session.GetControl('rmSelected')
+        $listBox.SelectedItem = $listBox.Items[1]
+        Remove-UiListItem -Variable 'rmSelected'
+        ($script:session.GetListCollection('rmSelected')).Count | Should -Be 1
+        ($script:session.GetListCollection('rmSelected'))[0] | Should -Be 'keep'
+    }
+}
+
+Describe 'New-UiList - cross-thread mutation' {
+    BeforeAll {
+        $script:xtSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:xtSessionId)
+        $script:xtSession = [PsUi.SessionManager]::Current
+        $script:xtSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:xtSessionId)
+    }
+
+    It 'a background add against an -Items list lands instead of throwing' {
+        # Fails on the build before the fix. Adds on the registered collection are the last line of Add-UiListItem, so this covers the helper's write without hydrating a whole module into the worker runspace.
+        New-UiList -Variable 'xtList' -Items @('one', 'two') -WarningAction SilentlyContinue
+        $coll = $script:xtSession.GetListCollection('xtList')
+
+        $bg = Start-BackgroundAdd -Wrapper $coll -Item 'from-background'
+        Wait-BackgroundAdd -Invocation $bg
+        (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+        # Complete-BackgroundAdd swallows EndInvoke exceptions, so assert on contents, not the handle.
+        $coll.Count | Should -Be 3
+        $coll[2]    | Should -Be 'from-background'
+    }
+
+    It 'a background add against a wrapped -ItemsSource reaches wrap and original' {
+        $original = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $original.Add('seed')
+        New-UiList -Variable 'xtBound' -ItemsSource $original -WarningAction SilentlyContinue
+        $wrap = $script:xtSession.GetListCollection('xtBound')
+
+        $bg = Start-BackgroundAdd -Wrapper $wrap -Item 'bg'
+        Wait-BackgroundAdd -Invocation $bg
+        (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+        $wrap.Count     | Should -Be 2
+        $original.Count | Should -Be 2
+    }
 }
 
 # Audit caught that -Path and -Base64 weren't mandatory - verify the fix sticks
@@ -2606,32 +2767,6 @@ Describe 'AsyncObservableCollection - Mirror behavior' {
 
 Describe 'AsyncObservableCollection - Cross-thread marshaling' {
 
-    BeforeAll {
-        # Helper that runs a script in a fresh MTA runspace and returns the async invocation handle. The runspace has its own thread (background, non UI) so wrapper.Add there goes through the !_dispatcher.CheckAccess() branch and comes back through Invoke.
-        function Start-BackgroundAdd {
-            param($Wrapper, $Item)
-            $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-            $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
-            $rs.ThreadOptions  = [System.Management.Automation.Runspaces.PSThreadOptions]::UseNewThread
-            $rs.Open()
-            $ps = [System.Management.Automation.PowerShell]::Create()
-            $ps.Runspace = $rs
-            [void]$ps.AddScript({ param($w, $i) $w.Add($i) }).AddArgument($Wrapper).AddArgument($Item)
-            @{ PS = $ps; RS = $rs; Handle = $ps.BeginInvoke() }
-        }
-
-        function Complete-BackgroundAdd {
-            param($Invocation, [int]$TimeoutMs = 2000)
-            $ok = $Invocation.Handle.AsyncWaitHandle.WaitOne($TimeoutMs)
-            try   { [void]$Invocation.PS.EndInvoke($Invocation.Handle) }
-            catch { Write-Debug "EndInvoke threw: $_" }
-            $Invocation.PS.Dispose()
-            $Invocation.RS.Close()
-            $Invocation.RS.Dispose()
-            return $ok
-        }
-    }
-
     It 'wrapper.Add from a background MTA runspace marshals through dispatcher and pushes mirror' {
         $disp    = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
         $mirror  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
@@ -2641,18 +2776,7 @@ Describe 'AsyncObservableCollection - Cross-thread marshaling' {
         # Spawn a real background runspace that calls wrapper.Add.
         # wrapper.Add sees CheckAccess=false, queues an Invoke to UI dispatcher, blocks on it.
         $bg = Start-BackgroundAdd -Wrapper $wrapper -Item 'bg-item'
-
-        # Pump the dispatcher until the worker's handle signals. A single PushFrame with an ApplicationIdle sentinel races: empty queue, idle fires, frame exits, worker queues into the void. Loop until the BeginInvoke handle signals or 2s expires.
-        $deadline = (Get-Date).AddSeconds(2)
-        while ((Get-Date) -lt $deadline -and !$bg.Handle.IsCompleted) {
-            $frame = [System.Windows.Threading.DispatcherFrame]::new()
-            [void]$disp.BeginInvoke(
-                [System.Windows.Threading.DispatcherPriority]::ApplicationIdle,
-                [Action]{ $frame.Continue = $false })
-            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
-            if (!$bg.Handle.IsCompleted) { [System.Threading.Thread]::Sleep(20) }
-        }
-
+        Wait-BackgroundAdd -Invocation $bg
         (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
 
         $wrapper.Count | Should -Be 1
@@ -3548,5 +3672,117 @@ Describe 'Invoke-UiAsync - capture and cancel lifecycle' {
         # Dispose() nulls the private _cts. Cancel() alone only cancels it.
         $ctsField = [PsUi.AsyncExecutor].GetField('_cts', [System.Reflection.BindingFlags]'Instance,NonPublic')
         $ctsField.GetValue($handle.Executor) | Should -BeNullOrEmpty
+    }
+}
+
+# Also needs the Application, so it sits below the lifecycle block that creates it.
+Describe 'ActiveExecutor release on run end' {
+    BeforeAll {
+        if (![System.Windows.Application]::Current) { $null = New-Object System.Windows.Application }
+
+        $script:aeSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:aeSessionId)
+        $script:aeSession = [PsUi.SessionManager]::Current
+
+        # Bounded message loop. The completion handlers queue onto the Dispatcher, so nothing releases until something processes messages.
+        function Wait-Condition {
+            param([scriptblock]$Until, [int]$TimeoutSec = 6)
+            $deadline = (Get-Date).AddSeconds($TimeoutSec)
+            while (!(& $Until) -and (Get-Date) -lt $deadline) {
+                $frame = [System.Windows.Threading.DispatcherFrame]::new()
+                [void][System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+                    [System.Windows.Threading.DispatcherPriority]::Background,
+                    [Action]{ $frame.Continue = $false })
+                [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+                [System.Threading.Thread]::Sleep(20)
+            }
+        }
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:aeSessionId)
+    }
+
+    It 'completion nulls ActiveExecutor instead of leaving a disposed AsyncExecutor behind' {
+        # Before the fix the only clear was SessionContext.Clear() at window teardown.
+        $handle = Invoke-UiAsync -ScriptBlock { Start-Sleep -Milliseconds 150; 'ok' }
+        [object]::ReferenceEquals($script:aeSession.ActiveExecutor, $handle.Executor) | Should -BeTrue
+        Wait-Condition { $null -eq $script:aeSession.ActiveExecutor }
+        $script:aeSession.ActiveExecutor | Should -BeNullOrEmpty
+    }
+
+    It 'an older run finishing does not clear a newer run out of ActiveExecutor' {
+        $slow = Invoke-UiAsync -ScriptBlock { Start-Sleep -Milliseconds 200; 'slow' }
+        $long = Invoke-UiAsync -ScriptBlock { Start-Sleep -Seconds 4; 'long' }
+        [object]::ReferenceEquals($script:aeSession.ActiveExecutor, $long.Executor) | Should -BeTrue
+
+        Wait-Condition { !$slow.Executor.IsRunning } 3
+        Wait-Condition { $false } 1
+        [object]::ReferenceEquals($script:aeSession.ActiveExecutor, $long.Executor) | Should -BeTrue
+
+        # Cancel releases too.
+        $long.Executor.Cancel()
+        Wait-Condition { $null -eq $script:aeSession.ActiveExecutor }
+        $script:aeSession.ActiveExecutor | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Stop-UiAsync inside an async action warns at build' {
+    BeforeAll {
+        $script:swSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:swSessionId)
+        $script:swSession = [PsUi.SessionManager]::Current
+        $script:swSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:swSessionId)
+    }
+
+    It 'an async action calling Stop-UiAsync warns that it would cancel itself' {
+        $warnings = @()
+        New-UiButton -Text 'Cancel' -Action { Stop-UiAsync } -WarningVariable warnings -WarningAction SilentlyContinue
+        ($warnings -join ' ') | Should -Match 'cancel itself'
+    }
+
+    It '-NoAsync suppresses the warning' {
+        $warnings = @()
+        New-UiButton -Text 'CancelSync' -NoAsync -Action { Stop-UiAsync } -WarningVariable warnings -WarningAction SilentlyContinue
+        $warnings.Count | Should -Be 0
+    }
+
+    It 'an explicit -NoAsync:$false suppresses it too (the user made the call)' {
+        $warnings = @()
+        New-UiButton -Text 'CancelForced' -NoAsync:$false -Action { Stop-UiAsync } -WarningVariable warnings -WarningAction SilentlyContinue
+        $warnings.Count | Should -Be 0
+    }
+
+    It 'the name inside a string does not trip the AST scan' {
+        $warnings = @()
+        New-UiButton -Text 'Docs' -Action { Write-Host 'see Stop-UiAsync docs' } -WarningVariable warnings -WarningAction SilentlyContinue
+        $warnings.Count | Should -Be 0
+    }
+}
+
+InModuleScope PsUi {
+    Describe 'Get-UiCollectionKind' {
+        It 'classifies every input form' {
+            Get-UiCollectionKind -Obj ([System.Collections.ObjectModel.ObservableCollection[object]]::new()) | Should -Be 'WpfObservable'
+            Get-UiCollectionKind -Obj ([PsUi.AsyncObservableCollection[object]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
+            Get-UiCollectionKind -Obj ([System.Collections.ArrayList]::new()) | Should -Be 'Other'
+            Get-UiCollectionKind -Obj (@('a', 'b')) | Should -Be 'Other'
+            Get-UiCollectionKind -Obj $null | Should -Be 'Null'
+            $target = @(1)
+            Get-UiCollectionKind -Obj ([ref]$target) | Should -Be 'Ref'
+        }
+
+        It 'classifies a typed AsyncObservableCollection, which the old name match missed for subclasses' {
+            Get-UiCollectionKind -Obj ([PsUi.AsyncObservableCollection[string]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
+        }
+
+        It 'classifies GridOwnedCollection as PsUiObservable via inheritance' {
+            # GridOwnedCollection derives from AsyncObservableCollection, so the BaseType walk finds the threadsafe base first. That keeps a grid owned collection out of the wrap path if one ever reaches the list resolve.
+            Get-UiCollectionKind -Obj ([PsUi.GridOwnedCollection[object]]::new()) | Should -Be 'PsUiObservable'
+        }
     }
 }

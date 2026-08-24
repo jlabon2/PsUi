@@ -107,7 +107,7 @@ function New-UiButton {
     .EXAMPLE
         New-UiButton -Text "Save" -Icon "Save" -Accent -Action { Save-Data }
     .EXAMPLE
-        New-UiButton -Text "Run Query" -Action { Get-Process } -HideEmptyOutput
+        New-UiButton -Text "Run Query" -Action { Get-Process | Select-Object Name, Id, WS } -HideEmptyOutput
     .EXAMPLE
         New-UiButton -Text "Deploy" -File "C:\Scripts\Deploy.ps1" -ArgumentList @{ Environment = 'Prod' }
     .EXAMPLE
@@ -366,6 +366,11 @@ function New-UiButton {
         $NoAsync = $true
     }
 
+    # An async click registers its own AsyncExecutor as ActiveExecutor before the action runs, so a Stop-UiAsync inside it cancels this very button instead of the job. Warn, don't flip, unlike the spawner case above, the action still runs, it just cancels the wrong thing.
+    if (!$NoAsync -and !$PSBoundParameters.ContainsKey('NoAsync') -and $actionContext.AutoDetectedFuncs -contains 'Stop-UiAsync') {
+        Write-Warning "New-UiButton '$Text': the action calls Stop-UiAsync but the button is async, so it will cancel itself instead of the running job. Add -NoAsync to this button."
+    }
+
     # Store action context in button tag for click handler
     $displayTitle = if ($OutputTitle) { $OutputTitle } else { $Text }
 
@@ -572,6 +577,9 @@ function New-UiButton {
                         }
                         catch { Write-Debug "$CallerName UI restore skipped (window closed): $_" }
                         try { $executorToDispose.Dispose() } catch { Write-Debug "$CallerName dispose error: $_" }
+
+                        # Release ActiveExecutor or it holds the disposed AsyncExecutor forever and the next Stop-UiAsync silently does nothing. If a newer job owns it by now, this run finishing must not clear it. Inline, not a helper since private fns don't resolve inside GetNewClosure handlers outside a real window.
+                        if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $executorToDispose)) { $execSession.ActiveExecutor = $null }
                     }.GetNewClosure()
 
                     $executor.add_OnComplete({

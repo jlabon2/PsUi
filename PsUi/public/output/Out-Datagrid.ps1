@@ -54,7 +54,7 @@ function Out-Datagrid {
     .EXAMPLE
         Get-Service | Out-Datagrid -PassThru | Restart-Service
     .EXAMPLE
-        Get-ChildItem | Out-Datagrid -PassThru -OutputMode Single
+        Get-ChildItem $env:WINDIR\System32 -Filter *.dll | Out-Datagrid -PassThru -OutputMode Single
     .EXAMPLE
         $rowBg   = { if ($_.Status -eq 'Stopped') { '#33FF6B6B' } }
         $dgSplat = @{ RowBackground = $rowBg; DefaultSort = 'Status' }

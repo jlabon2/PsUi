@@ -105,7 +105,6 @@ function New-UiProgress {
         BrushTag    = $brushKey
     }
 
-    # Tag is set above, so Set-ProgressBarStyle's RegisterElement picks up the right severity brush on the first paint.
     Set-ProgressBarStyle -ProgressBar $progress
 
     if ($PSBoundParameters.ContainsKey('Height')) { $progress.Height = $Height }

@@ -1,7 +1,7 @@
 function New-UiTab {
     <#
     .SYNOPSIS
-        Creates a tab item within a TabControl, enabling responsive child layouts.
+        Creates a tab with an optional header icon. Content scrolls if it overflows.
     .DESCRIPTION
         Tabs declared at the same level share one TabControl, so a window becomes tabbed just by
         listing New-UiTab blocks in its Content. -EnabledWhen gates a tab until another control
@@ -11,10 +11,11 @@ function New-UiTab {
     .PARAMETER Content
         ScriptBlock containing the tab's child controls.
     .PARAMETER EnabledWhen
-        Control name or session variable name that determines when this tab is enabled.
-        When the referenced value is truthy, the tab is enabled; when falsy, disabled.
-        Supports both control references (e.g., 'showAdvanced') and -Capture variables
-        (e.g., 'VCSAConnection').
+        Control name, session variable name, or scriptblock. Truthy enables the tab, falsy
+        disables it. Control references ('showAdvanced') and -Capture variables
+        ('VCSAConnection') both work. A scriptblock re-evaluates whenever the controls it
+        names change: { $serverName -and $environment } needs both. A scriptblock reads
+        controls only, never -Capture variables.
     .PARAMETER Icon
         Optional icon name shown on the tab header. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER WPFProperties

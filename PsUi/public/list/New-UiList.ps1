@@ -12,8 +12,15 @@ function New-UiList {
     .PARAMETER Items
         Array of static items to display. Mutually exclusive with ItemsSource.
     .PARAMETER ItemsSource
-        A collection (e.g., ObservableCollection) to bind as the list's data source.
-        Use this for lists that change at runtime.
+        A collection to bind as the list's data source. Use this for lists that change at
+        runtime. Anything that isn't already a PsUi thread-safe collection gets wrapped in one,
+        and your variable is repointed at the wrap so $list.Add() from a background action keeps
+        working. The wrap means $list is no longer the type you passed in, so .AddRange(),
+        .Sort() and -is [ArrayList] stop working on it. Use -NoBind to keep your own reference.
+    .PARAMETER NoBind
+        Skip repointing your variable at the wrapped collection. The list still binds to the
+        wrap, but your variable keeps pointing at the original, and the two only stay in step
+        while the mirror holds. For when you want to manage the binding yourself.
     .PARAMETER DisplayFormat
         Format string for displaying objects. Use property names in braces.
         Example: "{Username} ({AccountType})" shows "jsmith (Admin)".
@@ -64,8 +71,11 @@ function New-UiList {
         [Parameter()]
         [string[]]$Items,
 
+        # Typed, unlike the grid's. A [ref] doesn't implement IEnumerable, so parameter binding rejects it here and the list skips the grid's whole ref promotion path.
         [Parameter()]
         [System.Collections.IEnumerable]$ItemsSource,
+
+        [switch]$NoBind,
 
         [Parameter()]
         [string]$DisplayFormat,
@@ -93,7 +103,8 @@ function New-UiList {
         [hashtable]$WPFProperties
     )
 
-    if ($Items -and $ItemsSource) {
+    # ContainsKey, not truthiness. An empty -ItemsSource collection is still your script saying "bind to this one".
+    if ($Items.Count -gt 0 -and $PSBoundParameters.ContainsKey('ItemsSource')) {
         throw "New-UiList cannot use both -Items and -ItemsSource. Choose one."
     }
 
@@ -133,31 +144,26 @@ function New-UiList {
     Set-ListBoxStyle -ListBox $listBox
 
     # Build the data source before filter setup - filtering needs a collection behind a CollectionView.
+    # Also before the toolbar: the filter box and + button close over $sourceCollection by value.
     $sourceCollection = $null
-    if ($null -ne $ItemsSource) {
+    $mirrorAttached   = $false
+    if ($PSBoundParameters.ContainsKey('ItemsSource')) {
         Write-Debug "Binding external ItemsSource collection"
-        $sourceCollection = $ItemsSource
-        
-        # AsyncObservableCollection - refresh its Dispatcher to the current thread.
-        if ($ItemsSource.GetType().Name -like 'AsyncObservableCollection*') {
-            try { $ItemsSource.UpdateDispatcher() }
-            catch { Write-Debug "Failed to update dispatcher: $_" }
+        $resolved         = Resolve-UiListSource -Source $ItemsSource -NoBind:$NoBind
+        $sourceCollection = $resolved.Collection
+        $mirrorAttached   = $resolved.MirrorAttached
+
+        if ($resolved.NeedsBind -and !$NoBind -and $resolved.Repointed.Count -eq 0) {
+            Write-Warning 'New-UiList -ItemsSource: could not repoint any caller variable to the autowrapped collection. Use a variable declared before New-UiWindow (or inside -Content) so $list.Add() and Add-UiListItem stay connected to the list.'
         }
 
-        # Register for Add-UiListItem access
-        if ($ItemsSource -is [System.Collections.IList]) {
-            $session.RegisterListCollection($Variable, $ItemsSource)
-        }
-        elseif ($ItemsSource | Get-Member -Name 'Add' -MemberType Method) {
-            $session.RegisterListCollection($Variable, $ItemsSource)
-        }
+        $session.RegisterListCollection($Variable, $sourceCollection)
     }
-    elseif ($Items) {
-        # Convert static items to ObservableCollection for filtering support
-        Write-Debug "Converting $($Items.Count) static items to collection"
-        $sourceCollection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-        foreach ($item in $Items) { [void]$sourceCollection.Add($item) }
-        
+    elseif ($Items.Count -gt 0) {
+        # Seeded straight into the threadsafe collection. A plain ObservableCollection here made background Add-UiListItem throw the cross thread CollectionView error. The view attaches below and pins the whole thing to this thread.
+        Write-Debug "Seeding $($Items.Count) static items into an AsyncObservableCollection"
+        $sourceCollection = [PsUi.AsyncObservableCollection[object]]::new($Items)
+
         # Register for Add-UiListItem access
         $session.RegisterListCollection($Variable, $sourceCollection)
     }
@@ -285,13 +291,13 @@ function New-UiList {
             $clearBtn.Add_Click({ $this.Tag.Text = ''; $this.Tag.Focus() }.GetNewClosure())
             [void]$filterContainer.Children.Add($clearBtn)
 
-            # Store refs in filterBox.Tag for TextChanged handler (including timer slot)
-            # SourceCollection stores unfiltered items for collection-based filtering
+            # Refs for the TextChanged handler, including the Timer key. The filter drives View, SourceCollection keeps the unfiltered items.
             $filterBox.Tag = @{
                 ClearButton      = $clearBtn
                 ListView         = $listBox
                 Timer            = $null
                 SourceCollection = $sourceCollection
+                View             = $collectionView
             }
 
             [void]$toolbar.Children.Add($filterContainer)
@@ -447,53 +453,30 @@ function New-UiList {
                 $tagData.Timer = $timer
 
                 $timer.Add_Tick({
-                    $filterText     = $textBox.Text.Trim()
-                    $sourceItems    = $tagData.SourceCollection
+                    $filterText = $textBox.Text.Trim()
+                    $view       = $tagData.View
 
-                    # Rebuild collection to filter (avoids delegate issues)
-                    if ($null -ne $sourceItems) {
-                        # Snapshot current selection to restore after the rebuild
-                        $savedSelection = [System.Collections.Generic.HashSet[object]]::new()
-                        foreach ($sel in $targetList.SelectedItems) { [void]$savedSelection.Add($sel) }
-
-                        $filteredItems = [System.Collections.Generic.List[object]]::new()
-                        
-                        foreach ($item in $sourceItems) {
-                            if ($null -eq $item) { continue }
-                            
-                            # Empty filter shows all
-                            if ([string]::IsNullOrEmpty($filterText)) {
-                                $filteredItems.Add($item)
-                                continue
-                            }
-                            
-                            # Get display text - try _DisplayText property first, then ToString
-                            $displayText = $null
-                            if ($item.PSObject) {
-                                $prop = $item.PSObject.Properties['_DisplayText']
-                                if ($prop) { $displayText = $prop.Value }
-                            }
-                            if (!$displayText) { $displayText = $item.ToString() }
-                            
-                            if ($displayText.IndexOf($filterText, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                                $filteredItems.Add($item)
-                            }
+                    # Filter the view, do NOT swap ItemsSource. Building a throwaway collection per keystroke used to leave the ListBox attached to that throwaway forever, so every later Add-UiListItem landed in the registered collection and never showed up.
+                    if ($null -ne $view) {
+                        $needle = $filterText
+                        if ([string]::IsNullOrEmpty($needle)) {
+                            $view.Filter = $null
                         }
-                        
-                        $newCollection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-                        foreach ($item in $filteredItems) { [void]$newCollection.Add($item) }
-                        
-                        $newView = [System.Windows.Data.CollectionViewSource]::GetDefaultView($newCollection)
-                        $targetList.ItemsSource = $newView
-
-                        # Restore selections that survived the filter
-                        if ($savedSelection.Count -gt 0) {
-                            foreach ($item in $filteredItems) {
-                                if ($savedSelection.Contains($item)) {
-                                    [void]$targetList.SelectedItems.Add($item)
+                        else {
+                            # [Predicate[object]] cast is required in 5.1: a bare scriptblock won't bind.
+                            $view.Filter = [Predicate[object]]{
+                                param($item)
+                                if ($null -eq $item) { return $false }
+                                $displayText = $null
+                                if ($item.PSObject) {
+                                    $prop = $item.PSObject.Properties['_DisplayText']
+                                    if ($prop) { $displayText = $prop.Value }
                                 }
-                            }
+                                if (!$displayText) { $displayText = $item.ToString() }
+                                return $displayText.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0
+                            }.GetNewClosure()
                         }
+                        $view.Refresh()
 
                         if ($targetList.Tag -and $targetList.Tag.CountLabel) {
                             $label    = $targetList.Tag.CountLabel
@@ -549,6 +532,10 @@ function New-UiList {
         if ($EnabledWhen) {
             Register-UiCondition -TargetControl $listBox -Condition $EnabledWhen
         }
+    }
+
+    if ($mirrorAttached) {
+        Register-UiCollectionCleanup -Control $listBox -Collection $sourceCollection
     }
 
     # Register the ListBox control (not container) for value access

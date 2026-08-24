@@ -33,7 +33,7 @@ function Invoke-UiAsync {
         Disables automatic variable capture from the calling scope. Use when you want
         full control over what's passed in.
     .PARAMETER NoActiveExecutor
-        Leaves the session's ActiveExecutor slot alone, so Stop-UiAsync and the status
+        Leaves the session's ActiveExecutor alone, so Stop-UiAsync and the status
         bar's AutoCancel keep targeting whatever was already running. For background
         maintenance work (count scans, prefetches) that shouldn't own Cancel.
     .EXAMPLE
@@ -264,7 +264,10 @@ function Invoke-UiAsync {
             try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }
             $state.OnHostHandler = $null
         }
-        if ($state.Executor) { $state.Executor.Dispose() }
+        if ($state.Executor) {
+            $state.Executor.Dispose()
+            if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $state.Executor)) { $execSession.ActiveExecutor = $null }
+        }
     }.GetNewClosure())
 
     # Cancel() fires OnCancelled, not OnComplete, so the disposer above never runs on a Stop-UiAsync / AutoCancel cancel. The executor (its CTS + handler delegates) would sit rooted in ActiveExecutor until GC. Same teardown New-UiButton's cancel path does.
@@ -273,7 +276,10 @@ function Invoke-UiAsync {
             try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }
             $state.OnHostHandler = $null
         }
-        if ($state.Executor) { $state.Executor.Dispose() }
+        if ($state.Executor) {
+            $state.Executor.Dispose()
+            if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $state.Executor)) { $execSession.ActiveExecutor = $null }
+        }
     }.GetNewClosure())
 
     if ($Capture) {

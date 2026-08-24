@@ -2,9 +2,9 @@
 
 All changes to PsUi will be documented in this file.
 
-## [1.1.1] - 2026-08-18
+## [1.1.1] - 2026-08-23
 
-Functions that standin for the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something.
+Functions that standin for the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something. Misc bug fixes and threadsafe list improvements. 
 
 ### Added
 
@@ -40,6 +40,13 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **New-UiGrid**: `-FormLayout` unwrapping fired on grids that never asked for it, and a row definition shorter than the child count pushed children into row 0.
 - **Dialogs opened before any window came up unstyled**: a bare `Show-UiMessageDialog`, or a `Show-UiCredentialDialog` you call before your first `New-UiWindow`, drew its text and password boxes with no border and no background. The control styles only ever loaded into a WPF Application, and no dialog created one. A dialog with no Application now themes itself off its own window, which also leaves `Application.Current` free for the next real window to claim on its own thread.
 - **`New-UiProgress -Severity` gave every bar the accent blue**: Success, Warning, and Error all came out the same color. The severity brush went into the bar's Tag, and the theme pass that reads Tags for everything else had the ProgressBar branch hardcoded to the accent. The tint follows the severity now.
+- **`Add-UiListItem` from a background action threw on every `-Items` list**: only a list that started empty got the threadsafe collection and everything else was a plain ol' ObservableCollection that WPF refuses to change from another thread. All three input paths land in the collection the grid uses now, and `-ItemsSource` now adjust so your variable is repointed at the wrap so `$list.Add()` keeps landing, a warning fires when nothing could be repointed, and `-NoBind` opts out. `-Items @('')` also seeds the empty string instead of silently dropping it. Goal here is effective abstraction of all the common PS arrays/lists to easily use as a threadsafe, observable collection.
+- **Typing in a list's filter box disconnected the list from its collection**: each keystroke swapped in a copy, so every later add went to the registered collection and never showed. The filter drives the view now and ItemsSource never changes hands.
+- **`Remove-UiListItem` with no `-Item` threw from async actions**: it read the selection off the raw ListBox, which belongs to another thread. It kindly asks the proxy now.
+- **An async Cancel button cancels itself**: `Stop-UiAsync` stops the newest running action, and from inside an async button that is the button. Documented, never enforced. `New-UiButton` warns at build time now; an explicit `-NoAsync:$false` is taken as deliberate and stays quiet.
+- **`Stop-UiAsync` after a finished run had nothing real to stop**: every run parked its AsyncExecutor in the session until the window closed, disposed or not. Every ending releases it now: complete, error, cancel, the output window path included.
+- **`New-UiWindow -WPFProperties` did less than every control's**: strings never converted (`Cursor = 'Hand'` threw into a swallowed debug log), attached properties were skipped without a word, and `Tag` would overwrite the window chrome. It runs through the same path as the controls now, and `Tag` is reserved and stripped with a warning.
+- **The hydration `-Debug` warning claimed your objects get serialized**: the same reference crosses; what it loses is the thread that opened it. The message is now more accurate.
 
 ## [1.1.0] - 2026-08-08
 

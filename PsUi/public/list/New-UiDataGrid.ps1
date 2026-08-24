@@ -200,10 +200,10 @@ function New-UiDataGrid {
         (Sync = $true in the hashtable form) for actions that have to stay on the UI thread
         (Show-UiMessageDialog or clipboard stuff).
 
-        Background action variable capture: PsUi grabs the values of variables your action
-        mentions by name and copies them into the background runspace. A local secret with a
-        name that collides with something in the action body ($cred is the common one) gets
-        copied too. Sync actions skip the variable copy.
+        Background action variable capture: PsUi grabs the values of the variables your action
+        mentions by name and injects them into the background runspace. A local secret with a
+        name that collides with something in the action body ($cred is the common one) rides
+        along too. Sync actions skip the injection entirely.
     .PARAMETER SanitizeFormulas
         Prefix exported / copied cells whose first character is =/+/-/@/tab/CR/LF with an
         apostrophe so Excel (assuming it's the default) treats them as literal text. Off by
@@ -453,27 +453,9 @@ function New-UiDataGrid {
         if ($PSBoundParameters.ContainsKey('ItemsSource')) {
             $uiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
 
-            # PS 5.1 $obj -is [Open`1] throws "Late bound operations cannot be performed on fields with types for which Type.ContainsGenericParameters is true."
-            # Check the inheritance and match the generic type definition by FullName instead.
-            $kindOf = {
-                param($Obj)
-                if ($null -eq $Obj)                                             { return 'Null' }
-                if ($Obj -is [System.Management.Automation.PSReference])        { return 'Ref' }
-                $t = $Obj.GetType()
-                while ($null -ne $t) {
-                    if ($t.IsGenericType) {
-                        $def = $t.GetGenericTypeDefinition().FullName
-                        if ($def -eq 'PsUi.AsyncObservableCollection`1')                  { return 'PsUiObservable' }
-                        if ($def -eq 'System.Collections.ObjectModel.ObservableCollection`1') { return 'WpfObservable' }
-                    }
-                    $t = $t.BaseType
-                }
-                return 'Other'
-            }
-
             # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's bare ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
             # Only PsUi.AsyncObservableCollection is safe to bind directly. Everything else gets wrapped + mirrored.
-            $itemsSourceKind = & $kindOf $ItemsSource
+            $itemsSourceKind = Get-UiCollectionKind -Obj $ItemsSource
             switch ($itemsSourceKind) {
                 'Null' {
                     $collection = [PsUi.GridOwnedCollection[object]]::new()
@@ -500,7 +482,7 @@ function New-UiDataGrid {
                 # [ref] promotion
                 'Ref' {
                     $orig     = $ItemsSource.Value
-                    $origKind = & $kindOf $orig
+                    $origKind = Get-UiCollectionKind -Obj $orig
                     if ($origKind -eq 'PsUiObservable') {
                         try { $orig.UpdateDispatcher() } catch { Write-Debug "UpdateDispatcher failed: $_" }
                         $collection = $orig
@@ -540,7 +522,7 @@ function New-UiDataGrid {
                     catch { Write-Debug "Variable bind scope $scopeIdx walk failed: $_"; continue }
 
                     foreach ($psVar in $scopeVars) {
-                        # $psVar.Value can throw for lazy loaded variables (disposed COM, missing registry, etc). Catch per variable so one misbehaving slot doesn't kill the rest of the scope.
+                        # $psVar.Value can throw for lazy loaded variables (disposed COM, missing registry, etc). Catch per variable so one misbehaving variable doesn't kill the rest of the scope.
                         $matched = $false
                         try { $matched = [object]::ReferenceEquals($psVar.Value, $ItemsSource) }
                         catch { Write-Debug "Variable bind read of '$($psVar.Name)' failed: $_"; continue }
@@ -749,7 +731,7 @@ function New-UiDataGrid {
                         # Unbound, there is no view processing to corrupt. Reattaching is a fresh bind, same as construction. Adds landing mid surgery are absorbed by it.
                         #
                         # No try/finally: PS's CheckActionPreference NREs on try block exit when the scriptblock runs off pipeline (this is a Dispatcher delegate), and the hijacked unwind SKIPS finally - the grid stayed detached, showing zero rows forever. trap handles the error path. The tail reattach handles success. Same pattern as Add-UiDataGridRowDetails.
-                        # $seedGrid is a plain local on purpose. $rebind below closes over it, and an inner GetNewClosure only captures THIS scope's locals - reaching for $localState (an outer closure capture) in there hands back $null and the reattach silently does nothing, leaving the grid empty forever.
+                        # $seedGrid is a plain local on purpose. $rebind below closes over it, and an inner GetNewClosure only captures THIS scope's locals - reaching for $localState (an outer closure capture) in there hands back $null, so the reattach never runs and the grid stays empty.
                         $seedGrid    = $localState.DataGrid
                         $savedSource = $seedGrid.ItemsSource
                         $savedView   = $savedSource -as [System.ComponentModel.ICollectionView]

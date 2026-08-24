@@ -103,21 +103,29 @@ function New-UiLink {
             $executor = [PsUi.AsyncExecutor]::new()
             $executor.UiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
             
-            # Route async output so Write-Host/Write-Warning/errors are visible
-            $executor.add_OnHost({ param($hostRecord) Write-Host $hostRecord.Message })
-            $executor.add_OnWarning({ param($warningMsg) Write-Warning $warningMsg })
-            $executor.add_OnError({ param($errorRecord) Write-Warning "Link action error: $($errorRecord.Message)" })
-            $executor.add_OnComplete({
-                Write-Debug "New-UiLink: Action completed"
-                $executor.Dispose()
-            }.GetNewClosure())
-            
-            # Store executor in session for Stop-UiAsync cancellation
+            # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
             $linkSession = [PsUi.SessionManager]::Current
             if ($linkSession) {
                 $linkSession.ActiveExecutor = $executor
                 Write-Debug "New-UiLink: Executor stored in session $($linkSession.SessionId)"
             }
+
+            # Route async output so Write-Host/Write-Warning/errors are visible
+            $executor.add_OnHost({ param($hostRecord) Write-Host $hostRecord.Message })
+            $executor.add_OnWarning({ param($warningMsg) Write-Warning $warningMsg })
+            $executor.add_OnError({ param($errorRecord) Write-Warning "Link action error: $($errorRecord.Message)" })
+
+            $executor.add_OnComplete({
+                Write-Debug "New-UiLink: Action completed"
+                $executor.Dispose()
+                if ($linkSession -and [object]::ReferenceEquals($linkSession.ActiveExecutor, $executor)) { $linkSession.ActiveExecutor = $null }
+            }.GetNewClosure())
+
+            $executor.add_OnCancelled({
+                Write-Debug "New-UiLink: Action cancelled"
+                $executor.Dispose()
+                if ($linkSession -and [object]::ReferenceEquals($linkSession.ActiveExecutor, $executor)) { $linkSession.ActiveExecutor = $null }
+            }.GetNewClosure())
             
             # Build variables dict with theme colors (same as New-UiButton)
             $currentThemeColors = Get-ThemeColors

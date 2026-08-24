@@ -15,11 +15,8 @@ namespace PsUi
     // Hydrate = inject control values as variables before script runs.
     // Dehydrate = sync changed variables back to controls after.
     //
-    // This is intentionally by-value, not by-reference. We're copying UI state (strings,
-    // booleans, selected items) into the runspace, not proxying arbitrary .NET objects.
-    // Complex SDK objects won't round-trip well - that's by design. If you need to mutate
-    // a heavy object across button clicks, store it in $session.Variables directly and
-    // manage it yourself.. The hydration layer is for form data, not object graphs.
+    // Injection passes the same object the control holds, in process. Values get read once before the script runs and written back once when it ends.
+    // State that has to outlive one click goes in $session.Variables and you manage it yourself.. The hydration layer is for form data, not object graphs.
     //
     // Two buttons clicking simultaneously can both dehydrate and
     // last-write-wins. This is inherent to async UI. Don't be a jackass and build forms where 
@@ -44,10 +41,8 @@ namespace PsUi
             }
         }
         
-        // Catches certain issues: user creates SQL connection in Button A, tries to use it
-        // in Button B, and wonders why it shit the bed. These types dont survive runspace boundaries
-        // because theyre serialized/deserialized, not passed by reference. We warn so users dont
-        // spend 3 hours debugging "connection is closed" errors.
+        // Catches certain issues: user creates SQL connection in Button A, tries to use it in Button B, and wonders why it shit the bed.
+        // Warn early so nobody spends 3 hours on "connection is closed".
         private static bool IsLiveObjectType(object value)
         {
             if (value == null) return false;
@@ -55,7 +50,7 @@ namespace PsUi
             Type t = value.GetType();
             string typeName = t.FullName ?? "";
             
-            // Database connections, streams, sockets, COM crap - all gonna die on the trip
+            // Database connections, streams, sockets, COM crap.
             if (typeName.Contains("System.Data.SqlClient") ||
                 typeName.Contains("System.Data.Common.DbConnection") ||
                 typeName.Contains("System.IO.Stream") ||
@@ -249,7 +244,6 @@ namespace PsUi
                     }
                 }
                 
-                // Inject SecureStrings directly via Runspace (bypasses serialization issues)
                 if (secureStrings.Count > 0 && ps.Runspace != null)
                 {
                     foreach (var kvp in secureStrings)
@@ -624,12 +618,11 @@ namespace PsUi
                 string validName = ValidateVariableName(varName);
                 if (validName == null) continue;
                 
-                // Warn if this looks like a live object that wont survive the trip
                 if (IsLiveObjectType(kvp.Value))
                 {
                     DebugLog("HYDRATION", "Heads up: '{0}' looks like a live object ({1}). " +
-                        "These get serialized across runspace boundaries and will probably be dead on arrival. " +
-                        "SQL connections, streams, COM objects - none of em make it.", 
+                        "It arrives intact, on a thread that never opened it, which is where these usually fall over. " +
+                        "SQL connections, streams, sockets, COM objects: open them inside the action instead.",
                         validName, kvp.Value.GetType().Name);
                 }
                 

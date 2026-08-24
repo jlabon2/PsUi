@@ -866,6 +866,9 @@ function Show-StreamingOutput {
     $Executor.add_OnComplete({
         & $writeDebug "OnComplete handler fired"
         $state.ExecutorDone = $true
+
+        # Run is over, drop the ActiveExecutor claim now. Dispose stays in the Closing handler, result actions and captures still read this AsyncExecutor.
+        if ($currentSession -and [object]::ReferenceEquals($currentSession.ActiveExecutor, $Executor)) { $currentSession.ActiveExecutor = $null }
         Invoke-OnCompleteHandler -Context $onCompleteContext
     }.GetNewClosure())
 
@@ -873,6 +876,7 @@ function Show-StreamingOutput {
     $Executor.add_OnCancelled({
         & $writeDebug "OnCancelled handler fired"
         $state.ExecutorDone = $true
+        if ($currentSession -and [object]::ReferenceEquals($currentSession.ActiveExecutor, $Executor)) { $currentSession.ActiveExecutor = $null }
 
         $statusSpinner.Visibility = 'Collapsed'
         $statusWarning.Visibility = 'Visible'
@@ -932,6 +936,9 @@ function Show-StreamingOutput {
         if ($Executor.PSObject.Methods.Match('Dispose').Count -gt 0) {
             try { $Executor.Dispose() } catch { Write-Debug "Suppressed dispose error: $_" }
         }
+
+        # Window closed mid-run still gives up the claim.
+        if ($capturedSession -and [object]::ReferenceEquals($capturedSession.ActiveExecutor, $Executor)) { $capturedSession.ActiveExecutor = $null }
     }.GetNewClosure())
 
     # HideUntilContent path: kick off execution now, only show the window if data shows up.
