@@ -27,7 +27,8 @@ function Get-UiValue {
         [string]$Variable
     )
     
-    $session = [PsUi.SessionManager]::Current
+    # SessionManager::Current is ThreadStatic, and on the dedicated runspace path the pipeline thread never gets it set. Get-UiSession checks the runspace's injected session id first.
+    $session = Get-UiSession
     if (!$session) { Write-Warning "Get-UiValue: No active UI session found."; return $null }
     
     $control = $session.GetControl($Variable)

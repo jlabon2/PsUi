@@ -1968,7 +1968,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         New-UiSeparator -FullWidth
 
         New-UiPanel -Header "WPFProperties Parameter" -ShowSourceButton -Content {
-            New-UiLabel -Text "Set any WPF property directly on controls. Every New-Ui* function accepts -WPFProperties hashtable:" -Style Body
+            New-UiLabel -Text "Set any WPF property directly on controls. Nearly every New-Ui* function takes a -WPFProperties hashtable:" -Style Body
 
             New-UiLabel -Text "Hover over me - custom cursor and tooltip!" -WPFProperties @{
                 Cursor  = "Hand"
@@ -2003,9 +2003,11 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 RenderTransform = ([System.Windows.Media.SkewTransform]@{ AngleX = -10 })
             }
 
-            New-UiInput -Label "Custom Border" -Variable "wpfBorderDemo" -Placeholder "Thick dashed border..." -WPFProperties @{
-                BorderThickness = ([System.Windows.Thickness]::new(3))
-                BorderBrush     = ([System.Windows.Media.Brushes]::DodgerBlue)
+            # New-UiInput hands the hashtable to the StackPanel holding the label and the box, not to the TextBox inside it.
+            New-UiInput -Label "Translated 30px right" -Variable "wpfTranslateDemo" -Placeholder "Label moved too..." -WPFProperties @{
+                Width               = 300
+                HorizontalAlignment = "Left"
+                RenderTransform     = ([System.Windows.Media.TranslateTransform]@{ X = 30 })
             }
         }
 

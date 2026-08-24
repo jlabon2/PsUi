@@ -304,7 +304,7 @@ namespace PsUi
         
         private void ExecuteWithPool(ScriptBlock script, Hashtable parameters, IDictionary variablesToDefine, IDictionary functionsToDefine, IEnumerable<string> modulesToLoad, bool debugEnabled)
         {
-            // Use session-configured threading (STA default, MTA opt-in)
+            // Use session-configured threading (MTA default, STA opt-in via -AsyncApartment)
             RunOnBackgroundThread(delegate
             {
                 // Background thread needs session ID or Get-UiSession returns null
@@ -698,7 +698,7 @@ namespace PsUi
         
         private void ExecuteWithDedicatedRunspace(ScriptBlock script, Hashtable parameters, IDictionary variablesToDefine, IDictionary functionsToDefine, IEnumerable<string> modulesToLoad, bool debugEnabled)
         {
-            // Use session-configured threading (STA default, MTA opt-in)
+            // Use session-configured threading (MTA default, STA opt-in via -AsyncApartment)
             RunOnBackgroundThread(delegate
             {
                 // Background thread needs session ID or Get-UiSession fails

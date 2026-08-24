@@ -107,6 +107,12 @@ function New-UiDataGridTextColumn {
             $choices = if ($Column -and $Column.Choices) { @($Column.Choices) }
                        elseif ($valueType -and $valueType.IsEnum) { [enum]::GetValues($valueType) }
                        else { @() }
+
+            # String Choices against an enum prop never match SelectedValue, so every non editing cell renders blank. Parse them into the enum, keeping the user's subset instead of falling back to GetValues.
+            if ($valueType -and $valueType.IsEnum -and $choices.Count -gt 0 -and $choices[0] -is [string]) {
+                try { $choices = @($choices | ForEach-Object { [enum]::Parse($valueType, $_, $true) }) }
+                catch { Write-Debug "Column '$Name': Choices don't parse as $($valueType.Name); leaving them as strings." }
+            }
             $col.ItemsSource = $choices
 
             # SelectedValueBinding (not SelectedItemBinding) so a string Choices array against a typed property doesn't write a string back. For enums the default SelectedValuePath is fine. ComboBox handles the value coercion.

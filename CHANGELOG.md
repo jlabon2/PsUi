@@ -2,7 +2,7 @@
 
 All changes to PsUi will be documented in this file.
 
-## [1.1.1] - 2026-08-23
+## [1.1.1] - 2026-08-24
 
 Functions that standin for the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something. Misc bug fixes and threadsafe list improvements. 
 
@@ -47,6 +47,9 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **`Stop-UiAsync` after a finished run had nothing real to stop**: every run parked its AsyncExecutor in the session until the window closed, disposed or not. Every ending releases it now: complete, error, cancel, the output window path included.
 - **`New-UiWindow -WPFProperties` did less than every control's**: strings never converted (`Cursor = 'Hand'` threw into a swallowed debug log), attached properties were skipped without a word, and `Tag` would overwrite the window chrome. It runs through the same path as the controls now, and `Tag` is reserved and stripped with a warning.
 - **The hydration `-Debug` warning claimed your objects get serialized**: the same reference crosses; what it loses is the thread that opened it. The message is now more accurate.
+- **`Set-UiValue` and `Get-UiValue` did nothing from most async actions**: both looked the session up in a thread local that only the pooled runspace sets. Anything that can prompt gets a runspace of its own instead, which is every button that isn't using `-NoOutput -NoInteractive`, so the ordinary case warned "No active UI session found" and carried on. Both resolve the session the way the rest of the module does now.
+- **A grid column's `Choices` came up blank against an enum property**: passed strings never matched the enum sitting behind SelectedValue, so every cell that wasn't midedit rendered empty. Strings parse into the property's own enum type now, and subsets survive instead of being replaced by the full set.
+- **`-NoInteractive` help promised an error that doesn't throw**: the text said interactive input fails. `Read-Host` hands back an empty string, `-AsSecureString` an empty one of those, `Get-Credential` nothing at all, and a choice prompt its default answer. The help describes that accurately now.
 
 ## [1.1.0] - 2026-08-08
 

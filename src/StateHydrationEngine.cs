@@ -16,7 +16,7 @@ namespace PsUi
     // Dehydrate = sync changed variables back to controls after.
     //
     // Injection passes the same object the control holds, in process. Values get read once before the script runs and written back once when it ends.
-    // State that has to outlive one click goes in $session.Variables and you manage it yourself.. The hydration layer is for form data, not object graphs.
+    // State that has to outlive one click goes in $session.CapturedVariables, set through SetCapturedVariable so -EnabledWhen controls update with it. The hydration layer is for form data, not object graphs.
     //
     // Two buttons clicking simultaneously can both dehydrate and
     // last-write-wins. This is inherent to async UI. Don't be a jackass and build forms where 

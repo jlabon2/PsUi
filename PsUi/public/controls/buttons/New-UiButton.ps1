@@ -46,9 +46,11 @@ function New-UiButton {
     .PARAMETER NoOutput
         Execute async but don't show output window.
     .PARAMETER NoInteractive
-        Use fast pooled execution. The action must not require interactive input
-        (Read-Host, Get-Credential, etc.). If interactive input is attempted,
-        an error is thrown. Use this for pure data-processing actions.
+        Use fast pooled execution. A prompt inside the action does not fail, it just
+        returns nothing useful: an empty string from Read-Host, an empty SecureString
+        from Read-Host -AsSecureString, no credential object from Get-Credential, and
+        the default answer from a choice prompt. Save it for actions that only move
+        data around.
     .PARAMETER HideEmptyOutput
         Show output window only when there's actual content.
     .PARAMETER ScrollToTop
@@ -550,7 +552,7 @@ function New-UiButton {
                     }
 
                     # Add input providers unless NoInteractive was specified
-                    # Without providers, executor uses fast pooled runspace but throws on Read-Host
+                    # Without providers the action still runs pooled, Read-Host just returns an empty string
                     if (!$ctx.NoInteractive) {
                         $inputParams = @{
                             Executor     = $executor
