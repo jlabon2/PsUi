@@ -68,16 +68,37 @@ namespace PsUi
                     "PsUi_WebView2_" + System.Diagnostics.Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             }
             
+            // Loaded fires again every time a tab shows the view, and handing a control a second environment throws, so a pass that got through stays latched.
+            bool initStarted = false;
+
+            // Kept across retries. Passing the same instance twice does nothing. Passing a fresh one to a control that already latched an environment throws.
+            CoreWebView2Environment env = null;
+
             webView.Loaded += async (s, e) =>
             {
+                if (initStarted)
+                {
+                    return;
+                }
+                initStarted = true;
+
                 // async void - must catch everything or unhandled exceptions crash the process
                 try
                 {
-                    var env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+                    if (env == null)
+                    {
+                        env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+                    }
                     await webView.EnsureCoreWebView2Async(env);
                 }
                 catch (Exception ex)
                 {
+                    // Retry only when the browser never came up. Once a CoreWebView2 exists a fault is something later, and WebView2 answers a second Ensure on a faulted init by building another one and abandoning the first, so every tab return would leave an orphaned browser behind.
+                    if (webView.CoreWebView2 == null)
+                    {
+                        initStarted = false;
+                    }
+
                     DebugHelper.LogException("WEBVIEW", "EnsureCoreWebView2Async", ex);
                     System.Console.Error.WriteLine("[PsUi] WebView2 init failed: " + ex.Message);
                 }

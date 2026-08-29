@@ -570,6 +570,15 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 Show-UiMessageDialog -Title "Test-PsUiIcon 'CopilotVoice'" -Message ($lines -join "`n")
             }
 
+            New-UiButton -Text "Search the catalog" -Icon "Search" -NoAsync -Action {
+                # Get-PsUiIconList takes a wildcard, Get-PsUiIcon hands back the raw glyph for one name.
+                # That glyph is a private use codepoint, so it only draws on a control already using the icon font. Printed into a dialog it comes out as an empty box, so the codepoint goes in instead and Show-UiGlyphBrowser covers the looking.
+                $iconNames = @(Get-PsUiIconList -Filter 'Cloud*')
+                $sample    = $iconNames | Select-Object -First 8 | ForEach-Object { "{0,-16} U+{1:X4}" -f $_, [int][char](Get-PsUiIcon $_) }
+                $summary   = "{0} names match, {1} in the catalog. Show-UiGlyphBrowser draws them." -f $iconNames.Count, (Get-PsUiIconList).Count
+                Show-UiMessageDialog -Title "Get-PsUiIconList -Filter 'Cloud*'" -Message (($sample -join "`n") + "`n`n" + $summary)
+            }
+
             New-UiLabel -Text "Controls already on screen keep the font they were drawn with, so reload the window for a full swap. Test-PsUiIcon catches a typo at write time instead of leaving you a blank square." -Style Note -FullWidth
         }
 
@@ -618,32 +627,23 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
 
             New-UiButtonCard -Header "Get Processes" -Icon "Gear" -Accent -ButtonText "Fetch" -Description "View running processes" -Action {
                 Get-Process | Where-Object { $_.Id -ne $PID }
-            } -ResultActions @(
-                @{
-                    Text   = 'Stop Process'
-                    Icon   = 'Stop'
-                    Confirm = 'Stop {0} selected process(es)?'
-                    Action = {
-                        param($SelectedItems)
-                        foreach ($proc in $SelectedItems) {
-                            Write-Host "Would stop: $($proc.Name) (PID: $($proc.Id))" -ForegroundColor Yellow
-                        }
+            } -ResultActions {
+                New-UiResultAction 'Stop Process' -Icon 'Stop' -Confirm 'Stop {0} selected process(es)?' -Action {
+                    param($SelectedItems)
+                    foreach ($proc in $SelectedItems) {
+                        Write-Host "Would stop: $($proc.Name) (PID: $($proc.Id))" -ForegroundColor Yellow
                     }
                 }
-                @{
-                    Text   = 'Get Info'
-                    Icon   = 'Info'
-                    Action = {
-                        param($SelectedItems)
-                        foreach ($proc in $SelectedItems) {
-                            Write-Host "Process: $($proc.Name)" -ForegroundColor Cyan
-                            Write-Host "  PID: $($proc.Id)"
-                            Write-Host "  CPU: $($proc.CPU)"
-                            Write-Host "  Memory: $([math]::Round($proc.WorkingSet64 / 1MB, 2)) MB"
-                        }
+                New-UiResultAction 'Get Info' -Icon 'Info' -Action {
+                    param($SelectedItems)
+                    foreach ($proc in $SelectedItems) {
+                        Write-Host "Process: $($proc.Name)" -ForegroundColor Cyan
+                        Write-Host "  PID: $($proc.Id)"
+                        Write-Host "  CPU: $($proc.CPU)"
+                        Write-Host "  Memory: $([math]::Round($proc.WorkingSet64 / 1MB, 2)) MB"
                     }
                 }
-            )
+            }
         }
 
         New-UiPanel -Header "Service Management" -ShowSourceButton -Content {
@@ -1657,6 +1657,38 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             }
         }
 
+        New-UiPanel -Header "Host Dialogs (Direct)" -ShowSourceButton -LayoutStyle Wrap -Content {
+            New-UiLabel -Text "The three dialogs interception puts up on your behalf. Call them directly and you get the same UI without a console prompt behind it." -Style Body -FullWidth
+
+            New-UiActionCard -Header "Multi-Field Prompt" -Icon "Edit" -ButtonText "Ask" -Action {
+                $fields      = [System.Collections.ObjectModel.Collection[System.Management.Automation.Host.FieldDescription]]::new()
+                $serverField = [System.Management.Automation.Host.FieldDescription]::new("Server")
+                $serverField.HelpMessage = "Machine to target"
+                $fields.Add($serverField)
+                $fields.Add([System.Management.Automation.Host.FieldDescription]::new("Share"))
+
+                $answers = Show-UiPromptDialog -Caption "Connect" -Message "Where should this run?" -Descriptions $fields
+                if ($answers.Count) { $answers.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) = $($_.Value)" -ForegroundColor Cyan } }
+                else { Write-Host "Cancelled." -ForegroundColor Gray }
+            }
+
+            New-UiActionCard -Header "Choice Prompt" -Icon "Help" -ButtonText "Ask" -Action {
+                # A choice carrying a HelpMessage grows a Help button in the dialog.
+                $choices = [System.Collections.ObjectModel.Collection[System.Management.Automation.Host.ChoiceDescription]]::new()
+                $choices.Add([System.Management.Automation.Host.ChoiceDescription]::new("&Restart", "Bounce the service now"))
+                $choices.Add([System.Management.Automation.Host.ChoiceDescription]::new("&Defer", "Leave it wedged until the maintenance window"))
+
+                $picked = Show-UiChoiceDialog -Caption "Spooler" -Message "Print spooler stopped responding. What now?" -Choices $choices -DefaultChoice 1
+                Write-Host "Picked index $picked ($($choices[$picked].Label -replace '&', ''))" -ForegroundColor Cyan
+            }
+
+            New-UiActionCard -Header "Credential Prompt" -Icon "Key" -ButtonText "Ask" -Action {
+                $cred = Show-UiCredentialDialog -Caption "Sign in" -Message "Credentials for the file server" -UserName "CONTOSO\svc-backup"
+                if ($cred) { Write-Host "Got a credential for $($cred.UserName), password length $($cred.GetNetworkCredential().Password.Length)" -ForegroundColor Green }
+                else { Write-Host "Cancelled." -ForegroundColor Gray }
+            }
+        }
+
         New-UiPanel -Header "Why This Matters" -FullWidth -Content {
             New-UiLabel -Text "Zero Code Changes Required" -Style SubHeader
             New-UiLabel -Text "Existing scripts that use Read-Host, Get-Credential, -Confirm, or other console operations work automatically. The interception happens at the PSHost level, so your script code doesn't need any modifications." -Style Body
@@ -2077,7 +2109,8 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             }
         }
 
-        New-UiPanel -Header "Custom Themes (Register-UiTheme)" -ShowSourceButton -Content {
+        # Odd panel out in the responsive two column flow, so it spans instead of leaving a hole beside it.
+        New-UiPanel -Header "Custom Themes (Register-UiTheme)" -ShowSourceButton -FullWidth -LayoutStyle Wrap -Content {
             New-UiLabel -Text "Register custom color themes that appear in the theme picker. Get-UiThemeTemplate shows required keys." -Style Body -FullWidth
 
             New-UiActionCard -Header "Register 'Ocean' Theme" -Icon "ColorBackground" -Accent -ButtonText "Register" -Action {
@@ -2112,6 +2145,63 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     HeaderForeground = '#7CB87C'
                 }
                 Show-UiDialog -Title "Theme Registered" -Message "'Forest' theme added! Click the palette icon in the titlebar to switch to it." -Type Info
+            }
+
+            New-UiActionCard -Header "Show the Template" -Icon "Copy" -ButtonText "Show" -Action {
+                # Without -AsHashtable it Write-Hosts a copyable block and returns nothing. The switch hands back the ordered dictionary instead.
+                $template = Get-UiThemeTemplate -Type 'Dark' -AsHashtable
+                $rows = $template.GetEnumerator() | ForEach-Object { "{0,-18} {1}" -f $_.Key, $_.Value }
+                Show-UiMessageDialog -Title "Get-UiThemeTemplate -Type Dark" -Message ($rows -join "`n") -PowerShell
+            }
+        }
+
+        New-UiSeparator -FullWidth
+
+        # No -ShowSourceButton here: that switch builds its own header button and would replace this one.
+        New-UiPanel -Header "Header Buttons and Custom Dialog Buttons" -LayoutStyle Wrap -HeaderAction (
+            New-UiHeaderAction -Icon 'Info' -Tooltip 'What is this panel?' -Action {
+                Show-UiDialog -Title "Header Actions" -Message "The icon you just clicked is a New-UiHeaderAction sitting in the panel header." -Type Info
+            }
+        ) -Content {
+            New-UiLabel -Text "The icon in this panel's header corner is New-UiHeaderAction. The card below answers with New-UiDialogButton instead of a fixed button set." -Style Body -FullWidth
+
+            New-UiActionCard -Header "Custom Buttons" -Icon "Help" -ButtonText "Ask" -Action {
+                $answer = Show-UiMessageDialog -Title "Unsaved Changes" -Message "The report has edits that were never written to disk." -Icon Question -CustomButtons {
+                    New-UiDialogButton 'Save and close' -Value 'save' -Default -Accent
+                    New-UiDialogButton 'Close anyway'   -Value 'discard'
+                    New-UiDialogButton 'Keep editing'   -Value 'cancel' -Cancel
+                }
+                Write-Host "Dialog returned: $answer" -ForegroundColor Cyan
+            }
+
+            # The manifest this demo imported at the top, so the card exercises the build you launched rather than whichever copy autoloads.
+            $demoModulePath = $ModulePath
+            if (!$demoModulePath -or !(Test-Path $demoModulePath)) {
+                # Get-Module answers with two, since the psm1 loads the backend DLL under that name. An installed copy sits in a version folder that Import-Module refuses on its own, so the manifest name goes back on the end.
+                $loadedPsUi     = Get-Module PsUi | Where-Object { $_.ModuleType -eq 'Script' } | Select-Object -First 1
+                $demoModulePath = Join-Path $loadedPsUi.ModuleBase 'PsUi.psd1'
+            }
+
+            New-UiActionCard -Header "Reset-UiSession" -Icon "Refresh" -ButtonText "Run" -Action {
+                # Run out of process on purpose. In here it would clear this window's own session and shut the runspace pool while the click is still using it.
+                Write-Host "Running Reset-UiSession in a throwaway process..." -ForegroundColor Gray
+                # Doubling is the only escape a single-quoted string takes, so a profile sitting under C:\Users\O'Brien would close the child's string early and nothing would run.
+                $quotedPath = $demoModulePath.Replace("'", "''")
+                $reset      = & powershell.exe -NoProfile -Command "Import-Module '$quotedPath' -Force; Reset-UiSession" 2>&1
+                $reset | ForEach-Object { Write-Host $_ }
+                Write-Host "It clears every session, the theme engine and the runspace pool, which is why it is a recovery tool and not something a working script calls." -ForegroundColor Gray
+            }
+        }
+
+        New-UiPanel -Header "Embedded Browser (New-UiWebView)" -ShowSourceButton -Content {
+            New-UiLabel -Text "New-UiWebView hosts Edge WebView2. -Uri loads an address, -Html renders a string with no network at all, and -OnNavigated fires on every page change, which is how the OAuth pattern catches its redirect. Without the runtime installed it warns and draws a placeholder where the browser would be." -Style Body -FullWidth
+
+            New-UiLabel -Text "Opened in a child window here so it has room. Inline in a panel works the same way." -Style Note -FullWidth
+
+            New-UiButton -Text "Open the browser" -Icon "Globe" -NoAsync -Action {
+                New-UiChildWindow -Title "PsUi on the PowerShell Gallery" -Width 900 -Height 640 -Content {
+                    New-UiWebView -Variable "demoWebView" -Height 520 -Uri 'https://www.powershellgallery.com/packages/PsUi'
+                }
             }
         }
 
@@ -2159,6 +2249,12 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
 
             New-UiAction -Text "Update (Dehydration)" -Icon "CloudUpload" -Action {
                 $advTestValue = "Modified at $(Get-Date -Format 'HH:mm:ss')"
+            }
+
+            # -NoAsync actions skip hydration entirely, so the value has to be read out of the control by name.
+            # Write-Status would land in the bar at the very bottom of the window, nowhere near the output panel Read (Hydration) prints to, so this one answers in a dialog.
+            New-UiAction -Text "Read (Get-UiValue)" -Icon "Search" -NoAsync -Action {
+                Show-UiMessageDialog -Title "Get-UiValue" -Message ("advTestValue = '{0}'" -f (Get-UiValue -Variable 'advTestValue'))
             }
         }
 
@@ -2262,17 +2358,16 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 [PSCustomObject]@{ Server = 'SRV-DB-001';  Environment = 'Prod';    Cores = 16; Monitored = $false }
             )
 
-            New-UiDataGrid -Variable "gridEdit" -Items $editRows -Height 160 -Editable -Columns @(
-                @{ Name = 'Server'; ReadOnly = $true; Width = '*' }
-                @{ Name = 'Environment'; EditorType = 'ComboBox'; Choices = @('Dev', 'Test', 'Staging', 'Prod') }
-                @{ Name = 'Cores'; Validator = {
-                        $parsed = 0
-                        if ([int]::TryParse($args[0], [ref]$parsed)) { return ($parsed -ge 1 -and $parsed -le 64) }
-                        return $false
-                    }
+            New-UiDataGrid -Variable "gridEdit" -Items $editRows -Height 160 -Editable -Columns {
+                New-UiColumn 'Server' -ReadOnly -Width '*'
+                New-UiColumn 'Environment' -EditorType ComboBox -Choices 'Dev', 'Test', 'Staging', 'Prod'
+                New-UiColumn 'Cores' -Validator {
+                    $parsed = 0
+                    if ([int]::TryParse($args[0], [ref]$parsed)) { return ($parsed -ge 1 -and $parsed -le 64) }
+                    return $false
                 }
-                @{ Name = 'Monitored' }
-            ) -OnCellEdit {
+                New-UiColumn 'Monitored'
+            } -OnCellEdit {
                 param($row, $column, $newValue, $oldValue)
                 Write-Status "$($row.Server): $column went from $oldValue to $newValue" -Severity Success
             }
@@ -2313,32 +2408,23 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 [PSCustomObject]@{ Name = 'db-02';  Status = 'Stopped' }
             )
 
-            New-UiDataGrid -Variable "gridFleet" -Items $fleetRows -Height 180 -RowContextMenu ([ordered]@{
-                'Restart' = @{
-                    Icon    = 'Refresh'
-                    Enabled = { $_.Status -ne 'Running' }
-                    Action  = {
-                        Write-Host "Restarting $($_.Name), was $($_.Status)..." -ForegroundColor Cyan
-                        Start-Sleep -Milliseconds 300
-                        $_.Status = 'Running'
-                        Write-Host "[OK] $($_.Name) is up" -ForegroundColor Green
-                    }
+            New-UiDataGrid -Variable "gridFleet" -Items $fleetRows -Height 180 -RowContextMenu {
+                New-UiMenuItem 'Restart' -Icon 'Refresh' -Enabled { $_.Status -ne 'Running' } -Action {
+                    Write-Host "Restarting $($_.Name), was $($_.Status)..." -ForegroundColor Cyan
+                    Start-Sleep -Milliseconds 300
+                    $_.Status = 'Running'
+                    Write-Host "[OK] $($_.Name) is up" -ForegroundColor Green
                 }
-                'Mark Failed' = @{
-                    Icon   = 'Cancel'
-                    Action = {
-                        $_.Status = 'Failed'
-                        Write-Host "Marked $($_.Name) failed" -ForegroundColor Yellow
-                    }
+                New-UiMenuItem 'Mark Failed' -Icon 'Cancel' -Action {
+                    $_.Status = 'Failed'
+                    Write-Host "Marked $($_.Name) failed" -ForegroundColor Yellow
                 }
-                'Details' = @{
-                    Icon   = 'Info'
-                    Sync   = $true
-                    Action = { Show-UiMessageDialog -Title $_.Name -Message ($_ | Format-List | Out-String) }
+                New-UiMenuItem 'Details' -Icon 'Info' -Sync -Action {
+                    Show-UiMessageDialog -Title $_.Name -Message ($_ | Format-List | Out-String)
                 }
-            })
+            }
 
-            New-UiLabel -Text "The Enabled scriptblock on Restart gets rerun for every row, so a mixed selection only touches the rows that aren't already Running. Details opens a dialog, which is what Sync is for." -Style Note -FullWidth
+            New-UiLabel -Text "The Enabled scriptblock on Restart gets rerun for every row, so a mixed selection only touches the rows that aren't already Running. Details opens a dialog, which is what Sync is for. The Cells That Do Things grid still passes -Columns as hashtables, which keeps working." -Style Note -FullWidth
         }
 
         New-UiPanel -Header "Live Feed (-ItemsSource)" -ShowSourceButton -Content {
