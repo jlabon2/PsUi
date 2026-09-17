@@ -14,11 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         shell: [pwsh, powershell]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Run Pester Tests
-        shell: ${{ matrix.shell }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           $result = Invoke-Pester .\Tests -Output Detailed -PassThru
