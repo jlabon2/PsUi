@@ -126,6 +126,7 @@ InModuleScope PsUi {
             # Each sample gets its own script text, the way a pasted block does.
             function Get-SampleSpan {
                 param([string]$Source)
+                $ErrorActionPreference = 'Continue'
                 @(& ([scriptblock]::Create($Source)))[0]
             }
         }
