@@ -5,7 +5,7 @@ function Invoke-UiAsync {
     .DESCRIPTION
         Runs the scriptblock off the UI thread so the window keeps responding while it works.
         Variables and functions from the calling scope come along automatically; pass extra
-        ones with -Variables, or shut auto-capture off with -NoAutoCapture.
+        ones with -Variables, or shut auto capture off with -NoAutoCapture.
     .PARAMETER ScriptBlock
         Code to run in background.
     .PARAMETER OnComplete
@@ -46,7 +46,7 @@ function Invoke-UiAsync {
     .EXAMPLE
         $path = "C:\Temp"
         Invoke-UiAsync -ScriptBlock {
-            Get-ChildItem $path   # $path is auto-captured
+            Get-ChildItem $path   # $path is captured for you
         }
     #>
     [CmdletBinding()]
@@ -83,22 +83,22 @@ function Invoke-UiAsync {
 
     $__executor = [PsUi.AsyncExecutor]::new()
 
-    # Every callback the run raises (OnComplete included) is queued on this thread. Application.Current pins to whichever window came up FIRST and keeps pointing at that thread for the rest of the process, so a second window queues its completion onto a thread that already exited - BeginInvoke swallows it and OnComplete never fires, while the action itself still runs. Session window first, same order Invoke-OnUIThread uses.
+    # Every callback the run raises (OnComplete included) is queued on this thread. Application.Current pins to whichever window came up FIRST and keeps pointing at that thread for the rest of the process, so a second window queues its completion onto a thread that already exited. BeginInvoke swallows it and OnComplete never fires, while the action itself still runs. Session window first, same order Invoke-OnUIThread uses.
     $execSession  = [PsUi.SessionManager]::Current
     $uiDispatcher = if ($execSession -and $execSession.Window) { $execSession.Window.Dispatcher }
                     elseif ([System.Windows.Application]::Current) { [System.Windows.Application]::Current.Dispatcher }
     if ($uiDispatcher) { $__executor.UiDispatcher = $uiDispatcher }
 
-    # Store executor in session for Stop-UiAsync cancellation
+    # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
     if ($execSession -and !$NoActiveExecutor) { $execSession.ActiveExecutor = $__executor }
 
     $__varsToInject = @{}
 
-    # Auto-capture variables from ScriptBlock using AST (same as New-UiButton)
+    # Captures the variables the ScriptBlock names, off its AST, the same way New-UiButton does.
     if (!$NoAutoCapture) {
         $ast         = $ScriptBlock.Ast
-        # PS automatic variables, plus state/session - the executor's reserved list refuses to inject those two names anyway, so capturing them is wasted work.
-        # executor/varsToInject/functionsToInject are gone from this list: having a name here silently dropped a user's same-named variable from capture. The __ prefix on the locals is hygiene, not the fix - the scope walk starts at -Scope 1 and never saw function locals.
+        # PS automatic variables, plus state and session. The AsyncExecutor refuses to inject those two names anyway, so capturing them is wasted work.
+        # executor/varsToInject/functionsToInject are gone from this list: having a name here silently dropped a user's same-named variable from capture. The __ prefix on the locals is hygiene rather than the fix, since the scope walk starts at -Scope 1 and never saw function locals.
         $builtinVars = @(
             '_', 'PSItem', 'this', 'args', 'input', 'PSCmdlet', 'PSBoundParameters',
             'MyInvocation', 'ExecutionContext', 'null', 'true', 'false', 'PSScriptRoot',
@@ -128,7 +128,7 @@ function Invoke-UiAsync {
                         $scopeIndex++
                     }
                     catch [System.ArgumentOutOfRangeException] {
-                        # We've gone past Global scope, variable doesn't exist
+                        # Past Global scope, so the variable does not exist
                         break
                     }
                     catch {
@@ -139,6 +139,9 @@ function Invoke-UiAsync {
             }
         }
     }
+
+    # Everything so far came from scope, and the session store beats that. -Variables below is by hand and goes in after.
+    $__varsToInject = Remove-UiStoreShadow -Variables $__varsToInject -AutoNames @($__varsToInject.Keys)
 
     if ($Variables) {
         Write-Debug "Adding $($Variables.Count) explicit variable(s)"
@@ -215,9 +218,9 @@ function Invoke-UiAsync {
 
     $__executor.add_OnError({
         param($errorRecord)
-        # $errorRecord is now PSErrorRecord - format nicely for collection
+        # $errorRecord is a PSErrorRecord by now, so format it before it goes in the list.
         if ($null -ne $errorRecord) {
-            # Use the ToDetailedString method if available, otherwise build our own
+            # Use the ToDetailedString method if there is one, otherwise build the text here
             $formatted = if ($errorRecord.PSObject.Methods.Match('ToDetailedString')) {
                 $errorRecord.ToDetailedString()
             }
@@ -238,7 +241,7 @@ function Invoke-UiAsync {
         }
     }.GetNewClosure())
 
-    # Completion callback - runs on UI thread via AsyncExecutor's MarshalToUi
+    # Completion callback. It runs on the UI thread, through the AsyncExecutor.
     # trap, NOT try/finally. A finally here means the teardown below never runs and every handler registered after this one goes with it, the status bar's own OnComplete sits right behind this. Same trap New-UiDataGrid uses. An inner try/catch with no finally is safe.
     $__executor.add_OnComplete({
         trap { Write-Warning "Invoke-UiAsync OnComplete error: $_"; continue }
@@ -259,7 +262,7 @@ function Invoke-UiAsync {
             else                                { & $state.OnComplete @($state.Results) }
         }
 
-        # Drop OnHost before Dispose. Redundant with Dispose's own handler nulling - it stays because the add/remove pairing reads clearer than leaning on a Dispose side effect.
+        # Drop OnHost before Dispose. Redundant with Dispose nulling its own handlers, and it stays because the add/remove pairing reads clearer than leaning on a Dispose side effect.
         if ($state.OnHostHandler -and $state.Executor) {
             try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }
             $state.OnHostHandler = $null
@@ -270,7 +273,7 @@ function Invoke-UiAsync {
         }
     }.GetNewClosure())
 
-    # Cancel() fires OnCancelled, not OnComplete, so the disposer above never runs on a Stop-UiAsync / AutoCancel cancel. The executor (its CTS + handler delegates) would sit rooted in ActiveExecutor until GC. Same teardown New-UiButton's cancel path does.
+    # Cancel() fires OnCancelled, not OnComplete, so the disposer above never runs on a Stop-UiAsync / AutoCancel cancel. The AsyncExecutor (its CTS + handler delegates) would sit rooted in ActiveExecutor until GC. Same teardown New-UiButton's cancel path does.
     $__executor.add_OnCancelled({
         if ($state.OnHostHandler -and $state.Executor) {
             try { $state.Executor.remove_OnHost($state.OnHostHandler) } catch { }

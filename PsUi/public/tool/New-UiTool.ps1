@@ -93,7 +93,7 @@ function New-UiTool {
         confirm. The legacy hashtable form still works:
         -ResultActions @( @{ Text = 'Stop'; Icon = 'Stop'; Action = { $_ | Stop-Process -Force } } )
     .EXAMPLE
-        # Local function - no need to register globally
+        # A local function, so nothing needs registering globally.
         function My-CustomTool { param([string]$Name) Write-Host "Hello $Name" }
         New-UiTool -Command 'My-CustomTool'
 
@@ -105,7 +105,7 @@ function New-UiTool {
     #>
     [CmdletBinding()]
     param(
-        # Command can be: cmdlet name, function name, script path, or CommandInfo object
+        # Takes a cmdlet name, a function name, a script path, or a CommandInfo object.
         [Parameter(Mandatory, Position = 0)]
         [object]$Command,
 
@@ -128,12 +128,12 @@ function New-UiTool {
 
         [switch]$ShowParamType,
 
-        # Untyped: takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array
+        # Untyped, so it takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array.
         [object]$ResultActions,
 
         [switch]$SingleSelect,
 
-        # Input helper parameters - add browse buttons next to TextBox inputs
+        # Input helper parameters put a browse button beside the text box.
         [string[]]$FilePickerParameters = @(),
 
         [string[]]$FolderPickerParameters = @(),
@@ -165,7 +165,7 @@ function New-UiTool {
         $ResultActions = [hashtable[]](ConvertTo-UiDefinitionArray -InputObject $ResultActions -ParameterName '-ResultActions' -CallerName 'New-UiTool')
     }
 
-    # Get caller's SessionState for local function lookup
+    # The calling script's SessionState, so a local function it defined can still be found.
     $callerSessionState = $null
     try {
         $callerScope = (Get-PSCallStack)[1]
@@ -200,19 +200,12 @@ function New-UiTool {
     $uiDef = Get-UiDefinition @defParams
     Write-Debug "Got definition: $($uiDef.Parameters.Count) parameters, sets: $($uiDef.ParameterSets -join ', ')"
 
-    # Store the definition in session context for stateless button access
-    # This lets button handlers read command info without closures
-    try {
-        $existingSession = [PsUi.SessionManager]::Current
-        if ($existingSession) {
-            $existingSession.CurrentDefinition = $uiDef
-        }
-    }
-    catch {
-        Write-Verbose "[New-UiTool] Could not store definition in SessionContext: $_"
-    }
-
     Write-Debug "Introspection complete: $($uiDef.Parameters.Count) parameter(s) detected"
+
+    # No current support for using on PsUi commands and probably won't ever be. Warn rather than refuse, since use for reading parameters is a fair thing to want.
+    if ($uiDef.CommandInfo -and $uiDef.CommandInfo.Source -eq 'PsUi') {
+        Write-Warning "$($uiDef.CommandInfo.Name) is a PsUi command. New-UiTool on PsUi's own commands is unsupported and gives unexpected results."
+    }
 
     $cmdInfo               = $uiDef.CommandInfo
     $commandInvocation     = $uiDef.CommandName
@@ -233,11 +226,9 @@ function New-UiTool {
 
     Write-Debug "Rendering UI for '$commandDisplayName'"
 
-    # Three display modes - embed inline while the host is still being built, spawn a child
-    # window from a click handler, or stand up a top-level window if no host exists.
-    # Window.IsLoaded gates the first two: false during build, true after Show().
-    # Get-UiSession not [SessionManager]::Current - the pool can switch threads and
-    # Current is ThreadStatic; Get-UiSession falls back to a per-runspace global.
+    # Three display modes. Embed inline while the host is still being built, spawn a child window from a click handler, or stand up a top level window when there is no host at all.
+    # Window.IsLoaded is what separates the first two, false during the build and true after Show.
+    # Get-UiSession rather than [SessionManager]::Current, because the pool can switch threads and Current is ThreadStatic. Get-UiSession falls back to a global held per runspace.
     $existingSession = try { Get-UiSession } catch { $null }
     $hasWindow       = $existingSession -and $existingSession.Window
     $hostIsLoaded    = $false
@@ -249,7 +240,8 @@ function New-UiTool {
     Write-Debug "Tool dispatch: embedded=$isEmbedded, childWindow=$isChildWindow, hostIsLoaded=$hostIsLoaded"
 
     # Copy variables to avoid GetNewClosure issues with ValidateSet attributes
-    $capturedTheme           = if ($Theme) { $Theme } else { 'Light' }
+    # Auto, the way New-UiWindow defaults, or a tool with no -Theme resets the process theme to Light on its way through Initialize-UITheme.
+    $capturedTheme           = if ($Theme) { $Theme } else { 'Auto' }
     $capturedTitle           = $Title
     $capturedWidth           = $Width
     $capturedHeight          = $Height
@@ -271,7 +263,7 @@ function New-UiTool {
         GroupPicker     = [System.Collections.Generic.List[string]]::new()
         MemberPicker    = [System.Collections.Generic.List[string]]::new()
         OUPicker        = [System.Collections.Generic.List[string]]::new()
-        FilterBuilder   = @{}  # Hashtable: ParamName -> FilterMode
+        FilterBuilder   = @{}
     }
     if ($FilePickerParameters) { $inputHelpers.FilePicker.AddRange($FilePickerParameters) }
     if ($FolderPickerParameters) { $inputHelpers.FolderPicker.AddRange($FolderPickerParameters) }
@@ -430,7 +422,7 @@ function New-UiTool {
                     return
                 }
 
-                # Use captured CommandInfo directly (don't re-fetch - extracted functions may be gone)
+                # The captured CommandInfo, used as is. Fetching it again can miss a function that has since been extracted away.
                 $cmdInfo = $capturedCmdInfoForOnChange
                 $commonParams = @('Verbose','Debug','ErrorAction','WarningAction','InformationAction','ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer','PipelineVariable','WhatIf','Confirm','UseTransaction')
                 $excludeList = @($capturedExcludesForOnChange) + $commonParams
@@ -494,7 +486,7 @@ function New-UiTool {
                 $tracker = $sess.GetControl('_uiTool_lastParamSet')
                 if ($tracker) { $tracker.Tag = $newSet }
 
-                # Use cached descriptions (already loaded at startup - no need to re-parse help)
+                # Descriptions were loaded at startup, so the help does not get parsed twice.
                 $descriptions = $capturedDescriptionsForOnChange
 
                 # Determine if we're in wrap mode by checking panel type
@@ -595,7 +587,6 @@ function New-UiTool {
         }
         $paramsGroupBox.Content = $paramsContent
 
-        # Register the inner panel so we can reference it later
         $session.AddControlSafe('_uiTool_paramsContent', $paramsContent)
 
         # Create a hidden tracker for the last selected parameter set (to avoid redundant refreshes)
@@ -620,8 +611,6 @@ function New-UiTool {
         # Store parameter info in session for validation/clear scripts (works for local functions)
         $session.Variables['_uiTool_paramInfo'] = $targetParams
 
-        # Store the definition in session now that session is initialized
-        # This enables stateless button access to command info
         $session.PSBase.CurrentDefinition = $uiDef
 
         New-UiSeparator
@@ -629,13 +618,13 @@ function New-UiTool {
         # Display name for button label
         $cmdDisplayName = $capturedCommandDisplayName
 
-        # Action buttons panel - buttons are stateless, reading from SessionContext.CurrentDefinition
+        # Action buttons panel. The buttons hold no state and read the command off SessionContext.CurrentDefinition.
         New-UiPanel -Orientation Horizontal {
 
-            # Stateless validation script - reads command info from session
+            # Stateless validation script, reading the command off the session.
             $validateScript = { Invoke-UiToolValidation }
 
-            # Stateless run script - reads command info from session
+            # Stateless run script, reading the command off the session.
             $runScript = { Invoke-UiToolAction }
 
             $runBtnParams = @{
@@ -657,12 +646,12 @@ function New-UiTool {
                 $session.Variables['_uiTool_runButton'] = $runBtn
             }
 
-            # Stateless clear script - reads parameter names from session
+            # Stateless clear script, reading the parameter names off the session.
             $clearScript = { Clear-UiToolParameters }
 
             New-UiButton -Text "Clear" -Icon "Delete" -NoAsync -Action $clearScript
 
-            # Stateless help script - reads command info from session
+            # Stateless help script, reading the command off the session.
             $helpScript = { Show-UiToolHelp }
 
             New-UiButton -Text "Help" -Icon "Help" -ScrollToTop -Action $helpScript
@@ -673,12 +662,12 @@ function New-UiTool {
     }.GetNewClosure()
 
     if ($isEmbedded) {
-        # Host build context - drop the controls straight in.
+        # Host build context, so the controls drop straight in.
         & $toolContent
     }
     elseif ($isChildWindow) {
-        # Click handler context - we're on the host UI thread (New-UiButton's AST
-        # flipped us). Default 600x500 is too cramped inside the child window's chrome.
+        # A click handler runs this, already on the host UI thread because New-UiButton's AST scan flipped it to sync.
+        # Default 600x500 is too cramped inside the child window's chrome.
         $childParams = @{
             Title  = $capturedTitle
             Width  = if ($capturedWidthExplicit)  { $capturedWidth }  else { 800 }
@@ -687,7 +676,7 @@ function New-UiTool {
         New-UiChildWindow @childParams -Content $toolContent
     }
     else {
-        # No host - top-level standalone window.
+        # No host at all, so a top level standalone window.
         $windowParams = @{
             Title           = $capturedTitle
             Width           = $capturedWidth

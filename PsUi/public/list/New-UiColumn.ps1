@@ -1,4 +1,4 @@
-function New-UiColumn {
+﻿function New-UiColumn {
     <#
     .SYNOPSIS
         Defines one column for New-UiDataGrid -Columns.
@@ -53,8 +53,9 @@ function New-UiColumn {
         Link target with {PropertyName} row substitution, e.g. 'https://{Host}/status'.
     .PARAMETER AllowFileScheme
         Let Link columns open file: URLs. Without it only http, https, mailto, and tel pass.
-    .PARAMETER Sync
-        Run -Action on the UI thread instead of a background runspace.
+    .PARAMETER NoAsync
+        Run -Action on the UI thread instead of a background runspace. Accepts -Sync, the
+        name this switch had before.
     .EXAMPLE
         New-UiDataGrid -Variable 'svc' -Items (Get-Service) -Editable -Columns {
             New-UiColumn Name -ReadOnly
@@ -116,7 +117,8 @@ function New-UiColumn {
 
         [switch]$AllowFileScheme,
 
-        [switch]$Sync
+        [Alias('Sync')]
+        [switch]$NoAsync
     )
 
     DynamicParam {
@@ -132,7 +134,7 @@ function New-UiColumn {
         if ($Type -eq 'Link' -and !$Url -and !$Action) { throw "New-UiColumn: a Link column needs -Url or -Action." }
 
         # One key per bound parameter, same names both sides. Switches flatten to plain bools; unbound keys stay absent becuase the grid reads .Contains() on some of them.
-        $switchNames = @('ReadOnly', 'AllowFileScheme', 'Sync')
+        $switchNames = @('ReadOnly', 'AllowFileScheme', 'NoAsync')
         $column      = @{}
         foreach ($boundName in $PSBoundParameters.Keys) {
             if ($boundName -in [System.Management.Automation.PSCmdlet]::CommonParameters) { continue }

@@ -1,4 +1,4 @@
-# Force-load the local module so we test the latest code
+﻿# Force-load the local module so we test the latest code
 $ModulePath = Join-Path $PSScriptRoot "PsUi\PsUi.psd1"
 if (Test-Path $ModulePath) {
     Write-Host "Importing module from: $ModulePath" -ForegroundColor Cyan
@@ -1057,7 +1057,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
     # TAB 3: Async
     New-UiTab -Header "Async" -Content {
         New-UiLabel -Text "Async Execution and Progress" -Style Title -FullWidth
-        New-UiLabel -Text "Background threads, progress bars, and thread-safe collections." -Style Note -FullWidth
+        New-UiLabel -Text "Background threads and progress bars, with lists any thread can add items onto." -Style Note -FullWidth
         New-UiSeparator -FullWidth
 
         New-UiPanel -Header "Progress Bars" -ShowSourceButton -Content {
@@ -2183,7 +2183,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             }
 
             New-UiActionCard -Header "Reset-UiSession" -Icon "Refresh" -ButtonText "Run" -Action {
-                # Run out of process on purpose. In here it would clear this window's own session and shut the runspace pool while the click is still using it.
+                # Run out of process because in here it would clear this window's own session and shut the runspace pool while the click is still using it.
                 Write-Host "Running Reset-UiSession in a throwaway process..." -ForegroundColor Gray
                 # Doubling is the only escape a single-quoted string takes, so a profile sitting under C:\Users\O'Brien would close the child's string early and nothing would run.
                 $quotedPath = $demoModulePath.Replace("'", "''")
@@ -2270,7 +2270,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     Add-UiListItem -Variable "manipList" -Item "Added at $timestamp"
                 }
                 New-UiAction -Text "Remove Selected" -Icon "Remove" -NoAsync -Action {
-                    # Bare call on purpose: the helper reads the selection itself. A -NoAsync action runs without hydration, so $manipList would be null here.
+                    # Called with no argument, since the helper reads the selection itself. A -NoAsync action runs without hydration, so $manipList would be null here.
                     Remove-UiListItem -Variable "manipList"
                 }
                 New-UiButton -Text "Get All" -Icon "List" -Action {
@@ -2419,7 +2419,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     $_.Status = 'Failed'
                     Write-Host "Marked $($_.Name) failed" -ForegroundColor Yellow
                 }
-                New-UiMenuItem 'Details' -Icon 'Info' -Sync -Action {
+                New-UiMenuItem 'Details' -Icon 'Info' -NoAsync -Action {
                     Show-UiMessageDialog -Title $_.Name -Message ($_ | Format-List | Out-String)
                 }
             }

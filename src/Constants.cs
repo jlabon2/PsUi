@@ -106,7 +106,7 @@ namespace PsUi
             return ReservedVariables.Contains(name);
         }
         
-        // Valid PS variable identifiers (blocks injection). Hyphens stay in - ScriptBuilder emits ${name} = ${Global:name} so hyphenated -Variable names hydrate (bare $my-var parses as subtraction). Rejecting them silently killed v2.x names.
+        // Valid PS variable identifiers (blocks injection). Hyphens stay in, since ScriptBuilder emits ${name} = ${Global:name} so hyphenated -Variable names hydrate (a plain $my-var parses as subtraction). Rejecting them silently killed v2.x names.
         private static readonly System.Text.RegularExpressions.Regex ValidIdentifierPattern =
             new System.Text.RegularExpressions.Regex(@"^[a-zA-Z_][a-zA-Z0-9_-]*$",
                 System.Text.RegularExpressions.RegexOptions.Compiled);

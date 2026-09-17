@@ -16,7 +16,8 @@ function Add-PieChartElements {
 
     $startAngle = -90
 
-    for ($i = 0; $i -lt $Data.Count; $i++) {
+    $count = @($Data).Count
+    for ($i = 0; $i -lt $count; $i++) {
         $item         = $Data[$i]
         $sweepAngle   = ($item.Value / $total) * 360
         $paletteEntry = $Palette[$i % $Palette.Count]
@@ -32,7 +33,7 @@ function Add-PieChartElements {
         $midAngle = $startAngle + ($sweepAngle / 2)
         $midRad   = $midAngle * [math]::PI / 180
 
-        # Hover effect: "explode" slice outward slightly
+        # A slice under the mouse eases outward slightly
         $slice.Add_MouseEnter({
             param($sender, $eventArgs)
             $sender.Opacity = 1.0

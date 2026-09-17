@@ -8,7 +8,7 @@ function Add-LineChartElements {
     $width  = $Canvas.Width
     $height = $Canvas.Height
     $margin = 50
-    $count  = $Data.Count
+    $count  = @($Data).Count
 
     $maxValue = ($Data | Measure-Object -Property Value -Maximum).Maximum
     if (!$maxValue) { $maxValue = 1 }
@@ -109,7 +109,7 @@ function Add-LineChartElements {
             # Tooltip with label and value
             $dot.ToolTip = "$($item.Label): $([math]::Round($item.Value, 2))"
 
-            # Hover effect: grow the point
+            # Mouse hover grows the point.
             $dot.Add_MouseEnter({
                 param($sender, $eventArgs)
                 $sender.Width  = 12
@@ -166,14 +166,14 @@ function Add-LineChartElements {
             $isLocalMin = $item.Value -le $prevValue -and $item.Value -le $nextValue
             $isRising   = $prevValue -lt $item.Value
 
-            # Horizontal offset: first point right, last point left, peaks centered
+            # The horizontal offset nudges the first point right and the last point left. A peak sits centered.
             $labelX = if ($i -eq 0) { $x + 6 }
                       elseif ($i -eq $count - 1) { $x - 20 }
                       elseif ($isLocalMax -or $isLocalMin) { $x - 8 }
                       elseif ($isRising) { $x - 14 }
                       else { $x + 2 }
 
-            # Vertical offset: local minima go well below the point to clear line segments
+            # The vertical offset drops a local minimum well below its point so the line segments stay clear of it.
             $placeBelow = $isLocalMin -or ($i -eq $count - 1 -and $item.Value -lt $prevValue)
             $labelY = if ($placeBelow) { $y + 12 } else { $y - 14 }
 

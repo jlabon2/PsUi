@@ -9,7 +9,7 @@ function Add-BarChartElements {
     $height     = $Canvas.Height
     $margin     = 50
     $barSpacing = 4
-    $count      = $Data.Count
+    $count      = @($Data).Count
 
     # Limit bar width for large datasets
     $maxBarWidth = 60
@@ -67,7 +67,7 @@ function Add-BarChartElements {
         # Tooltip with label and value
         $bar.ToolTip = "$($item.Label): $([math]::Round($item.Value, 2))"
 
-        # Hover effect: brighten and scale
+        # Mouse hover brightens the bar and scales it up.
         $bar.Add_MouseEnter({
             param($sender, $eventArgs)
             $sender.Opacity = 1.0

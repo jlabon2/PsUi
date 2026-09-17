@@ -1,4 +1,4 @@
-function Add-UiDataGridRowContextMenuItems {
+﻿function Add-UiDataGridRowContextMenuItems {
     <#
     .SYNOPSIS
         Prepends items to the DataGrid context menu.
@@ -74,14 +74,14 @@ function Add-UiDataGridRowContextMenuItems {
         $actionRef  = $null
         $enabledRef = $null
         $iconName   = $null
-        $syncRef    = $false
+        $noAsyncRef = $false
 
         if ($itemDef -is [scriptblock]) { $actionRef = $itemDef }
         elseif ($itemDef -is [System.Collections.IDictionary]) {
             $actionRef  = $itemDef['Action']
             $enabledRef = $itemDef['Enabled']
             $iconName   = [string]$itemDef['Icon']
-            if ($itemDef.Contains('Sync')) { $syncRef = [bool]$itemDef['Sync'] }
+            $noAsyncRef = Get-UiNoAsyncFlag -Definition $itemDef
         }
 
         if (!$actionRef) {
@@ -106,7 +106,7 @@ function Add-UiDataGridRowContextMenuItems {
 
         $capturedAction  = $actionRef
         $capturedEnabled = $enabledRef
-        $capturedSync    = $syncRef
+        $capturedNoAsync = $noAsyncRef
         $gridRef         = $DataGrid
 
         $capturedLabel = [string]$label
@@ -140,7 +140,7 @@ function Add-UiDataGridRowContextMenuItems {
             # ONE Invoke-UiAction call for the whole batch: a single background runspace loops the rows, so Stop-UiAsync / the status bar's AutoCancel cancel all of them (a runspace per row left Cancel holding only the last one) and the action's AST is scanned once, not N times.
             # -FanOut skips the Remove+Insert container regen workaround. One Items.Refresh at the end covers the whole batch.
             $itemArg = if ($eligible.Count -eq 1) { $eligible[0] } else { $eligible }
-            Invoke-UiAction -Action $capturedAction -Item $itemArg -RefreshTarget $gridRef -Sync:$capturedSync -FanOut:($eligible.Count -gt 1)
+            Invoke-UiAction -Action $capturedAction -Item $itemArg -RefreshTarget $gridRef -NoAsync:$capturedNoAsync -FanOut:($eligible.Count -gt 1)
         }.GetNewClosure())
 
         # Literal bool is a constant - set it once and skip probing on every open. Scriptblocks reevaluate through Tag each time the menu opens (a static IsEnabled would freeze on the first row).

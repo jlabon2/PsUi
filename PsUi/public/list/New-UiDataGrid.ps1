@@ -1,4 +1,4 @@
-function New-UiDataGrid {
+﻿function New-UiDataGrid {
     <#
     .SYNOPSIS
         Themed datagrid. Drops inside a New-UiWindow next to other controls.
@@ -55,7 +55,7 @@ function New-UiDataGrid {
             (Auto/Text/CheckBox/ComboBox/DatePicker), Choices, Validator, plus
             Type=Button/Toggle/Link for live controls in the cell (with Text, Icon, Action,
             Binding, OnChange, Url as needed). Button and Link actions run in a background
-            runspace by default; -Sync (or Sync = $true in the hashtable form) keeps one on
+            runspace by default; -NoAsync (or NoAsync = $true in the hashtable form) keeps one on
             the UI thread (dialogs or clipboard work). Link cells default to
             http/https/mailto/tel schemes only; -AllowFileScheme permits file: URLs (off by
             default because {Prop} substitution into a file: template lets row content
@@ -181,7 +181,7 @@ function New-UiDataGrid {
         entries. Pass a { New-UiMenuItem ... } definition block (menu order follows call
         order), or the legacy hashtable mapping a label to an action, where the action is:
           - a scriptblock: { Restart-Service $_.Name }
-          - a hashtable: @{ Action = {}; Enabled = {} or $bool; Icon = 'Name'; Sync = $false }
+          - a hashtable: @{ Action = {}; Enabled = {} or $bool; Icon = 'Name'; NoAsync = $false }
 
         Inside the action, $_ is the row being acted upon. The grid refreshes itself after
         the action runs, so $_.Status = 'Stopped' actually shows up. Write-Host goes
@@ -196,8 +196,8 @@ function New-UiDataGrid {
         rows are skipped silently).
 
         Actions run in a background runspace by default so the UI stays responsive during
-        slow work (Restart-Service, Invoke-WebRequest, etc.). Use -Sync on New-UiMenuItem
-        (Sync = $true in the hashtable form) for actions that have to stay on the UI thread
+        slow work (Restart-Service, Invoke-WebRequest, etc.). Use -NoAsync on New-UiMenuItem
+        (NoAsync = $true in the hashtable form) for actions that have to stay on the UI thread
         (Show-UiMessageDialog or clipboard stuff).
 
         Background action variable capture: PsUi grabs the values of the variables your action
@@ -243,7 +243,7 @@ function New-UiDataGrid {
         }
         New-UiDataGrid @gridParams
     .EXAMPLE
-        # Cell-embedded controls: Toggle (two-way), Button (per-row), Link (clickable URL)
+        # Controls that live in a cell are Toggle (two way), Button (per row) and Link (a clickable URL).
         $rows = @(
             [pscustomobject]@{ Name='node-a'; Online=$true;  Url='https://node-a.local' }
             [pscustomobject]@{ Name='node-b'; Online=$false; Url='https://node-b.local' }
@@ -255,8 +255,8 @@ function New-UiDataGrid {
             New-UiColumn -Header 'Open' -Type Link -Text 'Open' -Url '{Url}'
         }
     .EXAMPLE
-        # Live updates via -ItemsSource. Bare ArrayList works because PsUi binds $rows to
-        # the wrap - $rows after the call IS the thread-safe list, so $rows.Add() from
+        # Live updates via -ItemsSource. A plain ArrayList works because PsUi binds $rows to
+        # the wrap - $rows after the call IS the threadsafe list, so $rows.Add() from
         # a button action lands in the grid without ceremony.
         $rows = [System.Collections.ArrayList]::new()
         New-UiWindow -Title 'Live feed' -Content {
@@ -269,7 +269,7 @@ function New-UiDataGrid {
         # Right-click actions per row
         New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
             New-UiMenuItem 'Restart' -Icon Refresh -Action { Restart-Service $_.Name } -Enabled { $_.Status -eq 'Stopped' }
-            New-UiMenuItem 'Details' -Sync -Action { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }
+            New-UiMenuItem 'Details' -NoAsync -Action { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }
         }
     .EXAMPLE
         # Legacy hashtable forms (still supported), columns and menu items alike
@@ -278,19 +278,20 @@ function New-UiDataGrid {
             @{ Header='Restart'; Type='Button'; Text='Restart'; Action={ Restart-Service $_.Name } }
         ) -RowContextMenu ([ordered]@{
             'Restart' = @{ Action = { Restart-Service $_.Name }; Icon = 'Refresh'; Enabled = { $_.Status -eq 'Stopped' } }
-            'Details' = @{ Action = { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }; Sync = $true }
+            'Details' = @{ Action = { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }; NoAsync = $true }
         })
     .NOTES
-        Variable binding: -ItemsSource wraps your list in a thread-safe one and repoints
+        Variable binding: -ItemsSource wraps your list in a threadsafe one and repoints
         the scope variables that hold the original at the wrap. End result, $list IS the
         wrap afterwards. Five cases the rebind can't reach (see -ItemsSource). When none
         of your scope variables get rebound, a warning fires. Pass -NoBind to opt out and manage
         the binding yourself.
 
         Async by default actions: cell embedded Button actions and -RowContextMenu items run
-        in a background runspace so slow work doesn't freeze the grid. Use -Sync on
-        New-UiColumn / New-UiMenuItem (Sync = $true in the hashtable forms) for actions that
-        have to stay on the UI thread (dialogs and clipboard work).
+        in a background runspace so slow work doesn't freeze the grid. Use -NoAsync on
+        New-UiColumn / New-UiMenuItem (NoAsync = $true in the hashtable forms) for actions that
+        have to stay on the UI thread (dialogs and clipboard work). The switch answers to -Sync
+        and the hashtables to Sync = $true, which is what both were called before.
 
         First-row column seeding: if the grid starts empty and rows arrive later, columns are
         built from the first row with readable properties. Once columns exist, additional
@@ -389,7 +390,7 @@ function New-UiDataGrid {
 
         [double]$RowHeight,
 
-        # Untyped: takes a New-UiMenuItem definition block or array, or the legacy IDictionary keyed by label. No [hashtable] constraint on the legacy form: it silently converts [ordered]@{} to Hashtable and scrambles the declared menu order.
+        # Untyped, so it takes a New-UiMenuItem definition block or array, or the legacy IDictionary keyed by label. No [hashtable] constraint on the legacy form: it silently converts [ordered]@{} to Hashtable and scrambles the declared menu order.
         $RowContextMenu,
 
         [switch]$SanitizeFormulas
@@ -453,7 +454,7 @@ function New-UiDataGrid {
         if ($PSBoundParameters.ContainsKey('ItemsSource')) {
             $uiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
 
-            # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's bare ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
+            # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's unwrapped ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
             # Only PsUi.AsyncObservableCollection is safe to bind directly. Everything else gets wrapped + mirrored.
             $itemsSourceKind = Get-UiCollectionKind -Obj $ItemsSource
             switch ($itemsSourceKind) {
@@ -488,9 +489,11 @@ function New-UiDataGrid {
                         $collection = $orig
                     }
                     else {
-                        $wrapper           = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher)
-                        $ItemsSource.Value = $wrapper
-                        $collection        = $wrapper
+                        $wrapper    = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher)
+                        $collection = $wrapper
+
+                        # -NoBind promises the thing you passed keeps its value, and a [ref] is that thing.
+                        if (!$NoBind) { $ItemsSource.Value = $wrapper }
                     }
                     break
                 }
@@ -715,7 +718,7 @@ function New-UiDataGrid {
                     $seedState.Handler = $null
                 }
 
-                # Rebind to a local: nested .GetNewClosure() only captures the immediate scope's locals, not what the outer closure itself captured.
+                # Rebind to a local, since a nested .GetNewClosure() captures only the immediate scope's locals and never what the outer closure captured.
                 $localState = $seedState
                 [void]$seedState.DataGrid.Dispatcher.BeginInvoke(
                     [System.Windows.Threading.DispatcherPriority]::Background,
@@ -795,7 +798,7 @@ function New-UiDataGrid {
                             }
                         }
 
-                        # Known cosmetic: the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze and filter behave. Leaving it.
+                        # One known cosmetic wrinkle, where the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze and filter behave. Leaving it.
                         & $rebind
                     }.GetNewClosure())
             }.GetNewClosure()
@@ -817,7 +820,7 @@ function New-UiDataGrid {
                 if ($cleanup.Done) { return }
                 $window = [System.Windows.Window]::GetWindow($this)
                 if (!$window) { return }
-                # Rebind to a local: PS .GetNewClosure() only captures the immediate parent scope.
+                # Rebind to a local, since .GetNewClosure() captures only the immediate parent scope.
                 # Without this hop the inner Closed scriptblock sees an empty $cleanup.
                 $localCleanup = $cleanup
                 $window.Add_Closed({
@@ -898,7 +901,7 @@ function New-UiDataGrid {
 
         if (!$NoAlternatingRowBrush) { Add-UiDataGridAlternatingBrush -DataGrid $dataGrid }
 
-        # Default: forward the wheel to the parent so the outer window scrolls with the cursor over the grid.
+        # By default the wheel goes to the parent so the outer window scrolls with the cursor over the grid.
         # -CaptureScrollWheel keeps it inside the grid for its own scroll.
         if (!$CaptureScrollWheel) {
             $dataGrid.Add_PreviewMouseWheel({
@@ -963,7 +966,7 @@ function New-UiDataGrid {
 
         Set-FullWidthConstraint -Control $hostControl -Parent $parent -FullWidth:$FullWidth
 
-        # -WPFProperties hits whichever container is onscreen (toolbar host or bare grid).
+        # -WPFProperties hits whichever container is onscreen (toolbar host or the grid on its own).
         if ($WPFProperties) { Set-UiProperties -Control $hostControl -Properties $WPFProperties }
 
         [void]$parent.Children.Add($hostControl)

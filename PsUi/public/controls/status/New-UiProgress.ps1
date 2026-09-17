@@ -49,7 +49,7 @@ function New-UiProgress {
     #>
     [CmdletBinding()]
     param(
-        # Optional - a bare display bar needs no name. Omitted means "don't register for Set-UiProgress by name"; the body puts up a throwaway name for the registry.
+        # Optional. A display bar on its own needs no name, and leaving it out means the bar is never registered for Set-UiProgress by name. The body puts up a throwaway name for the registry.
         [string]$Variable,
 
         [string]$Label,
@@ -119,7 +119,7 @@ function New-UiProgress {
         Set-UiProperties -Control $progress -Properties $WPFProperties
     }
 
-    # Wrap in a stack only when there's a label or value text. Bare bars stay bare so existing layouts don't shift a pixel.
+    # Wrap in a stack only when there's a label or value text. Unwrapped bars stay unwrapped so existing layouts don't shift a pixel.
     $needsWrapper = $Label -or $ShowValue
     if ($needsWrapper) {
         $colors = Get-ThemeColors
@@ -189,7 +189,7 @@ function New-UiProgress {
     $progress.Tag.LabelBlock = $labelBlock
     $progress.Tag.ValueBlock = $valueBlock
 
-    # A bare display bar has no -Variable, but Register-UiControlComplete's -Name is Mandatory - an empty string there makes PowerShell prompt for it and the whole window hangs. Hand it a throwaway name (same trick New-UiStatusBar uses for anonymous bars).
+    # A display bar on its own has no -Variable, but Register-UiControlComplete's -Name is Mandatory, and an empty string there makes PowerShell prompt for it and the whole window hangs. Hand it a throwaway name (same trick New-UiStatusBar uses for anonymous bars).
     $varName = if ($Variable) { $Variable  }
     else {  '_anonProgress_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8)  }
 

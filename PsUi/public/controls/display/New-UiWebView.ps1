@@ -83,7 +83,7 @@ function New-UiWebView {
         [hashtable]$WPFProperties
     )
 
-    $session = Get-UiSession
+    $session = Assert-UiSession -CallerName 'New-UiWebView'
 
     # Check runtime availability
     if (![PsUi.WebViewHelper]::IsRuntimeAvailable) {
@@ -184,9 +184,16 @@ function New-UiWebView {
         if ($localOnNavigating) {
             $wv.CoreWebView2.add_NavigationStarting({
                 param($navSender, $navArgs)
+
+                # trap, not try/catch/finally. Off the pipeline a finally NREs
+                # $result is set first so the cancel test below still reads something after a trap resumes past the call.
+                trap { Write-Warning "New-UiWebView OnNavigating error: $_"; continue }
+                $result = @()
                 $navUrl = $navArgs.Uri
-                $result = & $localOnNavigating $navUrl
-                if ($result -eq $false) {
+                $result = @(& $localOnNavigating $navUrl)
+
+                $verdict = if ($result.Count) { $result[-1] } else { $null }
+                if ($verdict -is [bool] -and !$verdict) {
                     $navArgs.Cancel = $true
                 }
             }.GetNewClosure())
@@ -195,17 +202,16 @@ function New-UiWebView {
         if ($localOnNavigated) {
             $wv.CoreWebView2.add_NavigationCompleted({
                 param($navSender, $navArgs)
+
+                # Same trap as OnNavigating
+                trap { Write-Warning "New-UiWebView OnNavigated error: $_"; continue }
                 $navUrl = $navSender.Source
                 & $localOnNavigated $navUrl
             }.GetNewClosure())
         }
         
-        if ($capturedHtml) {
-            [PsUi.WebViewHelper]::NavigateToHtml($wv, $capturedHtml)
-        }
-        elseif ($capturedUri) {
-            $wv.Source = [uri]$capturedUri
-        }
+        if ($capturedHtml) { [PsUi.WebViewHelper]::NavigateToHtml($wv, $capturedHtml) }
+        elseif ($capturedUri) { $wv.Source = [uri]$capturedUri }
     }.GetNewClosure())
 
     # Only the keys that place the whole thing in its parent belong on the slot. Margin has to go there because the trim rewrites the view's own copy on every scroll, and Visibility because hiding the slot gives the space back instead of leaving a hole the height of the view.
@@ -354,8 +360,8 @@ function New-UiWebView {
         $session.AddControlSafe($Variable, $webView)
     }
 
-    # The slot goes in the tree, the view goes in the slot. -Variable still registers the view itself, so every helper keeps addressing the browser.
-    [void]$session.CurrentParent.Children.Add($viewSlot)
+    # The holder goes in the tree, the view goes in the holder. -Variable still registers the view itself, so every helper keeps addressing the browser.
+    Add-UiControlToParent -Control $viewSlot -Parent $session.CurrentParent
 
     return $webView
 }

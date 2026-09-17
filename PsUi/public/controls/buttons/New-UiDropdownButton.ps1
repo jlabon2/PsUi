@@ -1,4 +1,4 @@
-function New-UiDropdownButton {
+﻿function New-UiDropdownButton {
     <#
     .SYNOPSIS
         Creates a compact popup button with selectable items.
@@ -26,7 +26,8 @@ function New-UiDropdownButton {
     .PARAMETER ShowText
         Show the selected item text next to the icon.
     .PARAMETER NoAutoAdd
-        Don't automatically add the dropdown to the current layout panel.
+        Don't automatically add the dropdown to the current layout panel. Used internally
+        by New-UiTool.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to apply to the container.
     .EXAMPLE
@@ -73,7 +74,7 @@ function New-UiDropdownButton {
 
     # Grab session context and theme colors
     $colors  = Get-ThemeColors
-    $session = Get-UiSession
+    $session = Assert-UiSession -CallerName 'New-UiDropdownButton'
     $parent  = $session.CurrentParent
     Write-Debug "Creating dropdown button with $($Items.Count) items"
 
@@ -309,10 +310,8 @@ function New-UiDropdownButton {
         $session.AddControlSafe($Variable, $container)
     }
 
-    # Add to parent panel unless caller wants manual placement
-    if (!$NoAutoAdd) {
-        [void]$parent.Children.Add($container)
-    }
+    # Add to the parent unless the calling script wants to place it by hand.
+    if (!$NoAutoAdd) { Add-UiControlToParent -Control $container -Parent $parent }
 
     return @{
         Container = $container

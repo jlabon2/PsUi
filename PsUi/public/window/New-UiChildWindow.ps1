@@ -117,7 +117,7 @@ function New-UiChildWindow {
         throw "New-UiChildWindow: The -Content scriptblock is empty. Add UI controls inside the block."
     }
 
-    # Capture caller's session state for variable resolution
+    # Capture the calling script's session state for variable resolution
     $callerSessionState = $PSCmdlet.SessionState
 
     # Auto-detect parent window if not provided
@@ -144,7 +144,7 @@ function New-UiChildWindow {
         }
     }
 
-    # Save parent session ID so we can restore it after child window closes
+    # Save the parent session ID so it can be restored after the child window closes
     $parentSessionId = [PsUi.SessionManager]::CurrentSessionId
 
     $session = Initialize-UiSession
@@ -202,7 +202,7 @@ function New-UiChildWindow {
         try { $window.Owner = $Parent }
         catch {
             Write-Verbose "[New-UiChildWindow] Could not set Owner: $_"
-            # Adjust startup location if we couldn't set owner
+            # Adjust the startup location when the owner could not be set
             if ($startupLocation -eq 'CenterOwner') {
                 $window.WindowStartupLocation = 'CenterScreen'
             }
@@ -226,7 +226,7 @@ function New-UiChildWindow {
     $shadowBorder.Effect = $shadow
     $window.Content = $shadowBorder
 
-    # Use a Grid as container so we can overlay a resize grip
+    # A Grid as the container, so a resize grip can sit on top
     $containerGrid = [System.Windows.Controls.Grid]::new()
     $shadowBorder.Child = $containerGrid
 
@@ -376,7 +376,7 @@ function New-UiChildWindow {
     Register-UiControl -Name "${controlName}_ContentStack" -Control $contentStack
 
 # Build the content using dot-sourcing to run in current scope
-# Capture variables from caller's scope that are referenced in Content
+# Capture variables from the calling scope that are referenced in Content
 try {
     $capturedVars = @{}
     $ast = $Content.Ast
@@ -407,7 +407,7 @@ try {
             $varExpr.VariablePath.IsLocal -or
             $varExpr.VariablePath.IsPrivate) { continue }
 
-        # Try to get the variable from caller's scope
+        # Try to get the variable from the calling scope
         try {
             $var = $callerSessionState.PSVariable.Get($varName)
             if ($null -ne $var) {  $capturedVars[$varName] = $var.Value  }
@@ -429,7 +429,7 @@ try {
 catch {
 
     Write-Error $_
-    # The window never got shown, so the Add_Closed restore below was never wired. Undo the child session and hand the parent back by hand - Clear-UiSession would leave the caller on a fresh empty session and every later Get-UiSession on this thread would miss the parent.
+    # The window never got shown, so the Add_Closed restore below was never attached. Undo the child session and hand the parent back by hand - Clear-UiSession would leave the calling script on a fresh empty session and every later Get-UiSession on this thread would miss the parent.
     if ($childSessionId -ne [Guid]::Empty) {
         [PsUi.SessionManager]::DisposeSession($childSessionId)
     }
@@ -457,7 +457,7 @@ $window.Add_Loaded({
     # Apply title bar theming using Set-UIResources (same as main window)
     if ($setUiResourcesCmd) { & $setUiResourcesCmd -Window $this -Colors $colors -IconPath $null }
 
-    # Force taskbar to use our themed icon (requires window handle)
+    # Force the taskbar onto the themed icon (needs the window handle)
     if ($childWindowIcon) { [PsUi.WindowManager]::SetTaskbarIcon($this, $childWindowIcon) }
 
     # Fade-in animation with easing
@@ -471,7 +471,9 @@ $window.Add_Loaded({
 }.GetNewClosure())
 
     if ($OnClosed) {
+        # trap, not try/catch/finally. Off the pipeline a finally NREs, and this handler runs after the window is already gone, so a throw here is silent and kills the rest of the teardown.
         $window.Add_Closed({
+            trap { Write-Warning "New-UiChildWindow OnClosed error: $_"; continue }
             & $OnClosed
         }.GetNewClosure())
     }

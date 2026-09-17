@@ -1,8 +1,7 @@
 function Set-UiProperties {
     <#
     .SYNOPSIS
-        Applies custom WPF properties to a control from a hashtable.
-        Uses ConvertTo-WpfValue to translate common types into WPF types.
+        Applies a hashtable of WPF properties to a control, converting the common types in the process.
     #>
     [CmdletBinding()]
     param(
@@ -13,6 +12,14 @@ function Set-UiProperties {
         [hashtable]$Properties
     )
     
+    # Most controls keep their own status in Tag (a click action context or a theme brush key) so setting it elesewhere silently hamstrings the control.
+    # Only a Tag already holding something is defended, so a Tag set on a control that has none already set will land. New-UiButton, New-UiProgress and New-UiStatusBar remove the key before they get here and never reach this.
+    if ($Properties.ContainsKey('Tag') -and $null -ne $Control.Tag) {
+        Write-Warning "[Set-UiProperties] Tag is reserved on $($Control.GetType().Name) and already holds the control's own state. Ignoring."
+        $Properties = @{} + $Properties
+        [void]$Properties.Remove('Tag')
+    }
+
     foreach ($propName in $Properties.Keys) {
         try {
             $propValue = $Properties[$propName]

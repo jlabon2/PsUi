@@ -194,10 +194,10 @@ namespace PsUi
                 }
                 
                 Hashtable colors = null;
+                string resolvedTheme = p.Theme;
                 if (customColors == null)
                 {
                     // Resolve Auto to the system's actual light/dark preference
-                    string resolvedTheme = p.Theme;
                     if (string.Equals(p.Theme, "Auto", StringComparison.OrdinalIgnoreCase))
                     {
                         resolvedTheme = DetectSystemTheme();
@@ -243,7 +243,8 @@ namespace PsUi
                 // Add theme button to titlebar if not hidden
                 if (!p.HideThemeButton)
                 {
-                    string currentThemeName = customThemeName ?? p.Theme;
+                    // New-ThemePopupButton declares -CurrentTheme and never reads it. The popup clears and rebuilds its rows off ModuleContext.ActiveTheme inside the click handler, so this value decides nothing until that changes.
+                    string currentThemeName = customThemeName ?? resolvedTheme;
                     AddThemeButton(window, chromeInfo, currentThemeName, windowRunspace);
                 }
 
@@ -332,7 +333,7 @@ namespace PsUi
                     }
                 }
 
-                // PassThru mode: show window and run the message loop (non-modal)
+                // PassThru mode shows the window and runs the message loop, non modal.
                 if (p.PassThru)
                 {
                     // Shutdown Dispatcher when window closes so Dispatcher.Run() returns
@@ -527,7 +528,7 @@ namespace PsUi
             return window;
         }
         
-        // Custom chrome: drop shadow + themed titlebar + resize handles
+        // Custom chrome brings its own drop shadow and titlebar, and puts back the resize handles WindowStyle None takes away.
         private void BuildWindowChrome(Window window, WindowParameters p, Hashtable colors, int shadowPadding)
         {
             // Get initial colors from hashtable for immediate rendering
@@ -598,7 +599,7 @@ namespace PsUi
             };
         }
         
-        // Titlebar layout: Icon | Title | ThemeButton | Min/Max/Close
+        // Titlebar runs Icon, then Title, then ThemeButton, then Min, Max and Close.
         private Border BuildTitleBar(Window window, WindowParameters p, Hashtable colors, 
                                       Border shadowBorder, int shadowPadding,
                                       System.Windows.Media.Effects.DropShadowEffect cachedShadow,
@@ -614,7 +615,7 @@ namespace PsUi
             };
             titleBar.SetResourceReference(Border.BackgroundProperty, "HeaderBackgroundBrush");
             
-            // Grid layout: Icon | Title | ThemeButton | WindowControls
+            // Grid runs Icon, then Title, then ThemeButton, then WindowControls.
             var titleBarGrid = new Grid();
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });  // Icon
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });  // Title
@@ -814,7 +815,6 @@ namespace PsUi
             
             // Don't use SetResourceReference for Foreground - creates local value that overrides template trigger setters after theme changes.
             // Foreground is set inside the template via DynamicResource binding instead.
-            
             string templateXaml = isCloseButton ? CloseButtonTemplate : WindowControlButtonTemplate;
             btn.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(templateXaml);
             
@@ -1316,7 +1316,7 @@ namespace PsUi
                             Console.WriteLine("[PsUi] Warning: Custom theme '" + themeName + "' overrides a built-in theme");
                         }
                         
-                        // Register custom theme using thread-safe method
+                        // Register the custom theme through the threadsafe path
                         ModuleContext.RegisterTheme(themeName, hashtable);
                         DebugLog("THEME", "Registered custom theme '" + themeName + "' with " + hashtable.Count + " properties");
                         
@@ -1359,7 +1359,7 @@ namespace PsUi
             
             string hex = value.Substring(1);
             
-            // Valid lengths: 3 (#RGB), 6 (#RRGGBB), or 8 (#AARRGGBB)
+            // Valid lengths are 3 for RGB, 6 for RRGGBB, or 8 for AARRGGBB.
             if (hex.Length != 3 && hex.Length != 6 && hex.Length != 8) return false;
             
             // Check all characters are valid hex digits
@@ -1558,6 +1558,7 @@ namespace PsUi
             // Extract original file and line info from the scriptblock's AST for accurate error reporting
             // Fall back to the calling script info if AST doesn't have file info (inline scriptblocks)
             string originalFile = "script";
+            string originalPath = null;
             int originalStartLine = 1;
             try
             {
@@ -1580,6 +1581,7 @@ namespace PsUi
                                 if (!string.IsNullOrEmpty(fileVal))
                                 {
                                     originalFile = System.IO.Path.GetFileName(fileVal);
+                                    originalPath = fileVal;
                                 }
                             }
                             if (lineProp != null)
@@ -1597,6 +1599,15 @@ namespace PsUi
             {
                 originalFile = System.IO.Path.GetFileName(callerScriptName);
                 originalStartLine = callerScriptLine;
+                originalPath = callerScriptName;
+            }
+
+            // A nested container runs its own block through Invoke-UiContent, and those blocks come out of the AddScript text below with no file on them, so the session is where they read the file and line from.
+            // It has to name the content block's own opening line. The New-UiWindow call shares that line only until someone continues it over two, and then every nested error points a line further down the file than it happened.
+            if (session != null)
+            {
+                if (!string.IsNullOrEmpty(originalPath)) { session.CallerScriptName = originalPath; }
+                session.CallerScriptLine = originalStartLine;
             }
 
             using (var ps = PowerShell.Create())
@@ -1606,16 +1617,15 @@ namespace PsUi
                 var scriptBuilder = new System.Text.StringBuilder();
                 if (debugMode)
                 {
-                    scriptBuilder.AppendLine("$DebugPreference = 'Continue'");
-                    scriptBuilder.AppendLine("Write-Debug '[PsUi] Debug Mode Enabled (Prepend)'");
+                    scriptBuilder.Append("$DebugPreference = 'Continue'; Write-Debug '[PsUi] Debug Mode Enabled (Prepend)'; ");
                 }
                 if (verboseMode)
                 {
-                    scriptBuilder.AppendLine("$VerbosePreference = 'Continue'");
+                    scriptBuilder.Append("$VerbosePreference = 'Continue'; ");
                 }
                 
-                // Wrap content in try/catch that preserves error details
-                scriptBuilder.AppendLine("try {");
+                // Nothing ahead of the content gets a line of its own, the try included, so generated line 1 is the line the content block opens on.
+                scriptBuilder.Append("try {");
                 scriptBuilder.Append(content.ToString());
                 scriptBuilder.AppendLine();
                 scriptBuilder.AppendLine("} catch {");
@@ -1806,7 +1816,7 @@ namespace PsUi
             };
             splash.Content = shadowBorder;
             
-            // Main layout: title at top, logo in center, progress at bottom
+            // Main layout puts the title at the top, the logo in the center and progress at the bottom.
             var mainPanel = new Grid();
             mainPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             mainPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -1892,7 +1902,7 @@ namespace PsUi
                 }
             }
             
-            // Default: generate the >_ icon at larger size
+            // By default it generates the >_ icon at a larger size.
             return CreateDefaultSplashIcon(accentBrush);
         }
         

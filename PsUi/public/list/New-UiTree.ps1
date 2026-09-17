@@ -82,7 +82,7 @@ function New-UiTree {
             Select -Unique FullName |
             New-UiTree -Variable 'types' -PathProperty 'FullName' -PathSeparator '.'
     .EXAMPLE
-        # Services by status; auto-start protected, stopped pre-selected.
+        # Services by status. Auto start protected, stopped preselected.
         Get-Service | Group-Object Status | ForEach-Object {
             [PSCustomObject]@{ Name = $_.Name; Children = $_.Group }
         } | New-UiTree -Variable 'svc' -ParentCheckBoxes -ChildCheckBoxes `
@@ -188,7 +188,7 @@ function New-UiTree {
             # Build from parent-child ID relationships (process trees, org charts)
             $nodeMap = @{}
             
-            # First pass: create nodes for each item
+            # First pass makes a node for each item
             foreach ($item in $allItems) {
                 $id = & $getDotted $item $IdProperty
                 if ($null -eq $id) { continue }
@@ -205,7 +205,7 @@ function New-UiTree {
                 $nodeMap[$id] = @{ Node = $node; Item = $item }
             }
             
-            # Second pass: connect parent child relatonships
+            # Second pass connects parent to child
             foreach ($id in $nodeMap.Keys) {
                 $entry    = $nodeMap[$id]
                 $item     = $entry.Item
@@ -243,7 +243,7 @@ function New-UiTree {
                     # Reuse existing node or create new one
                     if ($nodeMap.ContainsKey($currentPath)) {
                         $parentNode = $nodeMap[$currentPath]
-                        # Upsert: an item piped in later may match an existing intermediate's path.
+                        # An item piped in later may match the path of an intermediate already made, so this is an upsert.
                         # Promote the synthesized Tag to the real source object.
                         if ($isOwnPath) { $parentNode.Tag = $item }
                     }
@@ -547,7 +547,7 @@ function New-UiTree {
                     }
                 }
 
-                # Attach the cascade handler to every CheckBox we placed. Synchronous, $getHeaderCheckBox in scope.
+                # Attach the cascade handler to every CheckBox placed above. Synchronous, $getHeaderCheckBox in scope.
                 $wireBoxes = {
                     param($items)
                     foreach ($tvi in $items) {
@@ -584,7 +584,7 @@ function New-UiTree {
                             $parentCb = & $getHeaderCheckBox $parentTvi
                             if (!$parentCb) { break }
 
-                            # Counter names avoid the bare word 'checked' - the function has a [scriptblock]$Checked param and PS is case insensitive.
+                            # Counter names avoid the plain word 'checked', since the function has a [scriptblock]$Checked param and PS is case insensitive.
                             # `$checked = 0` inherits the [scriptblock] constraint and throws at compile time.
                             $allCheckedOrNone = $true
                             $anyEnabled       = $false
@@ -634,10 +634,7 @@ function New-UiTree {
             if ($WPFProperties.Count -gt 0) { Set-UiProperties -Control $tree -Properties $WPFProperties }
         }
 
-        # Attach to parent container
-        if ($parent -is [System.Windows.Controls.Panel]) { [void]$parent.Children.Add($tree)  }
-        elseif ($parent -is [System.Windows.Controls.ItemsControl]) {  [void]$parent.Items.Add($tree)  }
-        elseif ($parent -is [System.Windows.Controls.ContentControl]) {   $parent.Content = $tree  }
+        Add-UiControlToParent -Control $tree -Parent $parent
 
         if ($Fill) { Set-UiFillParentHeight -Control $tree }
     }

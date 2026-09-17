@@ -9,11 +9,19 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
     steps:
       - uses: actions/checkout@v4
 
       - name: Run Pester Tests
-        shell: pwsh
+        shell: ${{ matrix.shell }}
         run: |
-          $result = Invoke-Pester .\Tests\PsUi.Tests.ps1 -Output Detailed -PassThru
-          if ($result.FailedCount -gt 0) { exit 1 }
+          Import-Module Pester -MinimumVersion 5.0 -Force
+          $result = Invoke-Pester .\Tests -Output Detailed -PassThru
+
+          # A file whose _Setup.ps1 errors out reports zero tests, which Result catches. PassedCount rather than TotalCount, because TotalCount counts skipped tests and a -Skip on a Describe would set it green with nothing actually verified.
+          if ($result.Result -ne 'Passed' -or $result.PassedCount -lt 440) { exit 1 }

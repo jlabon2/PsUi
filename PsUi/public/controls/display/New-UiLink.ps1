@@ -68,6 +68,7 @@ function New-UiLink {
     $capturedVars    = $null
     $capturedFuncs   = $null
     $resolvedModules = $null
+    $scopeNames      = $null
     
     if ($Action) {
         $ctxParams = @{
@@ -80,14 +81,17 @@ function New-UiLink {
         $capturedVars    = $actionContext.CapturedVars
         $capturedFuncs   = $actionContext.CapturedFuncs
         $resolvedModules = $actionContext.LinkedModules
+        $scopeNames      = @($actionContext.AutoDetectedVars)
     }
 
     # Store action data in Tag (same structure as New-UiButton)
     $link.Tag = @{
+        Busy          = $false
         BrushTag      = 'AccentBrush'
         Url           = $Url
         Action        = $Action
         CapturedVars  = $capturedVars
+        ScopeNames    = $scopeNames
         CapturedFuncs = $capturedFuncs
         LinkedModules = $resolvedModules
     }
@@ -99,6 +103,12 @@ function New-UiLink {
         Write-Debug "New-UiLink: Click detected. Action=$($null -ne $data.Action), Url=$($data.Url)"
         
         if ($data.Action) {
+            # A second click while the first run is still going would build a second AsyncExecutor and put it in ActiveExecutor over the top of the first, so Stop-UiAsync could only ever reach the newer one.
+            # Use a flag rather than IsEnabled, since this is a TextBlock and disabling it greys the text out, which would look as broken instead of busy.
+            if ($data.Busy) { return }
+            $data.Busy    = $true
+            $data.Started = $false
+
             Write-Debug "New-UiLink: Executing custom action via AsyncExecutor"
             $executor = [PsUi.AsyncExecutor]::new()
             $executor.UiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
@@ -113,23 +123,36 @@ function New-UiLink {
             # Route async output so Write-Host/Write-Warning/errors are visible
             $executor.add_OnHost({ param($hostRecord) Write-Host $hostRecord.Message })
             $executor.add_OnWarning({ param($warningMsg) Write-Warning $warningMsg })
-            $executor.add_OnError({ param($errorRecord) Write-Warning "Link action error: $($errorRecord.Message)" })
+            # OnStarted only fires once a thread is in hand. All 8 taken for 60s and the run is abandoned with an error, so OnError has to do the whole teardown itself in that one case or the link never answers again.
+            $executor.add_OnStarted({ $data.Started = $true }.GetNewClosure())
+            $executor.add_OnError({
+                param($errorRecord)
+                Write-Warning "Link action error: $($errorRecord.Message)"
+                if ($data.Started) { return }
+                $executor.Dispose()
+                $data.Busy = $false
+                if ($linkSession -and [object]::ReferenceEquals($linkSession.ActiveExecutor, $executor)) { $linkSession.ActiveExecutor = $null }
+            }.GetNewClosure())
 
+            # If a newer run owns ActiveExecutor by now, this one finishing must not clear it.
             $executor.add_OnComplete({
                 Write-Debug "New-UiLink: Action completed"
                 $executor.Dispose()
+                $data.Busy = $false
                 if ($linkSession -and [object]::ReferenceEquals($linkSession.ActiveExecutor, $executor)) { $linkSession.ActiveExecutor = $null }
             }.GetNewClosure())
 
             $executor.add_OnCancelled({
                 Write-Debug "New-UiLink: Action cancelled"
                 $executor.Dispose()
+                $data.Busy = $false
                 if ($linkSession -and [object]::ReferenceEquals($linkSession.ActiveExecutor, $executor)) { $linkSession.ActiveExecutor = $null }
             }.GetNewClosure())
             
             # Build variables dict with theme colors (same as New-UiButton)
             $currentThemeColors = Get-ThemeColors
             $varsWithTheme = if ($data.CapturedVars) { $data.CapturedVars.Clone() } else { @{} }
+            $varsWithTheme = Remove-UiStoreShadow -Variables $varsWithTheme -AutoNames $data.ScopeNames
             if ($currentThemeColors) {
                 $varsWithTheme['__WPFThemeColors'] = $currentThemeColors
             }
@@ -167,14 +190,5 @@ function New-UiLink {
         Set-UiProperties -Control $link -Properties $WPFProperties
     }
 
-    # Attach to parent container
-    if ($parent -is [System.Windows.Controls.Panel]) {
-        [void]$parent.Children.Add($link)
-    }
-    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
-        [void]$parent.Items.Add($link)
-    }
-    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
-        $parent.Content = $link
-    }
+    Add-UiControlToParent -Control $link -Parent $parent
 }

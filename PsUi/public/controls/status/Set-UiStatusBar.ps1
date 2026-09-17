@@ -1,4 +1,4 @@
-function Set-UiStatusBar {
+﻿function Set-UiStatusBar {
     <#
     .SYNOPSIS
         Updates status bar text, progress, and severity from any thread.
@@ -53,9 +53,6 @@ function Set-UiStatusBar {
 
     if (!$PSBoundParameters.Count) { return }
 
-    # v2.x -Indeterminate took [bool]. Under [switch] a space-form '-Indeterminate $false' leaves the switch present (=$true) and spills $false to the next free positional slot: -Text when no text was passed ('False'/'True'), -Progress when text is bound (0/1), -Increment when both are (0/1).
-    # Recover only when the switch is on - an explicit -Indeterminate:$false / splat $false is a modern caller who means it, so honor their -Text/-Progress as is. The spilled bool always lands in Text, Progress, or Increment; read it back.
-    # Known edges, chosen not to chase: a modern caller pairing -Indeterminate with a literal -Text 'True'/'False', or with -Progress 0/1, gets reinterpreted as a v2.x spill. No in-repo caller does either, and a real status text is never the bare word 'True'.
     $indeterminateValue = [bool]$Indeterminate
     if ($Indeterminate) {
         if ($PSBoundParameters.ContainsKey('Text') -and $Text -in 'True', 'False') {
@@ -81,12 +78,8 @@ function Set-UiStatusBar {
 
     # Severity auto-reset: explicit -Timeout wins; default to 5s when only -Severity is bound
     $effectiveTimeout = 0
-    if ($PSBoundParameters.ContainsKey('Timeout')) {
-        $effectiveTimeout = $Timeout
-    }
-    elseif ($PSBoundParameters.ContainsKey('Severity')) {
-        $effectiveTimeout = 5
-    }
+    if ($PSBoundParameters.ContainsKey('Timeout')) {  $effectiveTimeout = $Timeout }
+    elseif ($PSBoundParameters.ContainsKey('Severity')) {  $effectiveTimeout = 5 }
 
     $boundKeys = $PSBoundParameters.Keys
 
@@ -143,9 +136,7 @@ function Set-UiStatusBar {
             }
 
             if ($wantsProgress) {
-                if ($progBar.IsIndeterminate) {
-                    $meta.ManualBar = $true
-                }
+                if ($progBar.IsIndeterminate) { $meta.ManualBar = $true }
                 elseif ($progBar.Value -gt 0) {
                     if (($boundKeys -contains 'Progress') -or ($boundKeys -contains 'Increment')) { $meta.ManualBar = $true }
                     else { $meta.ManualBar = $false }
@@ -173,9 +164,7 @@ function Set-UiStatusBar {
                 $meta.SeverityTimer.Interval = [TimeSpan]::FromSeconds($effectiveTimeout)
                 $meta.SeverityTimer.Start()
             }
-            elseif ($effectiveTimeout -le 0 -and $meta.SeverityTimer) {
-                $meta.SeverityTimer.Stop()
-            }
+            elseif ($effectiveTimeout -le 0 -and $meta.SeverityTimer) { $meta.SeverityTimer.Stop() }
         }
 
         $bar.Tag = $meta

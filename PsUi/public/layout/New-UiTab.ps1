@@ -31,7 +31,7 @@ function New-UiTab {
 
         Creates a tab that is disabled until the 'isConnected' variable is truthy.
     .EXAMPLE
-        # Tabs listed together share one TabControl; -Icon puts a glyph on the header
+        # Tabs listed together share one TabControl. -Icon puts a glyph on the header
         New-UiTab -Header 'General' -Icon 'Settings' -Content {
             New-UiLabel -Text 'General settings'
         }
@@ -108,12 +108,12 @@ function New-UiTab {
                 while ($queue.Count -gt 0) {
                     $current = $queue.Dequeue()
 
-                    # Look for WrapPanel with IsItemsHost (our custom template)
+                    # Look for the WrapPanel with IsItemsHost, which the custom template puts there
                     if ($current -is [System.Windows.Controls.WrapPanel]) {
                         $headerPanel = $current
                         break
                     }
-                    # Fallback: also check for TabPanel (default template)
+                    # The default template has a TabPanel there instead
                     if ($current -is [System.Windows.Controls.Primitives.TabPanel]) {
                         $headerPanel = $current
                         break
@@ -134,9 +134,7 @@ function New-UiTab {
         }
 
         Set-ResponsiveConstraints -Control $targetTabControl -FullWidth
-        if ($parent -is [System.Windows.Controls.Panel]) { [void]$parent.Children.Add($targetTabControl) }
-        elseif ($parent -is [System.Windows.Controls.ItemsControl]) { [void]$parent.Items.Add($targetTabControl) }
-        elseif ($parent -is [System.Windows.Controls.ContentControl]) { $parent.Content = $targetTabControl }
+        Add-UiControlToParent -Control $targetTabControl -Parent $parent
     }
     $tabItem = [System.Windows.Controls.TabItem]@{ Header = $Header }
 

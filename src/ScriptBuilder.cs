@@ -170,7 +170,7 @@ namespace PsUi
             return string.Format("${{Global:{0}}} = $args[0]", varName);
         }
         
-        // Batch variable injection — one script, one Invoke call for N variables
+        // One script and one Invoke call, however many variables there are.
         public static string BuildBatchVariableInjection(IList<string> varNames)
         {
             if (varNames == null || varNames.Count == 0) return null;

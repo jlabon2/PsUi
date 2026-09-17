@@ -19,9 +19,10 @@ function Update-UiChart {
         - Objects with Label/Value or Name/Count properties (Key also resolves for
           labels, Sum and Total for values)
     .PARAMETER LabelProperty
-        Property name to use as labels when Data contains objects.
+        Property name to use as labels when Data contains objects. It sticks to the chart, so
+        a later update that omits it keeps using this name.
     .PARAMETER ValueProperty
-        Property name to use as values when Data contains objects.
+        Property name to use as values when Data contains objects. Sticks the same way.
     .EXAMPLE
         New-UiChart -Type Bar -Variable 'diskChart' -Title 'Disk size (GB)'
         New-UiButton -Text 'Refresh' -NoOutput -Action {
@@ -76,12 +77,20 @@ function Update-UiChart {
     else {
         $collected.Add($Data) 
     }
-    $chartData = ConvertTo-ChartData -RawData $collected -LabelProperty $LabelProperty -ValueProperty $ValueProperty
-
     # Queue the chart rebuild onto the UI thread via Invoke-OnUIThread
-    $containerRef = $proxy.Control
-    $dataRef      = $chartData
+    $containerRef  = $proxy.Control
+    $dataRef       = $collected
+    $labelOverride = $LabelProperty
+    $valueOverride = $ValueProperty
     Invoke-OnUIThread {
+        # Names given here replace the ones the chart was built with, since the Tag is the only place Invoke-ChartRedraw reads them from.
+        $config = $containerRef.Tag
+        if ($config -and $config.ControlType -eq 'Chart') {
+            if ($labelOverride) { $config.LabelProperty = $labelOverride }
+            if ($valueOverride) { $config.ValueProperty = $valueOverride }
+        }
+
+        # Raw rows go over, because Invoke-ChartRedraw runs ConvertTo-ChartData itself with those Tag names. Converting here as well handed it Label/Value rows that a custom -LabelProperty second pass dropped to zero, and the chart read 'No data'.
         Invoke-ChartRedraw -Container $containerRef -NewData $dataRef
     }
 }

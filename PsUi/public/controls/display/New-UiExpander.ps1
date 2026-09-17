@@ -146,16 +146,7 @@ function New-UiExpander {
     [PsUi.ThemeEngine]::RegisterElement($container)
     [PsUi.ThemeEngine]::RegisterElement($headerText)
 
-    # Attach to parent container
-    if ($parent -is [System.Windows.Controls.Panel]) {
-        [void]$parent.Children.Add($container)
-    }
-    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
-        [void]$parent.Items.Add($container)
-    }
-    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
-        $parent.Content = $container
-    }
+    Add-UiControlToParent -Control $container -Parent $parent
 
     # Execute content scriptblock with inner panel as parent context
     $previousParent = $session.CurrentParent

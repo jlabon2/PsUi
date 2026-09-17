@@ -106,8 +106,8 @@ function Show-UiOuPicker {
         }
     }
 
-    # Build the root ADsPath. The API only accepts LDAP:// prefixed paths; bare DNs
-    # need wrapping. We leave $rootAds $null when the caller didn't specify a root:
+    # Build the root ADsPath. The API only accepts LDAP:// prefixed paths, so a DN on its own needs wrapping.
+    # $rootAds stays $null when no root was given:
     # pszRoot=NULL triggers the picker's built-in domain browser, which uses
     # objectClass-based detection (like ADUC does). A non-null pszRoot breaks that
     # and you get the treatAsLeaf expansion issue. That's the API, not us.

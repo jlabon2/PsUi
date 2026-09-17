@@ -1,4 +1,4 @@
-function New-UiButton {
+﻿function New-UiButton {
     <#
     .SYNOPSIS
         Creates a styled button with async action support.
@@ -122,7 +122,7 @@ function New-UiButton {
         }
         # In another button, $services and $loadTime are now available
     .EXAMPLE
-        # Validation gate: return error strings to block the click, return nothing to run.
+        # Return error strings to block the click - returning nothing will let it run.
         New-UiButton -Text 'Deploy' -ValidateScript {
             $problems = @()
             if (!(Test-Path '\\deploy\staging$')) { $problems += 'Staging share is unreachable.' }
@@ -174,7 +174,7 @@ function New-UiButton {
         [switch]$NoInteractive,
         [switch]$HideEmptyOutput,
         [switch]$ScrollToTop,
-        # Untyped: takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array
+        # Untyped so it takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array.
         [object]$ResultActions,
         [switch]$SingleSelect,
         [string[]]$LinkedVariables,
@@ -185,8 +185,8 @@ function New-UiButton {
         [hashtable]$Variables,
         [string]$OutputTitle,
 
-        # Pre-action validation script - runs synchronously before Action
-        # Should return $null or empty array on success, or array of error strings on failure
+        # Runs synchronously before Action.
+        # Hands back $null or an empty array on success, or an array of error strings on failure.
         [scriptblock]$ValidateScript,
 
         # Layout parameters
@@ -209,7 +209,7 @@ function New-UiButton {
 
     process {
 
-    # Can't use both - pick one
+    # Can't use both. Pick one.
     if ($NoOutput -and $HideEmptyOutput) {
         throw "Parameters -NoOutput and -HideEmptyOutput are mutually exclusive. Use only one."
     }
@@ -284,7 +284,7 @@ function New-UiButton {
             TextTrimming      = 'CharacterEllipsis'
         }
         
-        # Set foreground: accent buttons use contrasting color, regular buttons use ButtonForeground
+        # Accent buttons take a contrasting foreground and everything else takes ButtonForeground.
         if ($Accent) {
             $textBlock.Tag        = 'AccentButtonText'
             $textBlock.Foreground = ConvertTo-UiBrush $colors.AccentHeaderFg
@@ -301,22 +301,21 @@ function New-UiButton {
             StretchDirection = 'DownOnly'
             Stretch          = 'Uniform'
         }
-        if ($Width -gt 0) {
-            $viewBox.MaxWidth  = $Width - 16
-            $viewBox.MaxHeight = $Height - 8
-        }
+        # WPF throws outright on a negative Max, and a -Width under 16 or a -Height under 8 makes it neg.
+        if ($Width -gt 16)  { $viewBox.MaxWidth  = $Width - 16 }
+        if ($Height -gt 8)  { $viewBox.MaxHeight = $Height - 8 }
         $viewBox.Child = $contentPanel
         $button.Content = $viewBox
     }
     else {
-        # Just text - use ViewBox for auto-scaling if needed
+        # Just text, so a ViewBox only if it needs scaling.
         $textBlock = [System.Windows.Controls.TextBlock]@{
             Text              = $Text
             TextAlignment     = 'Center'
             VerticalAlignment = 'Center'
         }
         
-        # Set foreground: accent buttons use contrasting color, regular buttons use ButtonForeground
+        # Accent buttons take a contrasting foreground and everything else takes ButtonForeground.
         if ($Accent) {
             $textBlock.Tag        = 'AccentButtonText'
             $textBlock.Foreground = ConvertTo-UiBrush $colors.AccentHeaderFg
@@ -326,14 +325,14 @@ function New-UiButton {
             $textBlock.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ButtonForegroundBrush')
         }
 
-        if ($Width -gt 0) {
-            # Fixed width - use ViewBox for scaling
+        if ($Width -gt 0 -or $PSBoundParameters.ContainsKey('Height')) {
+            # A fixed size on either axis, so the ViewBox does the scaling. Same neg max issue as the icon path above.
             $viewBox = [System.Windows.Controls.Viewbox]@{
                 StretchDirection = 'DownOnly'
                 Stretch          = 'Uniform'
-                MaxWidth         = $Width - 16
-                MaxHeight        = $Height - 8
             }
+            if ($Width -gt 16) { $viewBox.MaxWidth  = $Width - 16 }
+            if ($Height -gt 8) { $viewBox.MaxHeight = $Height - 8 }
             $viewBox.Child = $textBlock
             $button.Content = $viewBox
         }
@@ -344,8 +343,6 @@ function New-UiButton {
     if ($GridColumn -ge 0) { [System.Windows.Controls.Grid]::SetColumn($button, $GridColumn)}
     if ($GridRow -ge 0) { [System.Windows.Controls.Grid]::SetRow($button, $GridRow) }
 
-    # Context capture via Get-UiActionContext
-    # Captures variables, functions, and modules from caller scope using AST analysis
     $ctxParams = @{
         Action            = $Action
         LinkedVariables   = $LinkedVariables
@@ -359,14 +356,14 @@ function New-UiButton {
     $capturedFuncs = $actionContext.CapturedFuncs
     $resolvedModules = $actionContext.LinkedModules
 
-    # WPF windows on the async runspace's STA thread inevtiably die. If the action's AST has a window-spawner in it, flip to sync so the spawn lands on the host's dispatcher instead.
-    # Out-Datagrid / Out-CSVDataGrid / Out-TextEditor stay off this list - they each run the window on their own STA dispatcher (the caller's, or a spawned STA runspace when the caller is MTA), so the async caller is safe and the data fetch stays off the UI thread.
-    $windowSpawners = @('New-UiTool', 'New-UiChildWindow', 'New-UiWindow')
-    $detected = $actionContext.AutoDetectedFuncs | Where-Object { $windowSpawners -contains $_ }
-    if ($detected -and !$PSBoundParameters.ContainsKey('NoAsync')) {
-        Write-Debug "[New-UiButton] AST found $($detected -join ', '), forcing -NoAsync."
+    # WPF windows on the async runspace's STA thread inevtiably die. If the action calls a window spawner, flip to sync so the spawn lands on the host's UI thread instead.
+    if ($Action -and !$PSBoundParameters.ContainsKey('NoAsync') -and (Test-UiActionOpensWindow -Action $Action)) {
+        Write-Debug "[New-UiButton] The action opens a window, forcing -NoAsync."
         $NoAsync = $true
     }
+
+    $handNamed  = @($LinkedVariables) + @($(if ($Variables) { $Variables.Keys }))
+    $scopeNames = @($actionContext.AutoDetectedVars | Where-Object { $_ -notin $handNamed })
 
     # An async click registers its own AsyncExecutor as ActiveExecutor before the action runs, so a Stop-UiAsync inside it cancels this very button instead of the job. Warn, don't flip, unlike the spawner case above, the action still runs, it just cancels the wrong thing.
     if (!$NoAsync -and !$PSBoundParameters.ContainsKey('NoAsync') -and $actionContext.AutoDetectedFuncs -contains 'Stop-UiAsync') {
@@ -382,12 +379,12 @@ function New-UiButton {
         WindowRef       = $session.Window
         Text            = $displayTitle
         NoAsync         = $NoAsync
-        NoAsyncExplicit = $PSBoundParameters.ContainsKey('NoAsync')
         NoWait          = $NoWait
         IsCSharpLoaded  = [PsUi.ModuleContext]::IsInitialized
         ResultActions   = $ResultActions
         SingleSelect    = $SingleSelect
         CapturedVars    = $capturedVars
+        ScopeNames      = $scopeNames
         CapturedFuncs   = $capturedFuncs
         LinkedModules   = $resolvedModules
         Capture         = $Capture
@@ -452,32 +449,18 @@ function New-UiButton {
         try {
             $forceSynchronous = $ctx.NoAsync
 
-            # Fallback for when the construction-time AST scan missed a window spawner. Skip it when the user set -NoAsync explicitly (incl. -NoAsync:$false to force async) - honor their call instead of second-guessing it from a substring in the action text.
-            if (!$forceSynchronous -and !$ctx.NoAsyncExplicit -and $ctx.Action) {
-                # Scan the AST for a real call, not a ToString() substring - the name also appears inside a string or comment (Write-Host "see New-UiWindow docs"), and a bare mention was freezing an async action for nothing.
-                $callsSpawner = @($ctx.Action.Ast.FindAll({
-                    param($node)
-                    $node -is [System.Management.Automation.Language.CommandAst] -and
-                    $node.GetCommandName() -in @('New-UiChildWindow', 'New-UiWindow', 'New-UiTool')
-                }, $true))
-                if ($callsSpawner.Count -gt 0) { $forceSynchronous = $true }
-            }
-
             if ($forceSynchronous -eq $true) {
-                $result = if ($ctx.Parameters) {
-                    & $ctx.Action @($ctx.Parameters)
-                } else {
-                    & $ctx.Action
-                }
-                $btn.Content = $originalContent
-                $btn.MinWidth = $originalMinWidth
+                $splat         = $ctx.Parameters
+                $result        = if ($ctx.Parameters) { & $ctx.Action @splat } else { & $ctx.Action }
+                $btn.Content   = $originalContent
+                $btn.MinWidth  = $originalMinWidth
                 $btn.MinHeight = $originalMinHeight
                 $btn.IsEnabled = $true
             }
             elseif ($ctx.IsCSharpLoaded) {
                 $executor = [PsUi.AsyncExecutor]::new()
 
-                # Store executor in session for Stop-UiAsync cancellation
+                # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
                 $execSession = [PsUi.SessionManager]::Current
                 if ($execSession) { $execSession.ActiveExecutor = $executor }
 
@@ -489,6 +472,7 @@ function New-UiButton {
 
                 $currentThemeColors = Get-ThemeColors
                 $varsWithTheme = if ($ctx.CapturedVars) { $ctx.CapturedVars.Clone() } else { @{} }
+                $varsWithTheme = Remove-UiStoreShadow -Variables $varsWithTheme -AutoNames $ctx.ScopeNames
                 if ($currentThemeColors) {
                     $varsWithTheme['__WPFThemeColors'] = $currentThemeColors
                 }
@@ -523,7 +507,7 @@ function New-UiButton {
                 }
 
                 if ($ctx.NoOutput) {
-                    # For NoOutput mode only: register handlers to restore button and dispose executor
+                    # NoOutput mode alone registers handlers to put the button back and dispose the AsyncExecutor.
                     # Show-UiOutput modes handle this themselves via the output window lifecycle
                     $buttonToRestore    = $btn
                     $contentToRestore   = $originalContent
@@ -535,7 +519,7 @@ function New-UiButton {
                     # If the window closes mid task, cancel the AsyncExecutor so it doesn't crash completing onto the dead UI thread.
                     #
                     # GetNewClosure() captures the entire scope into a dynamic module. If you are doing something insane like creating 100 buttons in a loop where the scope has a giant array, congrats - you now have 100 references to that array. 
-                    # For normal forms with 5-20 buttons this is fine. We clean up on window close so nothing leaks after. If you hit memory issues, refactor your loop or stop holding massive objects in scope.
+                    # For normal forms with 5-20 buttons this is fine. Window close cleans it up. If you hit memory issues, refactor your loop or stop holding massive objects in scope.
                     $parentWindow = $ctx.WindowRef
                     if ($parentWindow) {
                         $closedHandler = [System.EventHandler]{
@@ -546,7 +530,7 @@ function New-UiButton {
                         }.GetNewClosure()
                         $parentWindow.Add_Closed($closedHandler)
                         
-                        # Store handler reference so we can remove it when task completes
+                        # Keep the handler reference, so it can come off again when the task completes
                         $windowToCleanup = $parentWindow
                         $handlerToRemove = $closedHandler
                     }
@@ -561,7 +545,7 @@ function New-UiButton {
                         Add-InputProviders @inputParams
                     }
 
-                    # Shared cleanup: unhook window handler, restore button state, dispose executor.
+                    # Unhooks the window handler and puts the button back, then disposes the AsyncExecutor.
                     # Called from OnComplete, OnError, and OnCancelled to avoid triple copy-paste.
                     $restoreAndDispose = {
                         param([string]$CallerName)
@@ -614,7 +598,7 @@ function New-UiButton {
                         $executor.CaptureVariables = [string[]]$ctx.Capture
                     }
 
-                    # Fire and forget - handlers will restore button when done
+                    # Fire and forget. The handlers put the button back when it finishes.
                     $executor.ExecuteAsync(
                         $ctx.Action,
                         $ctx.Parameters,
@@ -646,7 +630,7 @@ function New-UiButton {
 
                         $outputWindow = Show-UiOutput @outParams
 
-                        # NoWait mode: hook Closed to restore the button when the output window closes
+                        # NoWait mode hooks Closed so the button comes back when the output window closes.
                         if ($ctx.NoWait -and $outputWindow) {
                             $buttonToRestore    = $btn
                             $contentToRestore   = $originalContent
@@ -663,10 +647,11 @@ function New-UiButton {
                     }
                     catch {
                         Write-Warning "Output window error: $($_.Exception.Message)"
-                        # Kill the executor if it's still running
+                        # Kill the AsyncExecutor if it is still running
                         try {
                             if ($executor.IsRunning) { $executor.Cancel() }
                             $executor.Dispose()
+                            if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $executor)) { $execSession.ActiveExecutor = $null }
                         } catch { Write-Debug "Output cleanup error: $_" }
                     }
                 }
@@ -679,13 +664,12 @@ function New-UiButton {
             }
             else {
                 Write-Warning "Async unavailable. Running synchronously."
-                $result = if ($ctx.Parameters) {
-                    & $ctx.Action @($ctx.Parameters)
-                } else {
-                    & $ctx.Action
-                }
-                $btn.Content = $originalContent
-                $btn.MinWidth = $originalMinWidth
+
+                # Same splat as the forced sync path above
+                $splat         = $ctx.Parameters
+                $result        = if ($ctx.Parameters) { & $ctx.Action @splat } else { & $ctx.Action }
+                $btn.Content   = $originalContent
+                $btn.MinWidth  = $originalMinWidth
                 $btn.MinHeight = $originalMinHeight
                 $btn.IsEnabled = $true
             }
@@ -707,8 +691,8 @@ function New-UiButton {
 
     # Apply custom WPF properties if specified
     if ($WPFProperties) {
-        # Tag is reserved - the click handler reads its action context off it, so a caller Tag disarms the button. Warn and drop, same guard as New-UiProgress / New-UiStatusBar.
-        # Copy before Remove: [hashtable] binds the caller's own table by reference.
+        # Tag is reserved. The click handler reads its action context off it, so a Tag from the calling script would break the button
+        # Copy before the Remove, because [hashtable] binds the calling script's own table by reference.
         if ($WPFProperties.ContainsKey('Tag')) {
             Write-Warning "New-UiButton: -WPFProperties Tag is reserved (stores the click action context). Ignoring."
             $WPFProperties = @{} + $WPFProperties
@@ -718,14 +702,10 @@ function New-UiButton {
     }
 
     # Hook conditional enabling if specified
-    if ($EnabledWhen) {
-        Register-UiCondition -TargetControl $button -Condition $EnabledWhen
-    }
+    if ($EnabledWhen) { Register-UiCondition -TargetControl $button -Condition $EnabledWhen }
 
     # Register button by name for -SubmitButton lookups
-    if ($Variable) {
-        $session.RegisterButton($Variable, $button)
-    }
+    if ($Variable) { $session.RegisterButton($Variable, $button) }
 
     Write-Debug "Adding to $($parent.GetType().Name)"
     $addedToParent = $false

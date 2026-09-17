@@ -1,4 +1,4 @@
-function New-UiPanel {
+﻿function New-UiPanel {
     <#
     .SYNOPSIS
         Creates a panel container for organizing child controls.
@@ -47,7 +47,7 @@ function New-UiPanel {
         The legacy hashtable form still works:
         -HeaderAction @{ Icon = 'Info'; Tooltip = 'Show Help'; Action = { ... } }
     .EXAMPLE
-        # Wrap layout: children flow into columns, capped at two here
+        # Wrap layout flows children into columns, capped at two here.
         New-UiPanel -LayoutStyle Wrap -MaxColumns 2 -Content {
             New-UiToggle -Label 'Wake on LAN' -Variable 'wol'
             New-UiToggle -Label 'Remote registry' -Variable 'remoteReg'
@@ -58,7 +58,6 @@ function New-UiPanel {
         New-UiPanel -Content { } -WPFProperties @{
             "Grid.Row" = 1
             "Grid.Column" = 2
-            Tag = "MyTag"
         }
     #>
     [CmdletBinding()]
@@ -168,7 +167,8 @@ $sourceCode
 
         # If MaxColumns specified, add responsive sizing for child controls inside this panel
         if ($MaxColumns -gt 0) {
-            $panelMaxCols = $MaxColumns  # Capture for closure - completely independent from window
+            # Captured for the closure, and independent of the window's own column count
+            $panelMaxCols = $MaxColumns
             $innerContainer.Add_SizeChanged({
                 param($sender, $eventArgs)
 
@@ -177,10 +177,11 @@ $sourceCode
                 if ($availableWidth -le 0) { return }
 
                 # Calculate column width based on this panel's MaxColumns (NOT window's)
-                $minColumnWidth = 150  # Minimum width per column in wrap panel
-                $possibleCols = [Math]::Max(1, [Math]::Floor($availableWidth / $minColumnWidth))
-                $actualCols = [Math]::Min($possibleCols, $panelMaxCols)
-                $actualCols = [Math]::Max($actualCols, 1)
+                # Minimum width per column in the wrap panel
+                $minColumnWidth = 150
+                $possibleCols   = [Math]::Max(1, [Math]::Floor($availableWidth / $minColumnWidth))
+                $actualCols     = [Math]::Min($possibleCols, $panelMaxCols)
+                $actualCols     = [Math]::Max($actualCols, 1)
 
                 $childWidth = [Math]::Floor(($availableWidth / $actualCols) - 8)
 
@@ -203,7 +204,7 @@ $sourceCode
         $fullWidthConstraint = $FullWidth
     }
 
-    # Build display control (GroupBox wrapper if Header specified)
+    # Build the display control, a GroupBox around it when Header is set
     if ($Header) {
         $displayControl = [System.Windows.Controls.GroupBox]@{
             Content = $innerContainer
@@ -275,7 +276,11 @@ $sourceCode
             # Style and click handler
             Set-ButtonStyle -Button $iconButton -IconOnly
             $actionScript = $HeaderAction.Action
-            $iconButton.Add_Click({ & $actionScript }.GetNewClosure())
+            # trap, not try/catch/finally. Off the pipeline a finally NREs on the way out
+            $iconButton.Add_Click({
+                trap { Write-Warning "New-UiPanel header action error: $_"; continue }
+                & $actionScript
+            }.GetNewClosure())
 
             [System.Windows.Controls.Grid]::SetColumn($iconButton, 1)
             [void]$headerGrid.Children.Add($iconButton)
@@ -303,15 +308,7 @@ $sourceCode
         Set-UiProperties -Control $displayControl -Properties $WPFProperties
     }
 
-    if ($parent -is [System.Windows.Controls.Panel]) {
-        [void]$parent.Children.Add($displayControl)
-    }
-    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
-        [void]$parent.Items.Add($displayControl)
-    }
-    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
-        $parent.Content = $displayControl
-    }
+    Add-UiControlToParent -Control $displayControl -Parent $parent
 
     # Execute content block with innerContainer as the new parent
     $session.CurrentParent = $innerContainer

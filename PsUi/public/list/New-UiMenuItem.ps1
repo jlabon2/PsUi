@@ -1,4 +1,4 @@
-function New-UiMenuItem {
+﻿function New-UiMenuItem {
     <#
     .SYNOPSIS
         Defines one entry for a data grid's right-click menu.
@@ -23,19 +23,19 @@ function New-UiMenuItem {
         selections; past that the item stays enabled and the click still skips ineligible rows.
     .PARAMETER Icon
         Icon name shown ahead of the label. Tab completion lists the valid names.
-    .PARAMETER Sync
+    .PARAMETER NoAsync
         Run the action on the UI thread instead of a background runspace. For actions that open
-        dialogs or child windows.
+        dialogs or child windows. Accepts -Sync as an alias, the parameter this switch had used before.
     .EXAMPLE
         New-UiDataGrid -Variable 'svc' -Items (Get-Service) -RowContextMenu {
             New-UiMenuItem 'Start' -Icon Play -Action { Start-Service $_.Name } -Enabled { $_.Status -eq 'Stopped' }
-            New-UiMenuItem 'Details' -Sync -Action { Show-UiMessageDialog -Message ($_ | Out-String) }
+            New-UiMenuItem 'Details' -NoAsync -Action { Show-UiMessageDialog -Message ($_ | Out-String) }
         }
     .EXAMPLE
         # Legacy hashtable form, still supported
         New-UiDataGrid -Variable 'svc' -Items (Get-Service) -RowContextMenu ([ordered]@{
             'Start' = @{ Action = { Start-Service $_.Name }; Enabled = { $_.Status -eq 'Stopped' } }
-            'Details' = @{ Action = { Show-UiMessageDialog -Message ($_ | Out-String) }; Sync = $true }
+            'Details' = @{ Action = { Show-UiMessageDialog -Message ($_ | Out-String) }; NoAsync = $true }
         })
     #>
     [CmdletBinding()]
@@ -48,7 +48,8 @@ function New-UiMenuItem {
 
         [object]$Enabled,
 
-        [switch]$Sync
+        [Alias('Sync')]
+        [switch]$NoAsync
     )
 
     DynamicParam {
@@ -65,11 +66,11 @@ function New-UiMenuItem {
             throw "New-UiMenuItem: -Enabled takes `$true/`$false or a scriptblock. Got [$($Enabled.GetType().Name)]."
         }
 
-        # Keys stay absent unless the parameter was bound. The consumer reads $null -ne Enabled, so absent and $false mean different things there. Sync stays conditional to match.
+        # Keys stay absent unless the parameter was bound. The consumer reads $null -ne Enabled, so absent and $false mean different things there. NoAsync stays conditional to match.
         $item = @{ Text = $Text; Action = $Action }
         if ($Icon) { $item['Icon'] = $Icon }
         if ($PSBoundParameters.ContainsKey('Enabled')) { $item['Enabled'] = $Enabled }
-        if ($PSBoundParameters.ContainsKey('Sync')) { $item['Sync'] = [bool]$Sync }
+        if ($PSBoundParameters.ContainsKey('NoAsync')) { $item['NoAsync'] = [bool]$NoAsync }
         $item
     }
 }

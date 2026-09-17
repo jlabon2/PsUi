@@ -105,14 +105,5 @@ function New-UiLabel {
         Set-UiProperties -Control $block -Properties $WPFProperties
     }
 
-    # Add to parent container
-    if ($parent -is [System.Windows.Controls.Panel]) {
-        [void]$parent.Children.Add($block)
-    }
-    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
-        [void]$parent.Items.Add($block)
-    }
-    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
-        $parent.Content = $block
-    }
+    Add-UiControlToParent -Control $block -Parent $parent
 }

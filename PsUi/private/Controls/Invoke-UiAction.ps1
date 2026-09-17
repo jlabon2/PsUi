@@ -1,7 +1,7 @@
-function Invoke-UiAction {
+﻿function Invoke-UiAction {
     <#
     .SYNOPSIS
-        Runs a user action async by default. -Sync pins to UI thread.
+        Runs a user action async by default. -NoAsync runs the action in the UI thread.
     #>
     [CmdletBinding()]
     param(
@@ -15,21 +15,23 @@ function Invoke-UiAction {
         # DataGrid (or any items control). Items.Refresh() after the action lands. Optional.
         $RefreshTarget,
 
-        # Default: action runs in a background runspace. Use -Sync when the action has to stay on the UI thread (dialogs and clipboard work, mostly).
-        [switch]$Sync,
+        # The action runs in a background runspace unless -NoAsync is passed. Use it when the work has to stay on the UI thread, mostly for stuff like dialogs and clipboard.
+        # -Sync was the original (but still usable) parameter, but was updated to -NoAsync to match the standard PS naming convention.
+        [Alias('Sync')]
+        [switch]$NoAsync,
 
-        # Multi row fan out (RowContextMenu acting on a selection). Skips the per target Remove+Insert workaround - concurrent runspaces racing the shared SourceCollection were the cause of the ~20% mutation drop. Items.Refresh alone is race free. The visual fidelity tradeoff (custom binding cells lag a redraw) is acceptable next to losing the mutation entirely.
+        # Multi row fan out (RowContextMenu acting on a selection). Skips the per target Remove+Insert workaround. Concurrent runspaces racing the shared SourceCollection were the cause of the ~20% mutation drop. Items.Refresh alone is race free. The visual fidelity tradeoff (custom binding cells lag one Items.Refresh behind) is acceptable next to losing the mutation entirely.
         [switch]$FanOut
     )
 
-    $useAsync = !$Sync
+    $useAsync = !$NoAsync
 
     $refreshRef  = $RefreshTarget
     $refreshItem = $Item
     $fanOutMode  = [bool]$FanOut
     $refresh = {
         if (!$refreshRef) { return }
-        # Rebind to locals before building $repaint: nested .GetNewClosure() captures only the immediate scope's locals, NOT what the outer closure captured - $repaint saw $refreshRef as $null and the post action redraw silently died on Items.Refresh().
+        # Rebind to locals before building $repaint, because a nested .GetNewClosure() captures only the immediate scope's locals, NOT what the outer closure captured. $repaint saw $refreshRef as $null and the post action refresh silently died on Items.Refresh().
         $localGrid   = $refreshRef
         $localItem   = $refreshItem
         $localFanOut = $fanOutMode
@@ -48,10 +50,10 @@ function Invoke-UiAction {
                 }
                 catch { Write-Debug "Filter cache invalidation after action failed: $_" }
 
-                # Items.Refresh on its own redraws reliably in clean tests, but inside a real PsUi grid (styled cells, filter view, fan out from worker runspaces) the cell bindings sometimes don't pull again from the mutated PSCustomObject. Force a surgical regen of just the touched row's container by removing and reinserting at the same index - WPF can't collapse a paired Remove/Insert into nothing the way it silently drops a same reference indexer assignment. Saved selection state restores around the Remove so multi select fan out doesn't shed rows.
+                # Items.Refresh on its own shows the new values reliably in clean tests, but inside a real PsUi grid (styled cells, filter view, fan out from worker runspaces) the cell bindings sometimes don't pull again from the mutated PSCustomObject. Force a surgical regen of just the touched row's container by removing and reinserting at the same index, and WPF can't collapse a paired Remove/Insert into nothing the way it silently drops a same reference indexer assignment. Saved selection state restores around the Remove so multi select fan out doesn't shed rows.
                 # New-UiDataGrid sets ItemsSource to a ListCollectionView, so unwrap to SourceCollection or the IList check fails and the Remove/Insert path never fires.
                 #
-                # Skipped under -FanOut: N parallel runspaces all racing the same source list caused IndexOf misses and dropped per row mutations. Items.Refresh below is idempotent and survives the parallel barrage.
+                # Skipped under -FanOut, where N parallel runspaces all racing the same source list caused IndexOf misses and dropped per row mutations. Items.Refresh below is idempotent and survives the parallel barrage.
                 $source = $localGrid.ItemsSource
                 if ($source -is [System.ComponentModel.ICollectionView]) { $source = $source.SourceCollection }
                 $regenerated = $false
@@ -61,7 +63,7 @@ function Invoke-UiAction {
                         $wasSelected = $localGrid.SelectedItems.Contains($localItem)
                         $source.RemoveAt($idx)
                         $source.Insert($idx, $localItem)
-                        # SelectedItems mutation throws on Single mode grids ("Can only change SelectedItems collection in multiple selection modes"), which killed the whole redraw. SelectedItem assignment is legal everywhere but Single needs it.
+                        # SelectedItems mutation throws on Single mode grids ("Can only change SelectedItems collection in multiple selection modes"), which killed the whole refresh. SelectedItem assignment is legal everywhere but Single needs it.
                         if ($wasSelected) {
                             if ($localGrid.SelectionMode -eq [System.Windows.Controls.DataGridSelectionMode]::Single) { $localGrid.SelectedItem = $localItem }
                             else { [void]$localGrid.SelectedItems.Add($localItem) }
@@ -104,7 +106,7 @@ function Invoke-UiAction {
         return
     }
 
-    # Stringify and rebuild the user action via [scriptblock]::Create() so its $_ binds to this runspace's ExecutionContext. ForEach-Object handles the $_ bind - calling positionally leaves the action with a null $_ (verified, same trap as the sync path).
+    # Stringify and rebuild the user action via [scriptblock]::Create() so its $_ binds to this runspace's ExecutionContext. ForEach-Object handles the $_ bind. Calling positionally leaves the action with a null $_ (verified, same trap as the sync path).
     # Rows run one at a time. A throwing row reemits its ORIGINAL record on the error stream (the AsyncExecutor routes it to OnError) and the loop moves on. A collect and rethrow here stamped every failure with this wrap's throw site, so dialogs pointed at PsUi internals instead of the user's action line.
     $actionScriptText = $Action.ToString()
     $wrapped = {
@@ -118,7 +120,7 @@ function Invoke-UiAction {
 
     # Auto capture inside Invoke-UiAsync scans $wrapped's AST (three locals), not the user's body.
     # Prefill Variables here from the user's AST so sibling control vars ($searchText, etc.) hydrate like in New-UiButton -Action.
-    # User functions need an imported module or Sync = $true on the action's hashtable.
+    # User functions need an imported module or NoAsync = $true on the action's hashtable.
     $harvested = @{ itemForAction = $Item; actionScriptText = $actionScriptText }
     $builtinVars = @('_', 'PSItem', 'this', 'args', 'input', 'PSCmdlet', 'PSBoundParameters',
                      'MyInvocation', 'ExecutionContext', 'null', 'true', 'false', 'PSScriptRoot',
@@ -128,7 +130,7 @@ function Invoke-UiAction {
                      'LASTEXITCODE', 'VerbosePreference', 'DebugPreference', 'WarningPreference',
                      'WhatIfPreference', 'OutputEncoding', 'ConfirmPreference')
 
-    # AST scan + calling-scope walk instead of GetNewClosure. The async path stringifies $Action and rebuilds it via [scriptblock]::Create() so closure captures don't transfer - anything the walk misses is gone. Add to $builtinVars above to skip a common shell var without breaking a user reference.
+    # AST scan plus a calling scope walk instead of GetNewClosure. The async path stringifies $Action and rebuilds it via [scriptblock]::Create() so closure captures don't transfer - anything the walk misses is gone. Add to $builtinVars above to skip a common shell var without breaking a user reference.
     $referencedVars = $Action.Ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.VariableExpressionAst]
@@ -151,6 +153,10 @@ function Invoke-UiAction {
         }
     }
 
+    # Same rule as a button. What the scan pulled from scope loses to the session store.
+    $seeded    = 'itemForAction', 'actionScriptText'
+    $harvested = Remove-UiStoreShadow -Variables $harvested -AutoNames @($referencedVars | Where-Object { $_ -notin $builtinVars -and $_ -notin $seeded })
+
     # Write-Host from the worker runspace lands on whatever thread the AsyncExecutor's host hook fires on. Route back to this window's UI thread so PsUi's existing host hook captures it.
     # Not Application.Current, it stays pinned to the first window of the process, so in a second window it points at a thread that already exited and every routed line disappears.
     $hostSession   = [PsUi.SessionManager]::Current
@@ -168,7 +174,7 @@ function Invoke-UiAction {
             # BeginInvoke runs this after the current invocation scope has popped, and $msg/$fg/$nl resolve to $null without the snapshot.
             $appDispatcher.BeginInvoke([Action]{
                 $params = @{ Object = $msg; NoNewline = $nl }
-                # $null test, not truthiness - ConsoleColor.Black is enum value 0 and a truthy check silently dropped it.
+                # $null test, not truthiness. ConsoleColor.Black is enum value 0 and a truthy check silently dropped it.
                 if ($null -ne $fg) { $params.ForegroundColor = $fg }
                 Write-Host @params
             }.GetNewClosure()) | Out-Null
@@ -184,7 +190,7 @@ function Invoke-UiAction {
         OnError       = {
             param($errInfo)
             Write-Debug "Invoke-UiAction async failed: $errInfo"
-            # No output panel on the grid action path - a dialog is the only place the failure can land (same as New-UiButton's NoOutput error dialog).
+            # No output panel on the grid action path, so a dialog is the only place the failure can land (same as New-UiButton's NoOutput error dialog).
             if ($errInfo -and $appDispatcher -and !$appDispatcher.HasShutdownStarted) {
                 $errorMsg = [string]$errInfo
                 try {
@@ -201,7 +207,7 @@ function Invoke-UiAction {
     $asyncHandle = Invoke-UiAsync @asyncArgs
 
     # Hook the run's lifecycle into any -AutoProgress / -AutoCancel / -Intercept status bar (same pattern as New-UiButton).
-    # Hooks after ExecuteAsync because Invoke-UiAsync owns the AsyncExecutor's creation. The sub tick gap is fine - routed events fire a tick later anyway.
+    # Hooks after ExecuteAsync because Invoke-UiAsync owns the AsyncExecutor's creation. The sub tick gap is fine. Routed events fire a tick later anyway.
     $statusSession = [PsUi.SessionManager]::Current
     if ($statusSession -and $asyncHandle -and $asyncHandle.Executor) { Add-StatusBarAutoWiring -Executor $asyncHandle.Executor -Session $statusSession }
 }

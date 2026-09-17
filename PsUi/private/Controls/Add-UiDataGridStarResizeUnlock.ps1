@@ -171,7 +171,7 @@ function Add-UiDataGridStarResizeUnlock {
         $gesture = $sender.Resources['__StarResize_Gesture']
         $sender.Resources.Remove('__StarResize_Gesture')
 
-        # Star column's own gripper. A real drag changed the width, so keep it and stop tracking. A bare click or doubleclick (no drag) left the width at the pin value. That pin was never a user choice, so put the star back.
+        # Star column's own gripper. A real drag changed the width, so keep it and stop tracking. A click or doubleclick that never dragged left the width at the pin value. That pin was never a user choice, so put the star back.
         if ($gesture.ResizedColumn -eq $gesture.StarColumn) {
             $width = $gesture.StarColumn.Width
             $moved = !$width.IsAbsolute -or [Math]::Abs([double]$width.Value - [double]$gesture.PinnedWidth) -gt 1

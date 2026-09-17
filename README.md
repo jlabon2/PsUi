@@ -1,11 +1,11 @@
-# PsUi
+﻿# PsUi
 
 [![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PsUi?label=PSGallery&color=blue)](https://www.powershellgallery.com/packages/PsUi)
 ![Downloads](https://img.shields.io/powershellgallery/dt/PsUi?color=green)
 ![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell&logoColor=white)
 ![Tests](https://img.shields.io/github/actions/workflow/status/jlabon2/PsUi/test.yml?label=tests)
 ![Stars](https://img.shields.io/github/stars/jlabon2/PsUi)
-[![Changelog](https://img.shields.io/badge/changelog-v1.1.0-orange)](CHANGELOG.md)
+[![Changelog](https://img.shields.io/badge/changelog-v1.1.1-orange)](CHANGELOG.md)
 ![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 For building UIs in PowerShell without the misery.
@@ -90,7 +90,7 @@ Set the theme with `New-UiWindow -Theme Dark` or use the palette button in the t
 
 ### Form Generation
 
-`New-UiTool` reads parameter metadata from any command and then builds a complete form. This allows quick creation of UIs for commands based upon the analysis of their existing code.
+`New-UiTool` reads parameter metadata from any command and builds a complete form from it. Point it at a script you already have and you get a UI for it.
 
 Types map to controls: `[string]` becomes a text box, `[switch]` a toggle, `[datetime]` a date picker, `[ValidateSet()]` a dropdown, `[ValidateRange()]` a slider. Parameters named `-Path` get a file browser. `-ComputerName` on domain-joined machines hooks the Windows object picker so you can search AD.
 
@@ -122,7 +122,7 @@ Each window runs in its own session with its own runspace pool and UI thread. Ch
 
 ## Quick Start
 
-Three ways to try it, from fastest to most involved:
+Four ways to try it:
 
 **Run the demo** (recommended first step)
 ```powershell
@@ -151,6 +151,14 @@ New-UiWindow -Title 'My First Tool' -Content {
 }
 ```
 Type a name, click the button, check the Console tab.
+
+**Skip the window**
+```powershell
+Import-Module .\PsUi\PsUi.psd1
+New-UiInput -Label 'Name' -Variable 'userName'
+New-UiButton -Text 'Greet' -Action { Write-Host "Hello, $userName!" }
+```
+No `New-UiWindow`, so PsUi reads the script and builds one around the controls.
 
 ---
 
@@ -715,6 +723,7 @@ New-UiWindow -Title 'Conditional Demo' -Width 400 -Height 300 -Content {
 |----------|-------------|
 | `Get-UiValue` | Read a control's current value by variable name |
 | `Set-UiValue` | Set a control's value by variable name |
+| `Get-UiSession` | The session behind the window your code is running in, including controls and captured values  |
 | `Get-PsUiIcon` | Get an icon glyph by name |
 | `Test-PsUiIcon` | True if a named glyph will actually render |
 | `Get-PsUiIconFont` | Which icon font the session is using |
