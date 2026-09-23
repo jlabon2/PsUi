@@ -1,6 +1,6 @@
 ﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 
-# Private PowerShell helpers. Nothing here touches WPF or a live session.
+# Private PowerShell helpers. No test here touches WPF or a live session.
 . (Join-Path $PSScriptRoot '_Setup.ps1')
 
 BeforeAll { . (Join-Path $PSScriptRoot '_Setup.ps1') }
@@ -126,10 +126,34 @@ InModuleScope PsUi {
             $obj.PSObject.TypeNames.Insert(0, 'System.ServiceProcess.ServiceController#StartupType')
             Get-CleanTypeName -Item $obj | Should -Be 'ServiceController'
         }
+
+        It 'Renders a generic argument list instead of a PublicKeyToken' {
+            Get-CleanTypeName -Item ([System.Collections.Generic.Dictionary[string, object]]::new()) | Should -Be 'Dictionary<String,Object>'
+        }
+
+        It 'Keeps two instantiations of one generic apart' {
+            $strings = [System.Tuple]::Create('a', 'b', 'c')
+            $mixed   = [System.Tuple]::Create('a', 1)
+            Get-CleanTypeName -Item $strings | Should -Be 'Tuple<String,String,String>'
+            Get-CleanTypeName -Item $mixed   | Should -Be 'Tuple<String,Int32>'
+            (Get-CleanTypeName -Item $strings) | Should -Not -Be (Get-CleanTypeName -Item $mixed)
+        }
     }
 
     # Formats values for display in the datagrid cells
     Describe 'ConvertTo-DisplayValue' {
+        It 'Survives a hashtable carrying Keys and Count keys' {
+            # .Keys and .Count answer with the key on a hashtable, so one carrying either listed that key's value as its keys.
+            ConvertTo-DisplayValue -Value ([ordered]@{ Keys = 'k'; Count = 0 }) | Should -Be "@{Keys='k'; Count=0}"
+            ConvertTo-DisplayValue -Value @{ Keys = 1; Count = 2; A = 3; B = 4 } | Should -Be '@{...} (4 keys)'
+        }
+
+        It 'Counts a long HashSet without copying it' {
+            $set = [System.Collections.Generic.HashSet[int]]::new()
+            1..50 | ForEach-Object { [void]$set.Add($_) }
+            ConvertTo-DisplayValue -Value $set | Should -Be '[50 items]'
+        }
+
         It 'Shows small hashtables inline' {
             $ht     = [ordered]@{ Name = 'Bob'; Age = 30 }
             $result = ConvertTo-DisplayValue -Value $ht
@@ -158,36 +182,125 @@ InModuleScope PsUi {
             ConvertTo-DisplayValue -Value 42 | Should -Be 42
             ConvertTo-DisplayValue -Value 'plain text' | Should -Be 'plain text'
         }
+
+        It 'Takes a null value' {
+            # Mandatory with no AllowNull, so a hashtable holding a null threw at parameter binding and killed the results view.
+            ConvertTo-DisplayValue -Value $null | Should -Be '(null)'
+        }
+
+        It 'Spells out a short list and counts a long one' {
+            # switch walked the elements, so the join part never ran and the cell read as System.Object[].
+            ConvertTo-DisplayValue -Value @('web', 'prod')      | Should -Be 'web, prod'
+            ConvertTo-DisplayValue -Value @(1, 2, 3, 4, 5, 6, 7) | Should -Be '[7 items]'
+            ConvertTo-DisplayValue -Value @()                   | Should -Be '[empty]'
+        }
+
+        It 'Treats every list type the same, not just a plain array' {
+            # -is [array] was the old test and it is false for both of these.
+            ConvertTo-DisplayValue -Value ([System.Collections.ArrayList]@('web', 'prod'))            | Should -Be 'web, prod'
+            ConvertTo-DisplayValue -Value ([System.Collections.Generic.List[object]]@('web', 'prod')) | Should -Be 'web, prod'
+        }
+
+        It 'Emits one string for a list-valued key' {
+            # The inner switch walked the list too and did not return, so one key produced one pair per element.
+            $result = @(ConvertTo-DisplayValue -Value @{ k = @('a', 'b') })
+            $result.Count | Should -Be 1
+            $result[0]    | Should -Be '@{k=[2 items]}'
+        }
+
+        It 'Names the elements of a list of hashtables' {
+            ConvertTo-DisplayValue -Value @(@{ a = 1 }, @{ b = 2 }) | Should -Be '@{...}, @{...}'
+        }
+
+        It 'Reads a type whose own ToString is its type name through the one PowerShell hangs on it' {
+            # A RequiredServices cell listed System.ServiceProcess.ServiceController once per element, since [string] takes the CLR method and PS's own is a script method.
+            $service = @(Get-Service)[0]
+            [PsUi.ValueKind]::DisplayText($service)  | Should -Be $service.Name
+            ConvertTo-DisplayValue -Value @($service) | Should -Be $service.Name
+        }
+
+        It 'Leaves a value that spells itself where it was' {
+            # The scripted ToString on a date is the culture format, so the fallback only fires when the first answer is the type name.
+            $when = [datetime]'2026-09-22 13:45'
+            [PsUi.ValueKind]::DisplayText($when)  | Should -Be ([System.Management.Automation.LanguagePrimitives]::ConvertTo($when, [string]))
+            [PsUi.ValueKind]::DisplayText(1.5)    | Should -Be '1.5'
+            [PsUi.ValueKind]::DisplayText('web')  | Should -Be 'web'
+            [PsUi.ValueKind]::DisplayText($null)  | Should -Be ''
+        }
+
+        It 'Leaves a type nobody dressed up reading as its own name' {
+            # The fallback asks the object and takes what it gets, which for most of the BCL is the name it already had.
+            $rule = (Get-Acl $env:WINDIR).Access[0]
+            [PsUi.ValueKind]::DisplayText($rule) | Should -Be $rule.GetType().FullName
+        }
+
+        It 'Shows a null inside a hashtable as a PowerShell literal' {
+            ConvertTo-DisplayValue -Value ([ordered]@{ k = $null }) | Should -Be '@{k=$null}'
+        }
     }
 
-    # Figures out the best way to show button action output (text, grid, dict, etc)
+    # One classifier behind the cell text, the clickable flag and the expand popups
+    Describe 'Get-UiValueKind' {
+        It 'Answers List for every list type, not just a plain array' {
+            Get-UiValueKind -Value @('a')                                                   | Should -Be 'List'
+            Get-UiValueKind -Value ([System.Collections.ArrayList]@('a'))                   | Should -Be 'List'
+            Get-UiValueKind -Value ([System.Collections.Generic.List[object]]@('a'))        | Should -Be 'List'
+            Get-UiValueKind -Value ([System.Collections.ObjectModel.ObservableCollection[object]]@('a')) | Should -Be 'List'
+            Get-UiValueKind -Value ([System.Collections.Queue]@(1, 2))                      | Should -Be 'List'
+
+            # A HashSet answers only the generic ICollection[T], so the plain test called it a sequence and its cell read [sequence].
+            Get-UiValueKind -Value ([System.Collections.Generic.HashSet[string]]@('a'))     | Should -Be 'List'
+        }
+
+        It 'Survives a type carrying ICollection[T] twice' {
+            # Looked up by name, GetInterface threw Ambiguous match, and the throw walked out through ConvertTo-DisplayValue
+            # into the one catch around the results build, which lost every tab.
+            { Get-UiValueKind -Value ([PsUiTest.DoubleCollection]::new()) } | Should -Not -Throw
+            Get-UiValueKind -Value ([PsUiTest.DoubleCollection]::new()) | Should -Be 'List'
+            ConvertTo-DisplayValue -Value ([PsUiTest.DoubleCollection]::new()) | Should -Be 'web, prod'
+        }
+
+        It 'Answers Dictionary for an ordered hashtable as well as a plain one' {
+            # A Hashtable is an ICollection as well, so the dictionary test has to come first.
+            Get-UiValueKind -Value @{ x = 1 }          | Should -Be 'Dictionary'
+            Get-UiValueKind -Value ([ordered]@{ x = 1 }) | Should -Be 'Dictionary'
+        }
+
+        It 'Keeps a string out of the list bucket' {
+            # A string enumerates as characters, so it has to be answered before any enumerable test.
+            Get-UiValueKind -Value 'hi' | Should -Be 'Text'
+        }
+
+        It 'Answers Sequence for a reader' {
+            # A real file reader, since it has no Count
+            $reader = [System.IO.File]::ReadLines((Join-Path $PSScriptRoot '_Setup.ps1'))
+            Get-UiValueKind -Value $reader | Should -Be 'Sequence'
+        }
+
+        It 'Answers Null, Bool and Scalar for the rest' {
+            Get-UiValueKind -Value $null                  | Should -Be 'Null'
+            Get-UiValueKind -Value $true                  | Should -Be 'Bool'
+            Get-UiValueKind -Value 42                     | Should -Be 'Scalar'
+            Get-UiValueKind -Value ([datetime]'2026-09-21') | Should -Be 'Scalar'
+        }
+
+        It 'Is the same answer [PsUi.ValueKind] gives, a PSObject included' {
+            # One classifier for both, so a PSObject off a pipeline reads as what it wraps here and in the C# converters alike.
+            Get-UiValueKind -Value ([psobject]@{ a = 1 })       | Should -Be 'Dictionary'
+            Get-UiValueKind -Value ([pscustomobject]@{ a = 1 }) | Should -Be 'Scalar'
+            [PsUi.ValueKind]::Of(@{ a = 1 })                    | Should -Be (Get-UiValueKind -Value @{ a = 1 })
+        }
+    }
+
+    # Figures out whether button action output shows as text or as a grid
     Describe 'Get-OutputPresenter' {
-        It 'Returns Empty for null' {
-            $result = Get-OutputPresenter -Data $null
-            $result.Type | Should -Be 'Empty'
-        }
-
-        It 'Returns Text for strings' {
-            $result = Get-OutputPresenter -Data 'hello world'
-            $result.Type | Should -Be 'Text'
-            $result.Info.Length | Should -Be 11
-        }
-
-        It 'Returns Dictionary for hashtables' {
-            $result = Get-OutputPresenter -Data @{ A = 1; B = 2 }
-            $result.Type | Should -Be 'Dictionary'
-            $result.Info.Count | Should -Be 2
-        }
-
-        It 'Returns Empty for empty arrays' {
-            $result = Get-OutputPresenter -Data @()
-            $result.Type | Should -Be 'Empty'
+        It 'Returns Empty for null and for an empty array' {
+            Get-OutputPresenter -Data $null | Should -Be 'Empty'
+            Get-OutputPresenter -Data @()   | Should -Be 'Empty'
         }
 
         It 'Returns Text for string arrays (multiline output)' {
-            $result = Get-OutputPresenter -Data @('line1', 'line2', 'line3')
-            $result.Type | Should -Be 'Text'
-            $result.Info.LineCount | Should -Be 3
+            Get-OutputPresenter -Data @('line1', 'line2', 'line3') | Should -Be 'Text'
         }
 
         It 'Returns Collection for object arrays' {
@@ -195,23 +308,26 @@ InModuleScope PsUi {
                 [PSCustomObject]@{ Name = 'Alice'; Score = 95 }
                 [PSCustomObject]@{ Name = 'Bob'; Score = 82 }
             )
-            $result = Get-OutputPresenter -Data $data
-            $result.Type | Should -Be 'Collection'
-            $result.Info.Count | Should -Be 2
-            $result.Info.Properties | Should -Contain 'Name'
-            $result.Info.Properties | Should -Contain 'Score'
+            Get-OutputPresenter -Data $data | Should -Be 'Collection'
         }
 
-        It 'Returns SingleObject for a lone PSCustomObject' {
-            $obj    = [PSCustomObject]@{ Host = 'srv01'; Port = 443 }
-            $result = Get-OutputPresenter -Data $obj
-            $result.Type | Should -Be 'SingleObject'
-            $result.Info.Properties | Should -Contain 'Host'
+        It 'Returns Collection for one hashtable in an array' {
+            # Invoke-OnCompleteHandler unwrapped a lone dictionary before this call and got Dictionary back, which built a plain grid with no expandable Value column and no filter box.
+            Get-OutputPresenter -Data @(@{ Name = 'srv01'; Tags = @('web', 'prod') }) | Should -Be 'Collection'
         }
     }
 
     # Filters out empty/null columns so the datagrid isn't full of blank cols
     Describe 'Get-PopulatedProperties' {
+        It 'Counts a hashtable carrying a Count key and an empty HashSet the way the picker does' {
+            # .Count on an ICollection read the key, so @{Count=0} hid its column, and an empty HashSet is no ICollection, so it counted as filled.
+            $items  = @([PSCustomObject]@{ CountKey = @{ Count = 0; a = 1 }; EmptySet = [System.Collections.Generic.HashSet[string]]::new(); Zero = 0 })
+            $result = Get-PopulatedProperties -Items $items -PropertyNames @('CountKey', 'EmptySet', 'Zero')
+            $result.Contains('CountKey') | Should -BeTrue
+            $result.Contains('EmptySet') | Should -BeFalse
+            $result.Contains('Zero')     | Should -BeTrue
+        }
+
         It 'Returns only properties with actual values' {
             $items = @(
                 [PSCustomObject]@{ Name = 'Alice'; Email = ''; Notes = $null }
@@ -265,24 +381,24 @@ InModuleScope PsUi {
 
     }
 
-    Describe 'Get-UiCollectionKind' {
+    Describe 'Get-UiCollectionType' {
         It 'classifies every input form' {
-            Get-UiCollectionKind -Obj ([System.Collections.ObjectModel.ObservableCollection[object]]::new()) | Should -Be 'WpfObservable'
-            Get-UiCollectionKind -Obj ([PsUi.AsyncObservableCollection[object]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
-            Get-UiCollectionKind -Obj ([System.Collections.ArrayList]::new()) | Should -Be 'Other'
-            Get-UiCollectionKind -Obj (@('a', 'b')) | Should -Be 'Other'
-            Get-UiCollectionKind -Obj $null | Should -Be 'Null'
+            Get-UiCollectionType -Obj ([System.Collections.ObjectModel.ObservableCollection[object]]::new()) | Should -Be 'WpfObservable'
+            Get-UiCollectionType -Obj ([PsUi.AsyncObservableCollection[object]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
+            Get-UiCollectionType -Obj ([System.Collections.ArrayList]::new()) | Should -Be 'Other'
+            Get-UiCollectionType -Obj (@('a', 'b')) | Should -Be 'Other'
+            Get-UiCollectionType -Obj $null | Should -Be 'Null'
             $target = @(1)
-            Get-UiCollectionKind -Obj ([ref]$target) | Should -Be 'Ref'
+            Get-UiCollectionType -Obj ([ref]$target) | Should -Be 'Ref'
         }
 
         It 'classifies a typed AsyncObservableCollection, which the old name match missed for subclasses' {
-            Get-UiCollectionKind -Obj ([PsUi.AsyncObservableCollection[string]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
+            Get-UiCollectionType -Obj ([PsUi.AsyncObservableCollection[string]]::new([System.Windows.Threading.Dispatcher]::CurrentDispatcher)) | Should -Be 'PsUiObservable'
         }
 
         It 'classifies GridOwnedCollection as PsUiObservable via inheritance' {
             # GridOwnedCollection derives from AsyncObservableCollection, so the walk stops at the base.
-            Get-UiCollectionKind -Obj ([PsUi.GridOwnedCollection[object]]::new()) | Should -Be 'PsUiObservable'
+            Get-UiCollectionType -Obj ([PsUi.GridOwnedCollection[object]]::new()) | Should -Be 'PsUiObservable'
         }
     }
 }

@@ -187,19 +187,23 @@ function New-UiTab {
     }
     $tabScrollViewer.Content = $contentPanel
 
-    # Nothing to scroll (or at the edge): re-raise the wheel at the outer ScrollViewer. Skip when the cursor sits over a CaptureScrollWheel DataGrid.
+    # Once this one is at its end the wheel goes on to the outer ScrollViewer.
     $tabScrollViewer.Add_PreviewMouseWheel({
         param($sender, $eventArgs)
+        trap { Write-Debug "Tab wheel routing: $_"; continue }
 
-        # Walk up from the hit tested thing to see if a CaptureScrollWheel DataGrid owns it
         $hit = $eventArgs.OriginalSource -as [System.Windows.DependencyObject]
-        while ($hit) {
-            if ($hit -is [System.Windows.Controls.DataGrid] -and
-                $hit.Tag -is [hashtable] -and
-                $hit.Tag.CaptureScrollWheel) {
-                # let WPF native routing scroll the grid
-                return
-            }
+
+        # A dropdown list or the column picker has in its own popup, but the preview wheel still comes through
+        if ($hit -and ![object]::ReferenceEquals(
+                [System.Windows.PresentationSource]::FromDependencyObject($hit),
+                [System.Windows.PresentationSource]::FromDependencyObject($sender))) {
+            return
+        }
+
+        # Set-UiWheelRouting leaves __WheelCapture on a control that keeps the wheel.
+        while ($hit -and ![object]::ReferenceEquals($hit, $sender)) {
+            if ($hit -is [System.Windows.FrameworkElement] -and $hit.Resources.Contains('__WheelCapture')) { return }
             # OriginalSource can be a ContentElement (WPF Run or a Hyperlink), VisualTreeHelper.GetParent throws on those, so hop to the tree until a Visual shows up
             $hit = if ($hit -is [System.Windows.Media.Visual] -or $hit -is [System.Windows.Media.Media3D.Visual3D]) {
                 [System.Windows.Media.VisualTreeHelper]::GetParent($hit)

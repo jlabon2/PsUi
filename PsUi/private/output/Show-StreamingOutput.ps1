@@ -59,7 +59,7 @@ function Show-StreamingOutput {
     $varValues       = $hydrationResult.Variables
     $funcDefs        = $hydrationResult.Functions
     $capturedModules = $hydrationResult.Modules
-    
+
     & $writeDebug "Hydration complete - Vars: $($varValues.Count), Funcs: $($funcDefs.Count), Modules: $($capturedModules.Count)"
 
     if ($debugEnabled -and $varValues.Count -gt 0) {
@@ -100,7 +100,7 @@ function Show-StreamingOutput {
     # HideUntilContent keeps the window invisible until something actually arrives - good for quick async actions where a brief flash of "nothing yet" looks like a bug.
     $showWindowOnData = $HideUntilContent
 
-    # Take ownership of dialog parenting so child Show-Ui* dialogs centre on this window.
+    # Take ownership of dialog parenting so child Show-Ui* dialogs center on this window.
     if ($currentSession) { $currentSession.ActiveDialogParent = $window }
 
     # Catch-all UnhandledException handler. Log and swallow so a stray throw on the UI thread doesn't tear the whole app down.
@@ -181,7 +181,7 @@ function Show-StreamingOutput {
 
     $statusPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
 
-    $statusIndicatorResult = New-StatusIndicator -Colors $colors
+    $statusIndicatorResult = New-StatusIndicator
     $statusIndicator = $statusIndicatorResult.Container
     $statusSpinner   = $statusIndicatorResult.Spinner
     $statusSuccess   = $statusIndicatorResult.Success
@@ -231,15 +231,16 @@ function Show-StreamingOutput {
     }
 
     # Spinner overlay covers the empty tab area until the first record lands.
+    # If the run produces no output this panel stays up for the life of the window, so its background follows the theme
     $loadingPanel = [System.Windows.Controls.Grid]@{
-        Background = ConvertTo-UiBrush $colors.WindowBg
-        Margin     = [System.Windows.Thickness]::new(12)
+        Margin = [System.Windows.Thickness]::new(12)
     }
+    $loadingPanel.SetResourceReference([System.Windows.Controls.Panel]::BackgroundProperty, 'WindowBackgroundBrush')
     $loadingStack = [System.Windows.Controls.StackPanel]@{
         HorizontalAlignment = 'Center'
         VerticalAlignment   = 'Center'
     }
-    $loadingSpinner = New-UiLoadingSpinner -Size 32 -Color $colors.Accent
+    $loadingSpinner = New-UiLoadingSpinner -Size 32 -BrushKey 'AccentBrush'
     $loadingSpinner.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
     [void]$loadingStack.Children.Add($loadingSpinner)
     $loadingLabel = [System.Windows.Controls.TextBlock]@{
@@ -299,7 +300,6 @@ function Show-StreamingOutput {
         $errorsTabState.List      = $result.List
 
         $detailsParams = @{
-            Colors       = $colors
             Container    = $result.Container
             DataGrid     = $result.DataGrid
             ErrorsList   = $result.List
@@ -494,7 +494,7 @@ function Show-StreamingOutput {
         $records = $Executor.DrainHostQueue(100)
         $hadHost = $null -ne $records -and $records.Count -gt 0
 
-        # Both queues empty and the run is done; nothing left to poll.
+        # Both queues are empty and the run is done, so there is no more to poll.
         if (!$hadPipeline -and !$hadHost -and $state.ExecutorDone) {
             $state.HostQueueTimer.Stop()
             return
@@ -602,7 +602,7 @@ function Show-StreamingOutput {
             if ($errorsTabState.Tab.Visibility -eq 'Collapsed') {
                 $errorsTabState.Tab.Visibility = 'Visible'
 
-                # Errors tab grabs focus only when nothing else is showing yet, otherwise the script's output should stay focused
+                # Errors tab grabs focus only when no other tab is showing yet, otherwise the script's output should stay focused
                 if ($consoleTab.Visibility -eq 'Collapsed') { $tabControl.SelectedItem = $errorsTabState.Tab }
             }
 
@@ -644,7 +644,7 @@ function Show-StreamingOutput {
 
         if ($warningsTabState.Tab.Visibility -eq 'Collapsed') {
             $warningsTabState.Tab.Visibility = 'Visible'
-            # Same focus rule as the errors tab - only steal focus if nothing else is showing.
+            # Only steal focus when no other tab is showing, same as the errors tab.
             $errorsTabVisible = $errorsTabState.Tab -and $errorsTabState.Tab.Visibility -ne 'Collapsed'
             if ($consoleTab.Visibility -eq 'Collapsed' -and !$errorsTabVisible) {
                 $tabControl.SelectedItem = $warningsTabState.Tab
@@ -872,7 +872,7 @@ function Show-StreamingOutput {
         Invoke-OnCompleteHandler -Context $onCompleteContext
     }.GetNewClosure())
 
-    # Cancellation flips the spinner to a warning icon and drops a coloured message into the console so it's clear something stopped the script - not just that it returned nothing.
+    # Cancellation flips the spinner to a warning icon and drops a colored message into the console, so it reads as a script someone stopped rather than one that returned no output.
     $Executor.add_OnCancelled({
         & $writeDebug "OnCancelled handler fired"
         $state.ExecutorDone = $true
@@ -918,13 +918,13 @@ function Show-StreamingOutput {
 
         & $writeDebug "Window closing..."
 
-        # Skip the cancel call on a finished script - otherwise the cancelled UI overlays on top of a successful completion, which reads like a fake error.
+        # Skip the cancel call on a finished script, or the canceled UI overlays a successful completion and reads like a fake error.
         if ($Executor.IsRunning) {
             $state.IsCancelled = $true
             $Executor.Cancel()
         }
 
-        # Hand dialog parenting back to whoever had it. Otherwise the next dialog tries to centre on a closed window and ends up off screen.
+        # Hand dialog parenting back to whoever had it. Otherwise the next dialog tries to center on a closed window and ends up off screen.
         if ($capturedSession -and $capturedSession.ActiveDialogParent -eq $window) {  $capturedSession.ActiveDialogParent = $null   }
 
         # DispatcherTimer keeps a strong reference to its tick handler - leak the window without an explicit Stop() and the closure pins everything it captured.
@@ -941,13 +941,13 @@ function Show-StreamingOutput {
         if ($capturedSession -and [object]::ReferenceEquals($capturedSession.ActiveExecutor, $Executor)) { $capturedSession.ActiveExecutor = $null }
     }.GetNewClosure())
 
-    # HideUntilContent path: kick off execution now, only show the window if data shows up.
+    # On the HideUntilContent path execution starts now, and the window only shows once data arrives.
     if ($showWindowOnData) {
         & $writeDebug "HideUntilContent mode - starting execution without showing window"
 
         if ($Capture) {  $Executor.CaptureVariables = [string[]]$Capture }
 
-        # Don't wait for window load - in this mode the window won't load until data shows up.
+        # Don't wait for window load since in this mode the window won't load until data shows up.
         if ($Action) {
             & $writeDebug "Starting ExecuteAsync - Action: $($Action.ToString().Length) chars"
             try {
@@ -966,7 +966,7 @@ function Show-StreamingOutput {
             Start-Sleep -Milliseconds 10
         }
 
-        # Final check. Scripts that finish faster than the 50ms tick leave output sitting in the queues. Peek the counts only, the OnComplete drain owns the queues, and draining them here threw the pipeline items away (a fast object only action revealed an empty window with no Results tab).
+        # Final check. Scripts that finish faster than the 50ms tick leave output sitting in the queues. Peek the counts only, the OnComplete drain owns the queues, and draining them here would throw the pipeline items away (a fast object only action revealed an empty window with no Results tab).
         if (!$state.WindowRevealed) {
             $hasOutput = ($Executor.HostQueueCount -gt 0) -or ($Executor.PipelineQueueCount -gt 0)
 
@@ -983,7 +983,7 @@ function Show-StreamingOutput {
                     $statusSuccess.Visibility = 'Visible'
                     $headerTitle.Text         = "$Title - Complete"
                 }
-                catch { }
+                catch { Write-Debug "Header flip failed: $_" }
 
                 $window.Opacity = 1
                 $window.Show()
@@ -1011,14 +1011,14 @@ function Show-StreamingOutput {
         # Never revealed window still holds its runspace + UI thread. Close it explicitly so they release.
         if (!$state.WindowRevealed) {
             & $writeDebug "No output produced - closing hidden window to prevent leak"
-            # Close can race a window that's already torn down - nothing left to do then.
+            # Close can race a window that's already torn down, so there is no work left.
             try { $window.Close() } catch { }
         }
 
         & $writeDebug "HideUntilContent execution complete"
     }
     else {
-        # Standard path: show the window first, kick off execution once it's loaded.
+        # The standard path shows the window first and starts execution once it has loaded.
         $window.Opacity = 0
 
         # CaptureVariables has to be set before the Add_Loaded closure captures the AsyncExecutor.

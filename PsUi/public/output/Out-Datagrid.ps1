@@ -1,7 +1,7 @@
 function Out-Datagrid {
     <#
     .SYNOPSIS
-        Like Out-GridView, but you can read it and theme it.
+        A sortable and filterable data grid.
     .DESCRIPTION
         Pipe objects in and receive a sortable filterable grid. Add -PassThru and you get the
         selected rows back on OK. Closing the window or clicking Cancel returns nothing.
@@ -190,10 +190,10 @@ function Out-Datagrid {
                 }
                 if ($null -ne $sessionId -and $sessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($sessionId)  }
                 if ($null -ne $priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
-                
+
                 if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
                 else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
-                
+
                 if ($iconFontSnap) {
                     [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
                     $iconFontSnap = $null
@@ -357,7 +357,7 @@ function Out-Datagrid {
 
             $session.CurrentParent = $buttonBar
 
-            # Direct refs for the click actions - Get-UiSession comes back null in WPF click scopes (and isn't resolvable at all on the inline path), which made (Get-UiSession).Window.Close() NullRef at OK time.
+            # Get-UiSession comes back null in WPF click scopes, so the click actions take direct refs.
             $winRef    = $window
             $resultRef = $context.SharedResult
             $gridRef   = $session.GetControl('picked')
@@ -399,10 +399,10 @@ function Out-Datagrid {
             }
             [PsUi.SessionManager]::DisposeSession($sessionId)
             if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
-            
+
             if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
             else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
-            
+
             if ($iconFontSnap) {
                 [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
                 $iconFontSnap = $null
@@ -423,7 +423,7 @@ function Out-Datagrid {
                 $emitted = & $buildAndShow $ctx
             }
             else {
-                # MTA host (typically pwsh.exe console). Window construction requires STA - spawn one. No parent UI thread to block in this case so the original cross thread theme bug doesn't apply.
+                # An MTA host (eg a ps7 console) gets an STA thread spawned for the window. With no parent UI thread to block, the cross thread theme bug doesn't apply.
                 $modulePath = (Get-Module -Name PsUi).Path
                 if (!$modulePath) {
                     Write-Error "Out-Datagrid: PsUi module path not resolvable; can't spawn STA runspace."

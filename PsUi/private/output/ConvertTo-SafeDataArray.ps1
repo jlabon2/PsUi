@@ -58,6 +58,7 @@ function ConvertTo-SafeDataArray {
         catch { $item }
     })
 
-    if ($safeDataArray.Count -gt 0) { return $safeDataArray }
-    return $DataArray
+    # Comma on both returns, since without it a one item result unrolls to a scalar and the presenter handles it differently.
+    if ($safeDataArray.Count -gt 0) { return ,$safeDataArray }
+    return ,$DataArray
 }

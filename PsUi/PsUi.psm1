@@ -36,10 +36,10 @@ if (Test-Path $dllPath) {
         # Load WebView2 dependencies first (they're referenced by PsUi.dll)
         $webView2Core = Join-Path $libPath 'Microsoft.Web.WebView2.Core.dll'
         $webView2Wpf  = Join-Path $libPath 'Microsoft.Web.WebView2.Wpf.dll'
-        
+
         if (Test-Path $webView2Core) { [System.Reflection.Assembly]::LoadFrom($webView2Core) | Out-Null }
         if (Test-Path $webView2Wpf) {  [System.Reflection.Assembly]::LoadFrom($webView2Wpf) | Out-Null }
-        
+
         # Import the main module DLL
         Import-Module $dllPath -Global -DisableNameChecking -Force
         $dllLoaded = $true
@@ -58,7 +58,7 @@ if ($dllLoaded) {
     [PsUi.ModuleContext]::ModulePath = $PSScriptRoot
     try { [PsUi.ThemeEngine]::SetModulePath($PSScriptRoot) }
     catch {  Write-Verbose "ThemeEngine module path not set: $_" }
-    
+
     # Clean up orphaned WebView2 temp folders from previous sessions
     try { [PsUi.WebViewHelper]::CleanupOldUserDataFolders() } catch { }
 }
@@ -131,6 +131,8 @@ $asyncPublicFuncs = @(
     'Clear-UiList'
     'Clear-UiStatus'
     'Get-UiListItems'
+    'Get-UiValue'
+    'Set-UiValue'
     'Add-UiDataGridItem'
     'Clear-UiDataGridItems'
     'Set-UiDataGridItems'

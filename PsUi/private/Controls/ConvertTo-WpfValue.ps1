@@ -1,17 +1,16 @@
 function ConvertTo-WpfValue {
     <#
     .SYNOPSIS
-        Converts a value to a WPF-compatible type. Covers most common scenarios but may
-        need expansion for edge cases.
+        Converts one -WPFProperties value to the type its property needs.
     #>
     param(
         [object]$Value,
         [Type]$TargetType,
         [string]$PropertyName
     )
-    
+
     $bindingFlags = [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::IgnoreCase
-    
+
     # Brush from string
     if ($TargetType -eq [System.Windows.Media.Brush] -and $Value -is [string]) {
         try { return ConvertTo-UiBrush $Value }
@@ -20,7 +19,7 @@ function ConvertTo-WpfValue {
             return $null
         }
     }
-    
+
     # Cursor from string
     if ($TargetType -eq [System.Windows.Input.Cursor] -and $Value -is [string]) {
         $cursorProp = [System.Windows.Input.Cursors].GetProperty($Value, $bindingFlags)
@@ -28,7 +27,7 @@ function ConvertTo-WpfValue {
         Write-Warning "[Set-UiProperties] Cursor '$Value' not found. Skipping."
         return $null
     }
-    
+
     # FontStyle from string
     if ($TargetType -eq [System.Windows.FontStyle] -and $Value -is [string]) {
         $styleProp = [System.Windows.FontStyles].GetProperty($Value, $bindingFlags)
@@ -36,7 +35,7 @@ function ConvertTo-WpfValue {
         Write-Warning "[Set-UiProperties] FontStyle '$Value' not found. Skipping."
         return $null
     }
-    
+
     # FontWeight from string
     if ($TargetType -eq [System.Windows.FontWeight] -and $Value -is [string]) {
         $weightProp = [System.Windows.FontWeights].GetProperty($Value, $bindingFlags)
@@ -44,7 +43,7 @@ function ConvertTo-WpfValue {
         Write-Warning "[Set-UiProperties] FontWeight '$Value' not found. Skipping."
         return $null
     }
-    
+
     # Thickness from number or CSV string
     if ($TargetType -eq [System.Windows.Thickness]) {
         if ($Value -is [int] -or $Value -is [double]) { return [System.Windows.Thickness]::new($Value) }
@@ -67,7 +66,7 @@ function ConvertTo-WpfValue {
             }
         }
     }
-    
+
     # GridLength from number or star notation
     if ($TargetType -eq [System.Windows.GridLength]) {
         if ($Value -is [int] -or $Value -is [double]) { return [System.Windows.GridLength]::new($Value) }
@@ -79,7 +78,7 @@ function ConvertTo-WpfValue {
             catch { return $null }
         }
     }
-    
+
     # Enum from string
     if ($TargetType.IsEnum -and $Value -is [string]) {
         try { return [Enum]::Parse($TargetType, $Value, $true) }
@@ -88,11 +87,20 @@ function ConvertTo-WpfValue {
             return $null
         }
     }
-    
+
     # Generic fallback
     try { return [System.Convert]::ChangeType($Value, $TargetType) }
-    catch {
-        Write-Warning "[Set-UiProperties] Could not convert '$Value' to $($TargetType.Name) for '$PropertyName'. Skipping."
-        return $null
+    catch { Write-Debug "[Set-UiProperties] ChangeType could not make $($TargetType.Name) from '$Value', trying its TypeConverter" }
+
+    # The type's own converter (the one XAML runs (for FontFamily, CornerRadius, Color, Point))
+    if ($Value -is [string]) {
+        $converter = [System.ComponentModel.TypeDescriptor]::GetConverter($TargetType)
+        if ($converter.CanConvertFrom([string])) {
+            try { return $converter.ConvertFromInvariantString($Value) }
+            catch { Write-Debug "[Set-UiProperties] $($TargetType.Name) converter refused '$Value': $_" }
+        }
     }
+
+    Write-Warning "[Set-UiProperties] Could not convert '$Value' to $($TargetType.Name) for '$PropertyName'. Skipping."
+    return $null
 }

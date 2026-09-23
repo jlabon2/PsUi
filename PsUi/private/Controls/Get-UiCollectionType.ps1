@@ -1,11 +1,11 @@
-function Get-UiCollectionKind {
+function Get-UiCollectionType {
     <#
     .SYNOPSIS
-        Classifies a collection handed to -ItemsSource: Null, Ref, PsUiObservable, WpfObservable, or Other.
+        Classifies a collection handed to -ItemsSource as either Null, Ref, PsUiObservable, WpfObservable, or Other.
     #>
     [CmdletBinding()]
     param(
-        # Untyped on purpose. Parameter binding unwraps a [ref] for anything typed, [object] included, so a typed param would classify every [ref] as whatever it points at and the grid's ref promotion would never occur.
+        # Untyped, since binding unwraps a [ref] for anything typed, [object] included, and then the grid's ref promotion never actually runs.
         [Parameter(Position = 0)]
         [AllowNull()]
         $Obj
@@ -14,9 +14,9 @@ function Get-UiCollectionKind {
     if ($null -eq $Obj)                                      { return 'Null' }
     if ($Obj -is [System.Management.Automation.PSReference]) { return 'Ref' }
 
-    # The natural test is $Obj -is [PsUi.AsyncObservableCollection`1], and in 5.1 that throws "Late bound operations cannot be performed on fields with types for which Type.ContainsGenericParameters is true."
-    # So climb BaseType and compare FullName instead, `1 suffix and all.
-    # A wrap is also an ObservableCollection. The climb meets its own type first.
+    # The test you would assume would be $Obj -is [PsUi.AsyncObservableCollection`1], but in 5.1 that throws "Late bound operations cannot be performed on fields with types for which Type.ContainsGenericParameters is true."
+    # So, instead climb BaseType and compare FullName, the `1 suffix and all.
+    # The ascent meets its own type first (a wrap is also an ObservableCollection).
     $type = $Obj.GetType()
     while ($null -ne $type) {
         if ($type.IsGenericType) {

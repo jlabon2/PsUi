@@ -131,7 +131,7 @@ function New-UiTimePicker {
         BorderBrush     = ConvertTo-UiBrush $colors.Border
         BorderThickness = [System.Windows.Thickness]::new(1)
         CornerRadius    = [System.Windows.CornerRadius]::new(3)
-        Height          = 30
+        Height          = 28
         MinWidth        = 140
         Cursor          = [System.Windows.Input.Cursors]::Hand
         Tag             = 'TimePickerBorder'
@@ -139,7 +139,7 @@ function New-UiTimePicker {
     [PsUi.ThemeEngine]::RegisterElement($pickerBorder)
 
     $pickerGrid = [System.Windows.Controls.Grid]::new()
-    
+
     # Define columns: time text and dropdown arrow
     $col1 = [System.Windows.Controls.ColumnDefinition]::new()
     $col1.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
@@ -150,10 +150,10 @@ function New-UiTimePicker {
 
     # Time display text
     $timeDisplayFormat = if ($Use24Hour) { "{0:00}:{1:00}" } else { "{0}:{1:00} {2}" }
-    $initialDisplayText = if ($Use24Hour) { 
-        [string]::Format("{0:00}:{1:00}", $display24Hour, $defaultMinute) 
-    } else { 
-        [string]::Format("{0}:{1:00} {2}", $defaultHour, $defaultMinute, $defaultAmPm) 
+    $initialDisplayText = if ($Use24Hour) {
+        [string]::Format("{0:00}:{1:00}", $display24Hour, $defaultMinute)
+    } else {
+        [string]::Format("{0}:{1:00} {2}", $defaultHour, $defaultMinute, $defaultAmPm)
     }
 
     $timeText = [System.Windows.Controls.TextBlock]@{
@@ -233,7 +233,7 @@ function New-UiTimePicker {
     # Helper to create a scrollable column
     $createColumn = {
         param($items, $selectedValue, $width)
-        
+
         $listBox = [System.Windows.Controls.ListBox]@{
             Width      = $width
             Height     = 120
@@ -256,7 +256,7 @@ function New-UiTimePicker {
                 $listBox.SelectedItem = $listItem
             }
         }
-        
+
         return $listBox
     }
 
@@ -342,7 +342,7 @@ function New-UiTimePicker {
     $pickerBorder.Add_MouseLeftButtonUp({
         param($sender, $eventArgs)
         $state.Popup.IsOpen = $true
-        
+
         # Scroll selected items into view
         if ($state.HourList.SelectedItem) {
             $state.HourList.ScrollIntoView($state.HourList.SelectedItem)
@@ -371,30 +371,30 @@ function New-UiTimePicker {
     # OK button click - update display and close
     $okButton.Add_Click({
         param($sender, $eventArgs)
-        
-        $hour = if ($state.HourList.SelectedItem) { 
-            $state.HourList.SelectedItem.Content 
-        } else { 
+
+        $hour = if ($state.HourList.SelectedItem) {
+            $state.HourList.SelectedItem.Content
+        } else {
             if ($state.Use24Hour) { '00' } else { '12' }
         }
-        $minute = if ($state.MinuteList.SelectedItem) { 
-            $state.MinuteList.SelectedItem.Content 
-        } else { 
-            '00' 
+        $minute = if ($state.MinuteList.SelectedItem) {
+            $state.MinuteList.SelectedItem.Content
+        } else {
+            '00'
         }
-        
+
         if ($state.Use24Hour) {
             $state.TimeText.Text = "${hour}:${minute}"
         }
         else {
-            $ampm = if ($state.AmPmList -and $state.AmPmList.SelectedItem) { 
-                $state.AmPmList.SelectedItem.Content 
-            } else { 
-                'AM' 
+            $ampm = if ($state.AmPmList -and $state.AmPmList.SelectedItem) {
+                $state.AmPmList.SelectedItem.Content
+            } else {
+                'AM'
             }
             $state.TimeText.Text = "${hour}:${minute} ${ampm}"
         }
-        
+
         $state.Popup.IsOpen = $false
     }.GetNewClosure())
 

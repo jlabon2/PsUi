@@ -725,7 +725,7 @@ InModuleScope PsUi {
                 if ($Keys) { $startSplat['RedirectStandardInput'] = $Keys }
                 $proc = Start-Process @startSplat
 
-                # Windows PowerShell hands back a process that has let go of its handle, and ExitCode reads $null forever after. Touching Handle first keeps it.
+                # 5.1 lets go of the process handle without a Handle touch first (ExitCode reads $null forever after).
                 $null   = $proc.Handle
                 $exited = $proc.WaitForExit(30000)
                 if (!$exited) { $proc.Kill(); $null = $proc.WaitForExit(5000) }
@@ -791,7 +791,7 @@ InModuleScope PsUi {
         }
 
         It 'Stands down under every spelling of -NonInteractive and leaves the old error in place' {
-            # A build step that used to fail fast must not park a window. Both hosts answer to a slash, and pwsh also takes a double dash that 5.1 cannot parse at all.
+            # Only 7 parses the double dash.
             $spellings = @('-NonInteractive', '/noninteractive')
             if ($PSVersionTable.PSVersion.Major -ge 6) { $spellings += '--noninteractive' }
             $script = New-ChildScript -Name 'noni.ps1' -Body "try { New-UiLabel -Text 'x' } catch { `$_.Exception.Message }"

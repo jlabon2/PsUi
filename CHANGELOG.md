@@ -1,82 +1,142 @@
-﻿# Changelog
+# Changelog
 
 All changes to PsUi will be documented in this file.
 
 ## [1.1.1] - 2026-09-16
 
-Controls now get built even if `New-UiWindow` isn't called, and `Get-UiSession` is now exported. Functions that standin for the parameters that used to take hashtables, plus the attached property path in `-WPFProperties` finally doing something. Fixes for buttons, charts, links and the tool window, plus threadsafe list improvements. Huge testing overhaul.
+
+Controls now get built even if `New-UiWindow` isn't called, and `Get-UiSession` is now exported. Functions that stand in for the parameters that used to only take hashtables, plus the attached property path in `-WPFProperties` finally working. The Pester suite split into one file per area and stands at 622 tests. Fixes across buttons, charts, links, the tool window and the threadsafe lists, all listed below.
+
+Two critical fixes:
+ 1) Installing from the gallery led to windows with no PsUi commands exported into them
+ 2) Opening any window on 5.1 took about nine seconds
 
 ### Added
 
 #### Implicit window
 
-- **Implicit window**: call `New-UiLabel` with no `New-UiWindow` around it and PsUi reads the script for the run of statements that build controls and puts a window around them, titled after the file. The script ends when the window closes. It refuses when the window would carry a write like `Remove-Item` and run it a second time, so a control sharing a statement with the write, or sitting in a loop that already ran it, gets an error instead of a window. It doesn't build if PowerShell was called with `-NonInteractive`, on a host with no desktop, over PSRemoting, and with `$env:PsUiNoImplicitWindow` set to true. At a prompt where the console adds a paste in one line at a time, the pasted lines that build controls join the same window instead of each opening one, after showing them and prompting. 
+- **Implicit window**: call `New-UiLabel` or any other control building function within a script with no `New-UiWindow` around it and PsUi'll read the script for the run of statements that build controls and puts a window around them. The script ends when the window closes. It refuses when the window would run a write like `Remove-Item` a second time, and it stays off under `-NonInteractive`, on a host with no desktop, over PSRemoting, or with `$env:PsUiNoImplicitWindow` set. Lines pasted at a prompt one at a time join the same window, after a prompt.
 
-#### Standin functions
+#### Stand-in functions
 
-Five parameters took nested hashtables and told you nothing when a key was misspelled: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Neat, and useless the moment you typo a key. Each one now has a function behind it, so keys are real parameters with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. All three forms work everywhere, and the legacy hashtable form is still accepted.
+Five parameters took nested hashtables, and a something like a misspelled would error silently: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Useless the moment you typo a key. Each one now has a function behind it, so the same functionality can now be input with functions and parements with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. Those still work everywhere.
 
-- **New-UiMenuItem**: one `-RowContextMenu` entry. `-Text`, `-Action`, `-Icon`, `-Sync`, and `-Enabled` taking a literal bool or a per row scriptblock. A misspelled `Enabled` used to cast to `$true` and quietly enable everything; a non-bool throws now.
-- **New-UiResultAction**: one entry in the output window's Actions dropdown. `-Confirm` (a format string, `{0}` is the selection count) and `-ObjectType` (show the action only on matching result tabs) were both consumed by the code and documented nowhere until now.
-- **New-UiDialogButton**: one `Show-UiMessageDialog -CustomButtons` entry. `-Label`, `-Value` (defaults to the label, so a forgotten Value no longer returns `$null`), `-Default`, `-Accent`, and `-Cancel`, which answers Esc.
-- **New-UiColumn**: one `-Columns` definition, covering all four column kinds. Toggle without a `-Binding` and Link without a `-Url` or `-Action` throw when you define them, not when the grid builds.
+- **New-UiMenuItem**: one `-RowContextMenu` entry. `-Text`, `-Action`, `-Icon`, `-NoAsync`, and `-Enabled` taking a literal bool or a per row scriptblock. A nonbool `-Enabled` throws now, where a misspelled one used to enable everything.
+- **New-UiResultAction**: one entry in the output window's Actions dropdown. `-Confirm` takes a format string with `{0}` for the selection count, and `-ObjectType` limits the action to matching result tabs. Both existed and neither was documented.
+- **New-UiDialogButton**: one `Show-UiMessageDialog -CustomButtons` entry. `-Value` defaults to the label, so a forgotten one no longer returns `$null`, and `-Cancel` answers Esc.
+- **New-UiColumn**: one `-Columns` definition for all four column kinds. A Toggle with no `-Binding` or a Link with no `-Url` or `-Action` throws at the definition, not when the grid builds.
 - **New-UiHeaderAction**: the `New-UiPanel -HeaderAction` button.
 
 ```powershell
 New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
     New-UiMenuItem 'Restart' -Icon Refresh -Enabled { $_.Status -eq 'Running' } -Action { Restart-Service $_.Name }
-    New-UiMenuItem 'Details' -Sync -Action { Show-UiMessageDialog -Message ($_ | Out-String) }
+    New-UiMenuItem 'Details' -NoAsync -Action { Show-UiMessageDialog -Message ($_ | Out-String) }
 }
 ```
 
 #### Other
 
 - **Get-UiSession** is now exported. It always worked inside a window and now resolves everywhere.
-- **New-UiCredential `-NoPeek`**: the password field grew the same hold to reveal eye button `New-UiInput -Password` has. `-NoPeek` takes it away for tools that run on a screen other people watch.
-- **New-UiTab `-Icon`**: the parameter existed and drew nothing. Tab headers render the glyph next to the text now.
+- **`New-UiDropdown -ItemsSource` and `-NoBind`**: now can use a live list similar to what datagrids already use, so `$choices.Add()` from a background action is added seemlessly. `-Items` is no longer mandatory.
+- **`-ScrollWheel` on `New-UiList`, `New-UiTree` and `New-UiDataGrid`**: three options now for scrollwheel behavior. `Page` scrolls the window, `Edge` scrolls the rows until the end of the control, and `Capture` holds the wheel on the control while you hover it.
+- **`New-UiTree` rightclick menu**: Expand All, Collapse All, Expand, Collapse and Copy, plus Check and Uncheck All Below on a treelist where checkboxes are added. `-NoContextMenu` skips.
+- **New-UiCredential `-NoPeek`**: the password field now has the hold to reveal eye button `New-UiInput -Password` has. `-NoPeek` removes it.
+- **`New-UiChildWindow -SizeToContent`**: take the height off the content instead of `-Height`, capped to the work area of the monitor its parent is on. The window pins that height once it is up, so the grip and the edges still drag. `New-UiTool` uses it for a form that would otherwise leave most of a fixed window empty.
 
 ### Changed
 
-- **`-Sync` is now `-NoAsync` on `New-UiColumn` and `New-UiMenuItem`**: `New-UiButton` already called this exact thing `-NoAsync`, so they were changed to match. The old parameter still functions as an alias.
-- **Pester tests:** now broken from a single monolithic file, into scoped ones. Cleaned up and focused many of the tests to improve accuracy.  
+- **`-Sync` is now `-NoAsync` on `New-UiColumn` and `New-UiMenuItem`**: `New-UiButton` already called it that. `-Sync` still works as an alias.
+- **`New-UiDataGrid` dropped `CaptureScrollWheel` from its `Tag` hashtable**: an internal key, not the parameter. `-CaptureScrollWheel` still works wherever it did and means `-ScrollWheel Capture`. Every control that keeps the wheel carries the same flag.
+- **Tabs now give up the mousewheel**: a `-CaptureScrollWheel` grid was the only one that could actually grab it. The tab honors whatever asks for it now.
+- **The column picker opens straight away on a wide grid**: it used to count filled cells first, so a `Get-Process` result has columns costing an insane ~7ms a row. The counts now populate in the background behind the popup.
+- **The search box prices a property before it reads every row**: it filters against an index built in the background from every property of every row, and on a `Get-Process` result `CommandLine` alone costs 30ms a read on 7. Each property is timed over ten sample rows now and an expensive one stays out of the index, so the box comes active in under two seconds where it used to sit dead for close to 14. What it leaves out it cannot match, so the filter box tooltip names those columns.
+- **Returning one object from a button action lists it as one row**: it used to open a Name/Value listing with no filter box as a hashtable would.
+- **The Error Details panel uses PsUi's own expander**: it was the last raw WPF `Expander` in the module, drawing the stock circled arrow beside PsUi's own. Its detail text reads in the theme's error color now too.
+- **Copy flashes a tick when something reaches the clipboard**: the grid toolbar's Copy button gave no visual indicator is had been run.
+- **Pester tests**: split out of one file into eleven, one per area, at 622 in total, with a good chunk of them tightened up.
 
 ### Fixed
 
-- **Attached properties in `-WPFProperties` never applied**: `'Grid.Row' = 1` looked right but did nothing and warned about nothing. The type lookup used an unqualified name that always came back null. Attached values also convert like normal ones now, so `'DockPanel.Dock' = 'Left'` and `'Grid.Row' = '1'` land instead of silently skipping.
-- **`-WPFProperties @{ Tag = ... }` quietly destroyed most controls**: Tag holds a control's click context or theme key, and only three of them defended against messing with it. It is refused with a warning on a control that already holds one.
-- **`New-UiWindow -WPFProperties` did less than every control's**: strings never converted (`Cursor = 'Hand'` threw into a swallowed debug log), attached properties were skipped without a word, and `Tag` would overwrite the window chrome. It runs through the same path as the controls now, and `Tag` is reserved and stripped with a warning.
-- **Charts with a custom `-LabelProperty` came up empty, and `Update-UiChart` showed No data on one**: the data got converted twice on both paths, and the second pass dropped every row. Grouped objects with `-LabelProperty Name -ValueProperty Count` chart correctly now.
-- **`New-UiChart -Width` and `-Height` did nothing**: neither reached the chart, and the ratio step read its input off the value supplied. 
-- **A single point chart crashed or drew nothing**: one point arrives as a scalar with no count, so the loop that draws never actually started. Bar, line, pie and the legend. A pie of one slice then drew nothing on either edition, because a whole turn puts the arc's end back on its start and WPF renders that as empty. One slice is a beautiful circle now.
-- **`New-UiButton -Parameters` went in as one argument on a sync click**: the whole table landed on the first positional parameter instead of splatting. It splats now.
-- **`New-UiButton -Width` under 16 crashed, and `-Height` alone never sharnk**: WPF throws on a negative inner size, and the height protections only ran when a width was addded.
-- **A control inside a card, tab or expander could vanish without a word**: six controls assumed a parent that takes a list of children. All of them use the shared placement rule now, and a parent that doesn't hold anything will put up a warn.
+- **Output that landed before a terminating error went with it**: 1.1.0 fixed this for a `Write-Error`, which routed the run to OnError and dropped the output. This is the other half of it. `Invoke()` hands its output back only once the pipeline completes, so a terminating error threw everything produced before it away. Output is kept as it lands now, and the Results tab comes up beside the Errors tab.
+- **A single object in an array column displayed as its type name**: a column takes its kind from the first row, so a property holding a list on one row and a lone object on the next fell through to WPF, which spells an object with its .NET `ToString`. That cell reads by name.
+- **A services grid listed `System.ServiceProcess.ServiceController` for every dependency**: PowerShell hangs its own `ToString` on a few types, and every cell, popup, tooltip, Copy, Export and the search index took the .NET one. Where the .NET answer is the type's own full name, PowerShell's is used instead, so a search for `RpcSs` finds its row. A date or a number is untouched.
+- **Focusing a text box shifted its text**: the border animated from 1 to 2 and took that pixel off the content box on every side, so every line jumped inward as the box took focus. The border holds at 1 now and focus reads by color, with hover on a shade of its own so the two still differ.
+- **The taskbar icon insconsistently updated when changing themes during runtime**: the shell caches the icon when it builds the button, so a switch rebuilds the button.
+- **`New-UiTab -Icon` drew no glyph**: the parameter existed and never reached the header. It sits next to the text in the header.
+- **New-UiTool left its header description section when a command only has synopsis**: the synopsis will be used now if theres no description.
+- **`New-UiTool` always opened at 800x600 whatever it held**: the height is baed off the form now unless you pass `-Height`.
+- **Every window came up empty when PsUi was installed from the gallery**: a window builds its content in a runspace of its own, and that runspace imported PsUi by folder. A gallery install puts the folder at `PsUi\1.1.1\`, so it'd attempt to load `1.1.1.psd1` and came back with no module, leaving the window without a single PsUi command. It imports the manifest by path now.
+- **Switching themes put the column headers back over an grid's empty message**: the empty state resyncs after the restyle.
+- **Every window took about nine seconds to open on 5.1**: a `Get-Command` with no `-ListImported` walked every module on `PSModulePath` only for the filter to drop the lot. That call ran seven seconds on 5.1 and takes about a millisecond now. It cost 31ms on 7, which is why nobody there noticed.
+- **`New-UiDropdown -Default` missed a choice that was itself a list**: the match filtered against it instead of comparing, it matches what the box displays.
+- **Every theme switch added additional hover handlers to every menu item**: one per item now.
+- **Every theme switch added additional mousewheel handler to every list**: one per list now.
+- **The wheel moved no rows over a `-Fill` grid**: the default hands every wheel event to the page, and a `-Fill` grid leaves the page no scroll of its own to do it with. A `-Fill` grid starts on `Edge` now, so the wheel moves its own rows until they run out, and passing `-ScrollWheel` overrides that.
+- **Dropdown lists wouldn't scroll inside a tab**: the tab sent the wheel out on its way to the popup. The tab leaves the popup alone.
+- **Multiline `New-UiTextArea` ate the wheel in a tab without a scroll of its own**: it never carried the flag the tab reads. It carries it.
+- **Importing PsUi deleted another PowerShell's live WebView2 profile**: the cleanup sweep skipped only its own process. It checks the owner first.
+- **`Set-UiValue` and `Get-UiValue` were unreachable from grid cell and menu actions**: a curated list decides which public functions get injected into an async runspace, and neither was on it. The entry below is a different bug in the same two functions, about what they did once they could be reached.
+- **Returning a folder or a service showed every PowerShell added column blank**: the async path dropped the PSObject carrying `Mode` and the `PS*` properties. The grid keeps it.
+- **The results filter died after a search that matched no rows**: an empty result reads as false in PowerShell, so the guard treated every input after it as empty too.
+- **Filtering a results grid down to zero rows left the header columns**: it gets the empty state message now, reading `No items matched 'x'`.
+- **Result action status text vanished on filter or sort**: it was written onto the cell. It lives on the row.
+- **Lists and hashtables displayed inconsistently in a results grid**: every list type reads and clicks the same now, and Copy and Export reach the Value column.
+- **Returning one hashtable built a simplier grid than returning several**: one hashtable gets the full grid.
+- **Returning a hashtable with a null value lost the whole results view**: it reads `(null)`.
+- **A tooltip drained a forward only stream just by showing a row**: it only reads values it can count.
+- **Generic results got an unreadable tab header**: `Dictionary<String,Object>` now, not a PublicKeyToken.
+- **The column picker miscounted an empty `HashSet` and a hashtable with a `Count` key**: the same misread hid a column behind the Has Data filter and counted an empty `HashSet` as filled. All of it goes through the classifier.
+- **The column picker's counts never appeared up on a wide grid**: above 40,000 cells the scan went to a runspace that never came back. One scan covers every size.
+- **A hashtable cell in an object grid read `[2 items]`**: `[2 keys]`, so the cell and its tooltip agree.
+- **The column picker never counted the first column**: it is locked against hiding, and the count pass skipped it along with the toggle.
+- **Attached properties in `-WPFProperties` never applied**: `'Grid.Row' = 1` and similar apply and convert like normal ones.
+- **`-WPFProperties @{ Tag = ... }` quietly destroyed most controls**: `Tag` holds a control's click context or theme key. It refuses with a warning on a control that already holds one.
+- **`New-UiWindow -WPFProperties` did less than every control's use of the parameter**: strings never converted and attached properties were skipped silently. It runs through `Set-UiProperties` like every control, and `Tag` is reserved.
+- **Charts with a custom `-LabelProperty` came up empty, and `Update-UiChart` showed 'No data' on one**: the data got converted twice and the second conversion nuked every row.
+- **`New-UiChart -Width` and `-Height` were ignored**: neither reached the chart.
+- **Single point charts crashed or came up blank**: one point arrives as a scalar with no count, so the draw loop never ran. A one slice pie was blank too. It draws as a circle.
+- **`New-UiButton -Width` under 16 crashed, and `-Height` alone never shrank**: WPF throws on a negative inner size, and the height guard only ran when a width was given.
+- **`New-UiButton -Parameters` went in as one argument on a sync click**: it splats now.
+- **Controls inside cards, tabs and expanders could vanish without a word**: six controls assumed a parent that takes a list of children. All use the shared placement rule now, and a parent that holds none warns.
 - **New-UiGrid**: `-FormLayout` unwrapping fired on grids that never asked for it, and a row definition shorter than the child count pushed children into row 0.
-- **`-Columns @{ Width = 'Auto' }`** warned about an unparseable width and fell back to a default. Auto is a documented spelling and now behaves like one.
-- **`Add-UiListItem` from a background action threw on every `-Items` list**: only a list that started empty got the threadsafe collection and everything else was a plain ol' ObservableCollection that WPF refuses to change from another thread. All three input paths land in the collection the grid uses now, and `-ItemsSource` now adjust so your variable is repointed at the wrap so `$list.Add()` keeps landing, a warning fires when nothing could be repointed, and `-NoBind` opts out. `-Items @('')` also seeds the empty string instead of silently dropping it. Goal here is effective abstraction of all the common PS arrays/lists to easily use as a threadsafe, observable collection.
-- **`New-UiDataGrid -NoBind` did not cover a `[ref]`**: it was repointed at the wrap still.
-- **Typing in a list's filter box disconnected the list from its collection**: each keystroke swapped in a copy, so every later add went to the registered collection and never showed. The filter drives the view now and ItemsSource never changes hands.
-- **`Remove-UiListItem` with no `-Item` threw from async actions**: it read the selection off the raw ListBox, which belongs to another thread. It kindly asks the proxy now.
-- **A grid column's `Choices` came up blank against an enum property**: passed strings never matched the enum sitting behind SelectedValue, so every cell that wasn't midedit rendered empty. Strings parse into the property's own enum type now, and subsets survive instead of being replaced by the full set.
-- **An async Cancel button cancels itself**: `Stop-UiAsync` stops the newest running action, and from inside an async button that is the button. Documented, never enforced. `New-UiButton` warns at build time now; an explicit `-NoAsync:$false` is taken as deliberate and stays quiet.
-- **`Stop-UiAsync` after a finished run had nothing real to stop**: every run parked its AsyncExecutor in the session until the window closed, disposed or not. Every ending releases it now: complete, error, cancel, the output window path included.
+- **`-Columns @{ Width = 'Auto' }` warned about an unparseable width**: Auto was always a documented spelling, and behaves like one.
+- **`Add-UiListItem` from a background action threw on every `-Items` list**: only a list that started empty got a threadsafe collection. Every input path lands in the one the control uses now, and `-ItemsSource` points your variable at it so `$list.Add()` keeps working. It warns when it cannot, `-NoBind` opts out, and `-Items @('')` keeps the empty string.
+- **`New-UiDataGrid -NoBind` did not cover a `[ref]`**: it was repointed at the threadsafe collection regardless.
+- **Typing in a list's filter box disconnected the list from its collection**: each keystroke swapped in a copy. The filter drives the view now and ItemsSource never changes hands.
+- **`Remove-UiListItem` with no `-Item` threw from async actions**: it read the selection off the raw ListBox, which belongs to another thread. It asks the proxy.
+- **A grid column's `Choices` came up blank against an enum property**: passed strings never matched the enum behind SelectedValue. Strings parse into the enum now, and subsets survive.
+- **An async Cancel button cancels itself**: `Stop-UiAsync` stops the newest running action, and from inside an async button that is the button. `New-UiButton` warns at build time now, and an explicit `-NoAsync:$false` stays quiet.
+- **`Stop-UiAsync` after a finished run had no live run to stop**: every run parked its AsyncExecutor in the session until the window closed. Every ending releases it.
 - **`New-UiLink` ran twice on a double click and went dead after a timeout**: the second run replaced the first as the one `Stop-UiAsync` could reach, and a run that never got a thread left its busy flag set.
-- **A same named variable in scope beat the session store inside an action**: `SetCapturedVariable('lastRun', ...)` lost to any `$lastRun` that existed when the button was built. The store wins at click time. `-Variables` and `-LinkedVariables` still beat both though.
-- **`Set-UiValue` and `Get-UiValue` did nothing from most async actions**: both looked the session up in a thread local that only the pooled runspace sets. Anything that can prompt gets a runspace of its own instead, which is every button that isn't using `-NoOutput -NoInteractive`, so the ordinary case warned "No active UI session found" and carried on. Both resolve the session the way the rest of the module does now.
-- **The hydration `-Debug` warning claimed your objects get serialized**: the same reference crosses; what it loses is the thread that opened it. The message is now more accurate.
-- **A tool opened from a button took over the outer tool's command**: `New-UiTool` put its definition on the live session before it knew a child window was coming.
-- **`New-UiTool` with no `-Theme` opened Light and reset the process theme**: it resolves `Auto` from the Windows setting the way `New-UiWindow` does.
-- **Dialogs opened before any window came up unstyled**: a `Show-UiMessageDialog` on its own, or a `Show-UiCredentialDialog` you call before your first `New-UiWindow`, drew its text and password boxes with no border and no background. The control styles only ever loaded into a WPF Application, and no dialog created one. A dialog with no Application now themes itself off its own window, which also leaves `Application.Current` free for the next real window to claim on its own thread.
-- **Closing a modal child window could throw**: the title bar X set DialogResult and then called Close(), and the second close landed on a window already tearing down.
-- **`New-UiProgress -Severity` gave every bar the accent blue**: Success, Warning, and Error all came out the same color. The severity brush went into the bar's Tag, and the theme pass that reads Tags for everything else had the ProgressBar branch hardcoded to the accent. The tint follows the severity now.
-- **A throwing callback took the window with it**: an error in a `New-UiWebView` navigation handler escaped to WPF with a stack trace, and so did one in a panel header action or a child window's `-OnClosed`. Each warns and carries on.
-- **New-UiWebView navigation callbacks got nulls**: `-OnNavigating` and such fired with empty values because a nested closure captured the wrong scope.
-- **`New-UiWebView -OnNavigating` cancelled on the wrong returns**: a handler that logged before returning `$false` did not cancel, and one returning `0` or `'false'` did. Only a real `$false` cancels.
-- **A window with a `New-UiWebView` control added cut off the bottom of the window**: the view raised the window's minimum height by how far down the tab it sat, and down a longish tab that is more than the monitor is tall. The window then laid itself out taller than its own frame, so the last few hundred pixels of every tab sat below the screen edge where no scroll offset reaches. Maximizing made it plain, and once one view had loaded every tab carried it. Dragging such a window short did the same thing from the other end and took the status bar off the bottom with it. The view asks the window for nothing now.
-- **A `New-UiWebView` smeared itself over the titlebar when you scrolled past it**: a WebView2 draws into its own child window and takes no notice of WPF clipping. It sits in a fixed slot now and trims to whatever part of that slot is on screen, so it stays readable on the way past instead of drawing over its neighbours. One thing to know if you pass `-WPFProperties`: the keys that place a control in its parent (`Margin`, the alignments, `Visibility`, the widths, attached values like `'Grid.Row'`) now apply to that slot rather than to the browser, and `Height` / `MinHeight` / `MaxHeight` are refused with a warning, since `-Height` and `-MinHeight` are what size a view. Everything else still reaches the browser.
-- **A `New-UiWebView` printed an init error every time you left its tab and came back**: WPF raises Loaded again each time a tab shows its content, and the second pass built a fresh CoreWebView2Environment for a control that already had one. The browser carried on working and complained anyway, once per visit. Setup runs once per view now, which also stops the scroll clip hanging another handler off every ancestor on each switch. `New-UiWebView` is sort of... rough, but it's niche, and in a workable state. 
-- **`-NoInteractive` help promised an error that doesn't throw**: the text said interactive input fails. `Read-Host` hands back an empty string, `-AsSecureString` an empty one of those, `Get-Credential` nothing at all, and a choice prompt its default answer. The help describes that accurately now.
-- **An error inside a card, tab or panel named the line below the one it happened on**: the count for a nested block started at the `New-UiWindow` call rather than at the block, and the window's preamble took a line of its own on top of that.
+- **Variables in scope beat the session store when the names matched**: `SetCapturedVariable('lastRun', ...)` lost to any `$lastRun` that existed when the button was built. The store wins at click time, but items in `-Variables` and `-LinkedVariables` still beat both.
+- **`Set-UiValue` and `Get-UiValue` only warned from most async actions**: both looked the session up in a thread local only the pooled runspace sets, and most buttons get a runspace of their own. Both resolve it through `Get-UiSession`.
+- **The hydration `-Debug` warning claimed your objects get serialized**: the same reference crosses. The message is now accurate.
+- **Opening a tool from a button took over the outer tool's command**: `New-UiTool` put its definition on the live session before it knew a child window was coming.
+- **`New-UiTool` with no `-Theme` opened Light and reset the process theme**: it resolves `Auto` from the Windows setting, like `New-UiWindow`.
+- **Dialogs opened before any window came up unstyled**: the control styles only ever loaded into a WPF Application and no dialog created one. A dialog without an Application themes itself off its own window.
+- **Closing a modal child window could throw**: the title bar X set DialogResult and then called Close() on a window already tearing down.
+- **`New-UiProgress -Severity` gave bars the blue accent**: the theme pass had the ProgressBar branch hardcoded to the accent. The tint follows the severity now.
+- **A throwing callback took the window with it**: an error in a `New-UiWebView` navigation handler escaped to WPF, and so did one in a panel header action or a child window's `-OnClosed`. Each warns and carries on.
+- **New-UiWebView navigation callbacks got nulls**: a nested closure captured the wrong scope.
+- **`New-UiWebView -OnNavigating` canceled on the wrong returns**: only a real `$false` cancels now.
+- **`New-UiWebView` cut off the bottom of every tab in its window**: the view raised the window's minimum height by how far down its tab it sat, so the window laid itself out taller than the screen. The view asks the window for no size.
+- **`New-UiWebView` smeared itself over the titlebar when you scrolled past it**: a WebView2 draws into its own child window and ignores WPF clipping. It sits in a fixed slot now and trims to the part of that slot on screen. With `-WPFProperties`, the placement keys (`Margin`, the alignments, `Visibility`, the widths, attached values) land on that slot, and `Height`, `MinHeight` and `MaxHeight` are refused in favor of `-Height` and `-MinHeight`.
+- **`New-UiWebView` printed an init error every time you left its tab and came back**: Loaded fires again on every tab show, and the second pass built a fresh environment for a control that already had one. Setup runs once per view now. `New-UiWebView` is still rough, but niche and workable.
+- **`-NoInteractive` help promised an error that never throws**: `Read-Host` hands back an empty string, `-AsSecureString` an empty one of those, `Get-Credential` returns no object, and a choice prompt takes its default. The help now indicates this.
+- **Errors inside nested blocks named the line below the one they happened on**: the count for a nested block started at the `New-UiWindow` call instead of at the block.
+- **Results that opened on a hashtable or text tab could not be filtered**: the box sat disabled at `Indexing...` until you visited another tab, and a hashtable only result had none.
+- **`-WPFProperties` ignored a string for `FontFamily`**: same for a `CornerRadius` or a `Color`, each thrown into a swallowed debug log. It asks the type's own converter now, the one XAML runs.
+- **Cell popups with wide lines scrolled sideways and lost the copy button off the right edge**: both popups now wrap.
+- **`[ref]` to a variable that can't hold a list killed the window**: it warns and builds now.
+- **`-ItemsSource` said "Cannot find an overload" when handed something that is not a list**: it now names the parameter and the type.
+- **The output window's spinner overlay kept the colors of the theme it opened under**: the panel and the spinner read the theme.
+- **Clicking a cell holding an empty hashtable opened a popup with a dead copy button**: it no longer opens to display no items.
+- **Searches left on a text results tab stayed highlighted after the filter box emptied**: going back to a text tab clears them.
+- **The dictionary results tab searched and exported its display strings**: a five item list indexed and exported as `[5 items]`. Both hold the values.
+- **`New-UiDataGrid` search read hashtables as their type name**: its index goes through `ValueKind`, like the results grid, and Copy Cell writes what a row copy writes, comma joined.
+- **The array popup listed nested hashtables and lists by type name**: each line uses the cell's own text, and both popup headers use the tooltip's count.
+- **The search index did not evaluate the last rows**: 40 of 347 went unsampled. The sample runs first to last.
+- **`Build-PsUi.ps1` wiped `lib/` before it built, so one locked file left the module half deleted**: each file is replaced on its own now, and a held one keeps its old copy and is named at the end.
 
 ## [1.1.0] - 2026-08-08
 
@@ -166,7 +226,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 - **`-WhenEnabled` / `-Checked`**: per-item scriptblocks. `WhenEnabled` returning `$false` dims and disables the box (cascade skips it); `Checked` returning `$true` pre-checks it.
 - **`-NoCascade`**: independent boxes, for when parent and leaf checks mean different things.
 - **Hydration**: `$tree` in a button action is the checked source items - each once, in tree order. Parent-only mode returns the leaves under checked branches, and pathmode standin parents never leak into the result.
-- **Selection foreground**: label text follows the selection color while the row is selected. Custom-header items didn't get that on their own; they do now.
+- **Selection foreground**: label text follows the selection color while the row is selected. Custom-header items get it too.
 
 #### `-Fill`
 
@@ -200,11 +260,11 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 - **Cross-thread adds could throw**: a background loop adding to a list or grid the window is showing could die with `Cannot change ObservableCollection during a CollectionChanged event`. Mutations queue onto the window's thread in order now. Hammer away.
 - **Second window, dead collection**: a collection made in a second window pinned itself to the first window's thread - adds went through, nothing showed. It homes to its own window now, and creating one on a background thread now throws up front instead of silently dropping everything.
-- **Second window, dead callbacks**: async completions in a second window queued onto the first window's exited thread and vanished, while the action itself ran fine. A context menu edit changed the row and the cell kept its old text. Callbacks land on their own window now.
+- **Second window, dead callbacks**: async completions in a second window queued onto the first window's exited thread and vanished, while the action itself ran fine. A context menu edit changed the row and the cell kept its old text. Callbacks land on their own window.
 - **Actions that edit a row**: search and filter kept matching the old values after a rightclick action or cell toggle changed them. They see the new ones now.
 - **`-DefaultSort` on an empty start**: a grid that began empty lost its sort the moment the first rows landed. It sticks now.
-- **Toggle ticks landed on the copy**: with `-Items`, a cell toggle wrote to the grid's snapshot, so a Save button reading your objects saw nothing changed. Ticks land on the original now.
-- **Row colors went stale**: `-RowBackground` brushes didn't keep up with list changes. They do now.
+- **Toggle ticks landed on the copy**: with `-Items`, a cell toggle wrote to the grid's snapshot, so a Save button reading your objects saw nothing changed. Ticks land on the original.
+- **Row colors went stale**: `-RowBackground` brushes didn't keep up with list changes. They keep up.
 - **Piped scalars and falsy rows**: piping `0`, `''`, or `$false` to `Out-Datagrid` dropped those rows, and piping plain strings or numbers drew a ghost grid (strings got a lone `Length` column). Falsy rows stay now, and scalars get a `Value` column. Copy and export emit the values, not character counts.
 - **Array cells in copy/export**: Copy Rows and Export CSV wrote `System.Object[]` for array cells. They come out as their joined contents now, ie (`a, b, c`).
 - **Resizing `'*'` columns could lock up**: columns that share the leftover width stop taking resize drags once there's none left to give: no error, the drag just stops existing. `New-UiDataGrid` unlocks that, and a click that never drags doesn't pin the width.
@@ -215,8 +275,8 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 #### Theme System
 
-- **Update-SingleControlTheme**: theme switches silently skipped some text labels and borders, and nothing ever reported it. They recolor with everything else now.
-- **Out-TextEditor / Out-CSVDataGrid theme inheritance**: launched from paths with no theme context, both fell back to `Light` and re-themed the whole process - flipping the parent window's theme out from under you. Both inherit the active theme now.
+- **Update-SingleControlTheme**: theme switches silently skipped some text labels and borders, and nothing ever reported it. They recolor with everything else.
+- **Out-TextEditor / Out-CSVDataGrid theme inheritance**: launched from paths with no theme context, both fell back to `Light` and re-themed the whole process - flipping the parent window's theme out from under you. Both inherit the active theme.
 
 #### Out-TextEditor
 
@@ -234,7 +294,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 
 - **One error ate the run**: a single `Write-Error` midrun routed the whole run to OnError and threw away the pipeline output that worked. OnError still fires; OnComplete gets the results too.
 - **Copy/export leaked internals**: every copy path - toolbar Copy and Export, rightclick copy, CSV export, Ctrl+C - wrote the raw rows, so the grid's internal search properties rode along as extra columns. One shared path strips them now, on `Out-Datagrid` and the output window alike.
-- **Link color stuck after theme switch**: expandable-cell links froze at their build-time color, so Dark then Light meant white on white. They follow the theme live now.
+- **Link color stuck after theme switch**: expandable-cell links froze at their build-time color, so Dark then Light meant white on white. They follow the theme live.
 - **ConvertTo-UiBrush**: the brush cache could be null on the first call from a button action, so color lookups there threw. It initializes itself now, whichever copy of the function ends up running.
 - **New-UiButton**: `-WPFProperties Tag` is rejected with a warning - a custom Tag silently disarmed the click handler, and every click died in a cryptic "expression after '&'" dialog. Swapping the Tag after construction gets the same warning.
 - **New-UiTree**: a null element in `-Items` is dropped instead of crashing the window build.
@@ -245,7 +305,7 @@ Pick Segoe MDL2 Assets (Win10) or Segoe Fluent Icons (Win11), per session or per
 - **Nested progress in `-NoWait` output windows**: child activity bars (`Write-Progress -Id` above 0) never rendered - the bar builder read its colors from a scope that was already gone, and every tick logged a "Cannot bind argument to parameter 'Color'" error. Colors are captured up front now.
 - **New-UiLabel / New-UiToggle alignment**: labels center vertically now (was Top), and toggles sit level with labeled controls in horizontal panels. Stacked layouts shift slightly.
 - **ControlValueExtractor**: tree, grid, and list snapshots stopped carrying a live control reference that could deadlock background threads. Nothing read it - leftover from an earlier design.
-- **New-UiChildWindow**: opening a child window without a parent threw `The term 'Set-UIResources' is not recognized` - a click handler couldn't find a module-private function by name. Present since the initial release; resolved ahead of time now.
+- **New-UiChildWindow**: opening a child window without a parent threw `The term 'Set-UIResources' is not recognized` - a click handler couldn't find a module-private function by name. Present since the initial release, resolved ahead of time.
 - **Start-PSUiDemo**: the "Multi-Tab DataSet" card called a function that has never existed in source (aspirational demo code from the initial release). Replaced with a "View Drives" card that runs.
 - **Invoke-OnUIThread**: runs its work directly when there's no window to hand it to (tests, mostly), and surfaces failures it used to swallow.
 - **Show-UiConfirmDialog**: long button labels grow instead of clipping at the edges.

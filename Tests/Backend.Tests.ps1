@@ -1,4 +1,4 @@
-﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 
 # The C# under the DSL. Converters, the script builder, the proxy and hydration.
 . (Join-Path $PSScriptRoot '_Setup.ps1')
@@ -114,23 +114,12 @@ Describe 'ArrayDisplayConverter' {
         $script:converter.Convert(@(1, 2, 3, 4, 5), [string], $null, $null) | Should -Be '[5 items]'
     }
 
-    It 'Previews items for tooltips' {
-        $preview = [PsUi.ArrayDisplayConverter]::GetTooltipPreview(@('alpha', 'bravo'), 10)
-        $preview | Should -Match 'alpha'
-        $preview | Should -Match 'bravo'
-    }
-
-    It 'Truncates long tooltip items at 50 chars' {
-        $longString = 'A' * 60
-        $preview    = [PsUi.ArrayDisplayConverter]::GetTooltipPreview(@($longString), 10)
-        $preview | Should -Match '\.\.\.'
-        $preview.Length | Should -BeLessThan 60
-    }
-
-    It 'Shows overflow count in tooltip' {
-        $items   = 1..20
-        $preview = [PsUi.ArrayDisplayConverter]::GetTooltipPreview($items, 5)
-        $preview | Should -Match 'and 15 more'
+    It 'Reads a lone service by name and leaves every other scalar to WPF' {
+        $service = @(Get-Service)[0]
+        $when    = [datetime]'2026-09-22 13:45:00'
+        $script:converter.Convert($service, [string], $null, $null) | Should -Be $service.Name
+        [object]::ReferenceEquals($script:converter.Convert($when, [string], $null, $null), $when) | Should -BeTrue
+        $script:converter.Convert($true, [string], $null, $null) | Should -Be $true
     }
 }
 
@@ -162,6 +151,89 @@ Describe 'ExpandableValueTooltipConverter' {
     It 'Returns null for null' {
         $result = $script:converter.Convert($null, [string], $null, $null)
         $result | Should -BeNullOrEmpty
+    }
+
+    It 'Gives an empty list no tooltip' {
+        $script:converter.Convert(@(), [string], $null, $null) | Should -BeNullOrEmpty
+        $script:converter.Convert([System.Collections.ArrayList]::new(), [string], $null, $null) | Should -BeNullOrEmpty
+    }
+
+    It 'Gives an empty hashtable no tooltip' {
+        $script:converter.Convert(@{}, [string], $null, $null) | Should -BeNullOrEmpty
+    }
+
+    It 'Previews a HashSet, which answers only the generic interface' {
+        $set = [System.Collections.Generic.HashSet[string]]::new()
+        [void]$set.Add('web')
+        [void]$set.Add('prod')
+
+        $result = $script:converter.Convert($set, [string], $null, $null)
+        $result | Should -Match 'Click to expand \(2 items\)'
+        $result | Should -Match 'web'
+    }
+
+    It 'Survives a type carrying ICollection[T] twice' {
+        $double = [PsUiTest.DoubleCollection]::new()
+        { $script:converter.Convert($double, [string], $null, $null) } | Should -Not -Throw
+        $script:converter.Convert($double, [string], $null, $null) | Should -Match 'Click to expand \(2 items\)'
+
+        { [PsUi.ArrayDisplayConverter]::new().Convert($double, [string], $null, $null) } | Should -Not -Throw
+        [PsUi.ArrayDisplayConverter]::new().Convert($double, [string], $null, $null) | Should -Be '[2 items]'
+    }
+
+    It 'Leaves a forward only sequence unread' {
+        [PsUiTest.CountingSequence]::Passes = 0
+        $sequence = [PsUiTest.CountingSequence]::new()
+
+        # It says what the cell is rather than offering a click the handler ignores
+        $script:converter.Convert($sequence, [string], $null, $null) | Should -Not -Match 'Click to expand'
+        [PsUiTest.CountingSequence]::Passes | Should -Be 0
+    }
+
+    It 'Counts keys, singular included' {
+        $script:converter.Convert(@{ a = 1 }, [string], $null, $null) | Should -Match 'Click to expand \(1 key\)'
+        $script:converter.Convert(@('x'), [string], $null, $null)   | Should -Match 'Click to expand \(1 item\)'
+    }
+}
+
+Describe 'ValueKind, shared by both languages' {
+    It 'Names a hashtable cell by its keys' {
+        $cell = [PsUi.ArrayDisplayConverter]::new()
+        $cell.Convert(@{ a = 1; b = 2 }, [string], $null, $null) | Should -Be '[2 keys]'
+        $cell.Convert(@{ a = 1 }, [string], $null, $null)        | Should -Be '[1 key]'
+        $cell.Convert(@{}, [string], $null, $null)                | Should -Be '[empty]'
+    }
+
+    It 'Only a filled list or hashtable earns the link look' {
+        $link = [PsUi.IsExpandableConverter]::new()
+        $set  = [System.Collections.Generic.HashSet[string]]::new()
+        [void]$set.Add('web')
+
+        $link.Convert($set, [bool], $null, $null)                                | Should -BeTrue
+        $link.Convert(@{ a = 1 }, [bool], $null, $null)                          | Should -BeTrue
+        $link.Convert(@(), [bool], $null, $null)                                 | Should -BeFalse
+        $link.Convert(@{}, [bool], $null, $null)                                 | Should -BeFalse
+        $link.Convert('text', [bool], $null, $null)                              | Should -BeFalse
+        $link.Convert($null, [bool], $null, $null)                               | Should -BeFalse
+        $link.Convert([PsUiTest.CountingSequence]::new(), [bool], $null, $null) | Should -BeFalse
+    }
+
+    It 'Previews a hashtable in the object grid as key = value lines' {
+        $tip = [PsUi.ArrayTooltipConverter]::new()
+        $tip.Convert(@{ a = 1 }, [string], $null, $null) | Should -Match 'a = 1'
+        $tip.Convert(@(), [string], $null, $null)        | Should -BeNullOrEmpty
+    }
+
+    It 'Reads the Count of a hashtable carrying a Count key' {
+        [PsUi.ValueKind]::Count(@{ Count = 0; a = 1 }) | Should -Be 2
+        [PsUi.ValueKind]::Count(5)                      | Should -Be -1
+        [PsUi.ValueKind]::Count('text')                 | Should -Be -1
+    }
+
+    It 'Unwraps a PSObject before classifying' {
+        # Anything off a pipeline arrives wrapped, and a PSObject is not enumerable.
+        [PsUi.ValueKind]::Of([psobject]@{ a = 1 })          | Should -Be 'Dictionary'
+        [PsUi.ValueKind]::Of([pscustomobject]@{ a = 1 })    | Should -Be 'Scalar'
     }
 }
 
@@ -238,7 +310,7 @@ Describe 'ScriptBuilder' {
     }
 }
 
-# All on the test thread, so nothing here exercises the cross thread hop the proxy exists for.
+# All on the test thread, so no test here exercises the cross thread hop the proxy exists for.
 Describe 'ThreadSafeControlProxy' {
     It 'Should wrap TextBox and provide Text property' {
         $textBox = [System.Windows.Controls.TextBox]@{ Text = 'InitialText' }

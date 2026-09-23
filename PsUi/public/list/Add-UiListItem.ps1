@@ -1,12 +1,12 @@
 function Add-UiListItem {
     <#
     .SYNOPSIS
-        Adds an item to a UiList control.
+        Adds an item to a list or dropdown.
     .DESCRIPTION
         Adds an item to a list. If the list has a -DisplayFormat and you pass a hashtable,
         the display text is automatically generated. No need to manually create PSCustomObjects.
     .PARAMETER Variable
-        The variable name of the list control.
+        The -Variable name of the list or dropdown.
     .PARAMETER Item
         The item to add. Can be a string, hashtable, or PSCustomObject.
         Hashtables are converted to objects automatically.
@@ -29,16 +29,16 @@ function Add-UiListItem {
     $session = Get-UiSession
     Write-Debug "Adding item to list '$Variable'"
     Write-Debug "Session: $($session.GetType().Name), SessionId: $([PsUi.SessionManager]::CurrentSessionId)"
-    
+
     $collection = $session.GetListCollection($Variable)
     Write-Debug "Collection found: $($null -ne $collection)"
-    
+
     if ($null -eq $collection) {
         $keys = $session.GetAllListKeys() -join ', '
         Write-Error "List '$Variable' not found. Available: $keys"
         return
     }
-    
+
     Write-Debug "Collection type: $($collection.GetType().FullName), Count before: $($collection.Count)"
 
     if ($Item -is [hashtable]) {
@@ -47,13 +47,14 @@ function Add-UiListItem {
     }
 
     $displayFormat = $session.GetListDisplayFormat($Variable)
-    
+
     if ($displayFormat -and $Item -is [PSObject]) {
         # Generate display text by replacing {PropertyName} with actual values
         $displayText = $displayFormat
 
         foreach ($prop in $Item.PSObject.Properties) {
-            $displayText = $displayText -replace "\{$($prop.Name)\}", $prop.Value
+            $safeValue   = ([string]$prop.Value) -replace '\$', '$$$$'
+            $displayText = $displayText -replace "\{$([regex]::Escape($prop.Name))\}", $safeValue
         }
 
         # Add the display text as a property (use NoteProperty so it's accessible)
@@ -65,6 +66,6 @@ function Add-UiListItem {
 
     # The threadsafe collection hops to the UI thread on its own and copes with that thread already being torn down.
     # Anything else (a collection registered by something other than New-UiList) needs the hop made for it.
-    if ((Get-UiCollectionKind -Obj $collection) -eq 'PsUiObservable') { $collection.Add($Item) }
+    if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { $collection.Add($Item) }
     else { Invoke-OnUIThread -ScriptBlock { $collection.Add($Item) }.GetNewClosure() }
 }

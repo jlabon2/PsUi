@@ -1,8 +1,8 @@
-<#
-.SYNOPSIS
-    Styles a ComboBox with theme-aware colors.
-#>
 function Set-ComboBoxStyle {
+    <#
+    .SYNOPSIS
+        Styles a ComboBox with theme-aware colors.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -25,6 +25,8 @@ function Set-ComboBoxStyle {
     if (!$styleApplied) {
         Write-Warning "XAML style 'ModernComboBoxStyle' not found. Ensure ThemeEngine.LoadStyles() was called."
     }
+
+    Set-UiWheelRouting -Control $ComboBox
 
     try {
         [PsUi.ThemeEngine]::RegisterElement($ComboBox)

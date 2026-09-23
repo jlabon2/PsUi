@@ -21,7 +21,9 @@ function New-DialogWindow {
         [ValidateSet('Height', 'Manual')]
         [string]$SizeToContent = 'Height',
 
-        [ValidateSet('NoResize', 'CanResizeWithGrip')]
+        # CanResizeWithGrip is out of the set because WPF draws that grip 16px clear of the window, in the window shadow.
+        # The grip built further down sits on the chrome instead, and CanResize keeps WS_THICKFRAME so the edges still drag.
+        [ValidateSet('NoResize', 'CanResize')]
         [string]$ResizeMode = 'NoResize',
 
         [string]$AppIdSuffix = 'Dialog',
@@ -35,17 +37,15 @@ function New-DialogWindow {
         [object]$ThemeColors
     )
 
-    # First PsUi UI in the process means no Application, so no control styles. Every text and password box draws with no border and no background.
-    # Can't fix that by creating one. It would outlive the dialog owning no windows, and the next New-UiWindow builds on its own STA thread and drops to degraded theming.
+    # First PsUi UI in the process means no Application, so no control styles. Every text and password box draws without a border or a background.
+    # Can't fix that by creating one, so it would outlive the dialog owning no windows, and the next New-UiWindow builds on its own STA thread and drops to messed up theming.
     $dialogNeedsOwnTheme = $null -eq [System.Windows.Application]::Current
 
     $colors = if ($ThemeColors) { $ThemeColors } else { Get-ThemeColors }
     $overlayColorFinal = if ($OverlayColor) { $OverlayColor } else { $colors.Accent }
 
-    # Default overlay glyph to Info icon if not specified
     if (!$OverlayGlyph) { $OverlayGlyph = [PsUi.ModuleContext]::GetIcon('Info') }
 
-    # Create the dialog window with standard properties
     $window = [System.Windows.Window]@{
         Title                 = $Title
         Width                 = $Width + 32
@@ -66,14 +66,13 @@ function New-DialogWindow {
     # Brushes and control styles go straight onto the window when there is no Application to hold them.
     if ($dialogNeedsOwnTheme) { [PsUi.ThemeEngine]::ApplyStandaloneTheme($window, $colors) }
 
-    # Attach to parent so dialog stays with its owner
     $null = Set-WindowOwner -Window $window
 
     # Unique AppUserModelID separates from PowerShell in taskbar
     $appId = "PsUi.$AppIdSuffix." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
     [PsUi.WindowManager]::SetWindowAppId($window, $appId)
 
-    # Set explicit height if provided (used for fixed-size dialogs like PowerShell mode)
+    # Only the PowerShell view passes one. Everything else sizes to its content.
     if ($Height -gt 0) { $window.Height = $Height }
 
     # Themed window icon for taskbar
@@ -91,7 +90,7 @@ function New-DialogWindow {
     }
     catch { Write-Debug "Overlay icon creation failed: $_" }
 
-    # Wire up taskbar icon in Loaded event
+    # Both calls below reach for the window handle, and there is none until Loaded.
     $capturedWindow  = $window
     $capturedIcon    = $dialogIcon
     $capturedOverlay = $overlayIcon
@@ -128,7 +127,52 @@ function New-DialogWindow {
         LastChildFill = $true
         Margin        = [System.Windows.Thickness]::new(0)
     }
-    $mainBorder.Child = $mainPanel
+
+    # Grid rather than DockPanel, so the grip can overlay the chrome's corner
+    $chromeGrid = [System.Windows.Controls.Grid]::new()
+    [void]$chromeGrid.Children.Add($mainPanel)
+    $mainBorder.Child = $chromeGrid
+
+    if ($ResizeMode -ne 'NoResize') {
+        $resizeGrip = [System.Windows.Controls.Primitives.ResizeGrip]@{
+            HorizontalAlignment = 'Right'
+            VerticalAlignment   = 'Bottom'
+            Cursor              = [System.Windows.Input.Cursors]::SizeNWSE
+        }
+        [void]$chromeGrid.Children.Add($resizeGrip)
+
+        # The grip is 17px square, so where you press inside it changes the offset, the mousedown works out the real one.
+        $gripGrab      = @{ X = 16; Y = 16 }
+        $gripWindow    = $window
+        $gripMinWidth  = $MinWidth
+        $gripMinHeight = $MinHeight
+
+        $resizeGrip.Add_MouseLeftButtonDown({
+            param($sender, $eventArgs)
+            # Turn it off first, or SizeToContent overrides every Height written during the drag.
+            $gripWindow.SizeToContent = 'Manual'
+            $downPos     = [System.Windows.Input.Mouse]::GetPosition($gripWindow)
+            $gripGrab.X  = $gripWindow.ActualWidth  - $downPos.X
+            $gripGrab.Y  = $gripWindow.ActualHeight - $downPos.Y
+            $null = $sender.CaptureMouse()
+            $eventArgs.Handled = $true
+        }.GetNewClosure())
+
+        $resizeGrip.Add_MouseMove({
+            param($sender, $eventArgs)
+            if (!$sender.IsMouseCaptured) { return }
+            $mousePos          = [System.Windows.Input.Mouse]::GetPosition($gripWindow)
+            $gripWindow.Width  = [Math]::Max($gripMinWidth,  $mousePos.X + $gripGrab.X)
+            $gripWindow.Height = [Math]::Max($gripMinHeight, $mousePos.Y + $gripGrab.Y)
+            $eventArgs.Handled = $true
+        }.GetNewClosure())
+
+        $resizeGrip.Add_MouseLeftButtonUp({
+            param($sender, $eventArgs)
+            $sender.ReleaseMouseCapture()
+            $eventArgs.Handled = $true
+        })
+    }
 
     # Title bar
     $titleBar = [System.Windows.Controls.Border]@{
@@ -179,17 +223,15 @@ function New-DialogWindow {
 
     [void]$mainPanel.Children.Add($titleBar)
 
-    # Wire up drag behavior on title bar
     $titleBar.Add_MouseLeftButtonDown({ $capturedWindow.DragMove() }.GetNewClosure())
 
-    # Content panel for dialog-specific content
+    # Where each dialog puts its own controls
     $contentPanel = [System.Windows.Controls.DockPanel]@{
         Margin        = [System.Windows.Thickness]::new(16)
         LastChildFill = $true
     }
     [void]$mainPanel.Children.Add($contentPanel)
 
-    # Return all components for the caller to use
     return @{
         Window       = $window
         MainBorder   = $mainBorder

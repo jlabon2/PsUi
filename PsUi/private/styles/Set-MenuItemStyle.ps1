@@ -7,12 +7,12 @@ function Set-MenuItemStyle {
     param(
         [Parameter(Mandatory)]
         [System.Windows.Controls.MenuItem]$MenuItem,
-        
+
         [hashtable]$Colors
     )
-    
+
     if (!$Colors) { $Colors = Get-ThemeColors }
-    
+
     $styleApplied = $false
     try {
         $style = [PsUi.ThemeEngine]::FindStyleResource([System.Windows.Controls.MenuItem])
@@ -21,10 +21,8 @@ function Set-MenuItemStyle {
             $styleApplied = $true
         }
     }
-    catch {
-        Write-Verbose "Failed to apply MenuItem style from resources: $_"
-    }
-    
+    catch { Write-Verbose "Failed to apply MenuItem style from resources: $_" }
+
     # If XAML style wasn't applied, set properties manually with hover handlers
     if (!$styleApplied) {
         $MenuItem.Background = [System.Windows.Media.Brushes]::Transparent
@@ -32,30 +30,27 @@ function Set-MenuItemStyle {
         $MenuItem.Padding    = [System.Windows.Thickness]::new(10, 6, 10, 6)
         $MenuItem.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe UI')
         $MenuItem.FontSize   = 12
-        
-        # Add hover effect via event handlers - fetch colors dynamically for theme switching
-        $MenuItem.Add_MouseEnter({
-            param($sender, $eventArgs)
-            $currentColors = Get-ThemeColors
-            $sender.Background = ConvertTo-UiBrush $currentColors.ItemHover
-        })
-        
-        $MenuItem.Add_MouseLeave({
-            param($sender, $eventArgs)
-            $sender.Background = [System.Windows.Media.Brushes]::Transparent
-        })
-    }
 
-    foreach ($subItem in $MenuItem.Items) {
-        if ($subItem -is [System.Windows.Controls.MenuItem]) {
-            Set-MenuItemStyle -MenuItem $subItem -Colors $Colors
+        # Colors are read on hover, so a theme switch doesn't need a second pair of handlers to update the hover color
+        Add-UiStyleHandler -Control $MenuItem -Key '__MenuHoverHooked' -Attach {
+            param($item)
+            $item.Add_MouseEnter({
+                param($sender, $eventArgs)
+                $currentColors = Get-ThemeColors
+                $sender.Background = ConvertTo-UiBrush $currentColors.ItemHover
+            })
+
+            $item.Add_MouseLeave({
+                param($sender, $eventArgs)
+                $sender.Background = [System.Windows.Media.Brushes]::Transparent
+            })
         }
     }
 
-    try {
-        [PsUi.ThemeEngine]::RegisterElement($MenuItem)
+    foreach ($subItem in $MenuItem.Items) {
+        if ($subItem -is [System.Windows.Controls.MenuItem]) { Set-MenuItemStyle -MenuItem $subItem -Colors $Colors }
     }
-    catch {
-        Write-Verbose "Failed to register MenuItem with ThemeEngine: $_"
-    }
+
+    try { [PsUi.ThemeEngine]::RegisterElement($MenuItem) }
+    catch { Write-Verbose "Failed to register MenuItem with ThemeEngine: $_" }
 }

@@ -23,7 +23,10 @@ function New-UiChildWindow {
     .PARAMETER Width
         Window width in pixels (150-2000).
     .PARAMETER Height
-        Window height in pixels (100-1500).
+        Window height in pixels (100-1500). Ignored when -SizeToContent is set.
+    .PARAMETER SizeToContent
+        Base the height on the content instead of -Height, capped at the avaiable screen area.
+        The window sets that height once it is on screen, so the grip and the edges still drag.
     .PARAMETER Modal
         Display as modal dialog (blocks parent until closed).
     .PARAMETER Position
@@ -93,6 +96,8 @@ function New-UiChildWindow {
         [ValidateRange(100, 1500)]
         [int]$Height = 300,
 
+        [switch]$SizeToContent,
+
         [switch]$Modal,
 
         [ValidateSet('CenterOnParent', 'CenterOnScreen', 'Manual')]
@@ -152,7 +157,7 @@ function New-UiChildWindow {
         Write-Error "Failed to initialize WPF session for child window"
         return
     }
-    
+
     # Capture child session ID for cleanup
     $childSessionId = [PsUi.SessionManager]::CurrentSessionId
 
@@ -182,7 +187,15 @@ function New-UiChildWindow {
         Opacity               = 0
     }
 
-    # Set unique AppUserModelID to separate from PowerShell in taskbar
+    # Two field forms leave most of a fixed height window empty, so the height comes off the content unless one is passed.
+    # Capped to the parent's monitor, since SystemParameters.WorkArea is the primary screen only and a tall window on a shorter second screen runs off the bottom.
+    if ($SizeToContent) {
+        $ownerHandle          = if ($Parent) { [System.Windows.Interop.WindowInteropHelper]::new($Parent).Handle } else { [IntPtr]::Zero }
+        $window.MaxHeight     = [PsUi.WindowManager]::GetWorkAreaForWindow($ownerHandle).Height
+        $window.SizeToContent = 'Height'
+    }
+
+    # Unique AppUserModelID, so the window gets its own taskbar button rather than stacking under PS
     $appId = "PsUi.ChildWindow." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
     [PsUi.WindowManager]::SetWindowAppId($window, $appId)
 
@@ -190,10 +203,10 @@ function New-UiChildWindow {
     $childWindowIcon = $null
     try {
         $parentSession = Get-UiSession
-        
+
         if ($parentSession.CustomLogo -and (Test-Path $parentSession.CustomLogo)) { $childWindowIcon = Get-CustomLogoIcon -Path $parentSession.CustomLogo }
         else {  $childWindowIcon = New-WindowIcon -Colors $colors }
-        
+
         if ($childWindowIcon) {  $window.Icon = $childWindowIcon  }
     }
     catch { Write-Verbose "Failed to create window icon:  $_" }
@@ -286,7 +299,7 @@ function New-UiChildWindow {
     $titleGrid = [System.Windows.Controls.Grid]::new()
     $titleBar.Child = $titleGrid
 
-    # WindowStyle='None' on the child window means the OS-native title-bar icon never renders and custom chrome has to draw its own. Copy the same 16x16 pattern as the main window's BuildTitleBar in NewUiWindowCommand.Builder.cs. 
+    # WindowStyle='None' on the child window means the OS-native title-bar icon never renders and custom chrome has to draw its own. Copy the same 16x16 pattern as the main window's BuildTitleBar in NewUiWindowCommand.Builder.cs.
     # Skip the Image if no icon was resolved above.
     $titleTextLeftMargin = 0
     if ($childWindowIcon) {
@@ -325,7 +338,7 @@ function New-UiChildWindow {
         Cursor              = [System.Windows.Input.Cursors]::Hand
     }
     $closeBtn.OverridesDefaultStyle = $true
-    
+
     # Apply hover template (red background, white foreground on hover)
     $closeBtnTemplate = @'
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -448,6 +461,12 @@ $setUiResourcesCmd = Get-Command Set-UIResources -ErrorAction SilentlyContinue
 
 # Set up window load event for fade-in and theming
 $window.Add_Loaded({
+    # Set the height the content came out at, so the grip and the edges drag it from here.
+    if ($this.SizeToContent -ne 'Manual') {
+        $this.Height        = $this.ActualHeight
+        $this.SizeToContent = 'Manual'
+    }
+
     # Apply manual positioning if specified
     if ($Position -eq 'Manual') {
         if ($null -ne $Left) { $this.Left = $Left }
@@ -483,13 +502,13 @@ $window.Add_Loaded({
     $window.Add_Closed({
         # Dispose the child window's session
         if ($childSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($childSessionId) }
-        
+
         # Restore the parent window's session as current (both ThreadStatic and global variable)
         if ($parentSessionId -ne [Guid]::Empty) {
             [PsUi.SessionManager]::SetCurrentSession($parentSessionId)
             $Global:__PsUiSessionId = $parentSessionId.ToString()
         }
-        
+
         # Activate the parent window so it comes back to the foreground
         if ($capturedParent) { $capturedParent.Activate() }
     }.GetNewClosure())

@@ -25,12 +25,12 @@ New-UiWindow -Title 'PsUi Demo' -Width 500 -Height 250 -Content {
         Write-Host "Connecting to $server..." -ForegroundColor Cyan
         Write-Progress -Activity $action -Status 'Starting...' -PercentComplete 25
         Start-Sleep -Milliseconds 500
-        
+
         if ($action -eq 'Restart') {
             $confirm = Read-Host "Type YES to restart $server"
             if ($confirm -ne 'YES') { Write-Host 'Cancelled.' -ForegroundColor Yellow; return }
         }
-        
+
         Write-Progress -Activity $action -PercentComplete 75
         Start-Sleep -Milliseconds 500
         Write-Host "$action complete on $server" -ForegroundColor Green
@@ -102,7 +102,8 @@ Multiple parameter sets produce a selector that rebuilds the form when you switc
 
 Cells can hold controls: `Type = 'Button'` puts a button in every row, `'Toggle'` a checkbox that writes back, `'Link'` a URL built from the row. `-Editable` turns on in-place editing - the editor follows the value type - and a `Validator` on the column can cancel the commit.
 
-`-ItemsSource` takes a plain `ArrayList` or `List[T]` and rebinds your variable to a threadsafe copy the grid watches. `$rows.Add(...)` from a background runspace just shows up. No `[ref]`, no `Dispatcher.Invoke`, none of that nonsense. Hand it 10k rows and the grid updates once instead of ten thousand times. `-RowContextMenu` adds rightclick entries; with several rows selected, the action runs against each in turn.
+`-ItemsSource` takes a plain `ArrayList` or `List[T]` and rebinds the variable to a threadsafe copy the grid watches. `$rows.Add(...)` from a background runspace are added seemelessly. Hand it 10k rows and the grid updates once instead of ten thousand times. `-RowContextMenu` adds right-click entries, including actions, and with several rows selected, the action runs against each.
+
 
 <p align="center"><img src="docs/images/datagrid.png" alt="New-UiDataGrid with cell controls"></p>
 
@@ -182,11 +183,11 @@ New-UiWindow -Title 'Data Fetcher' -Content {
         # This runs in background - UI stays responsive
         $data = Invoke-RestMethod 'https://jsonplaceholder.typicode.com/posts'
         Write-Host "Fetched $($data.Count) posts"
-        
+
         Write-Progress -Activity 'Processing' -PercentComplete 50
         Start-Sleep -Seconds 1
         Write-Progress -Activity 'Processing' -Completed
-        
+
         $data  # Appears in Results tab
     }
 }
@@ -209,7 +210,7 @@ New-UiWindow -Title 'User Form' -Theme Dark -Content {
         New-UiInput -Label 'Password' -Variable 'pass' -Password
         New-UiDropdown -Label 'Role' -Variable 'role' -Items @('Admin', 'User', 'Guest')
     }
-    
+
     New-UiButton -Text 'Submit' -Icon 'Accept' -Accent -Action {
         # $user, $pass, $role are injected from -Variable names
         Write-Host "Creating $user with role $role"
@@ -220,6 +221,10 @@ New-UiWindow -Title 'User Form' -Theme Dark -Content {
 <p align="center"><img src="docs/images/user-form-dark.png" alt="User form with dark theme"></p>
 
 The `-Variable` parameter names the control and creates the binding. Those names become PowerShell variables inside `-Action` blocks. Change the variable, the control updates. Change the control, the variable updates. It's not true reactive binding (no immediate propagation) but it's close enough for form work.
+
+### The Mouse Wheel
+
+The page scrolls under the cursor by default, wherever the cursor happens to sit. A list, tree or grid leaves the wheel alone, which keeps a window full of them scrollable at all. Give one `-ScrollWheel Edge` and it scrolls its own rows first, handing the wheel back to the page at the top or bottom, the way a browser treats a box inside a page. `-ScrollWheel Capture`, or the older `-CaptureScrollWheel` switch, holds on at the ends too. On `New-UiDropdown` Capture steps the selection under the cursor instead, with no need to click the box first. An open dropdown list always scrolls itself. A `-Fill` control is the one exception to the default, since it claims the whole viewport and the page behind it has no scroll of its own left, so it takes `Edge` unless you say otherwise.
 
 ### Auto-Generated Forms
 
@@ -243,10 +248,10 @@ function Search-Logs {
     param(
         [Parameter(Mandatory)]
         [string]$Path,
-        
+
         [ValidateSet('Error', 'Warning', 'Info')]
         [string]$Level = 'Error',
-        
+
         [datetime]$Since = (Get-Date).AddDays(-7)
     )
     Get-Content $Path | Where-Object { $_ -match $Level }
@@ -282,11 +287,6 @@ Button actions run in **separate runspaces** from your console. This is the most
 **What doesn't work:**
 - Globals set in button actions (`$Global:Result = 'done'`) do **not** propagate back to your console session
 - Realtime variable sync - changes happen at action boundaries, not during execution
-- Reference semantics across runspace boundaries - objects get copied, not shared
-
-**Live objects don't cross runspaces.** SQL connections, file streams, COM objects, open sockets - anything holding a native handle gets serialized when crossing the runspace boundary. Properties copy but the underlying connection is gone.
-
-Concrete example: you create a `SqlConnection` in Button A's action and store it in a variable. Button B tries to use that connection. It doesn't work. The connection object got copied, not referenced. The copy has the same connection string but the actual TCP socket is back in Button A's runspace, probably already disposed.
 
 This applies to:
 - Database connections (`SqlConnection`, `OracleConnection`, etc.)
@@ -443,7 +443,7 @@ New-UiWindow -Title 'Settings' -Width 500 -Height 400 -Content {
         New-UiTimePicker -Label 'Start Time' -Variable 'startTime' -Default '09:00'
         New-UiTextArea -Label 'Notes' -Variable 'notes' -Rows 4
     }
-    
+
     New-UiButton -Text 'Save Settings' -Icon 'Save' -Accent -Action {
         Write-Host "Dark Mode: $darkMode"
         Write-Host "Volume: $volume"
@@ -470,7 +470,7 @@ New-UiWindow -Title 'Batch Processor' -Width 500 -Height 300 -Content {
     New-UiInput -Label 'Items to process' -Variable 'itemCount' -InputType Int -Default 10
     New-UiProgress -Variable 'progress'
     New-UiInput -Label 'Status' -Variable 'status' -Default 'Ready'
-    
+
     New-UiButton -Text 'Start Processing' -Icon 'Play' -Accent -Action {
         $total = [int]$itemCount
         for ($i = 1; $i -le $total; $i++) {
@@ -582,10 +582,10 @@ Import-Module PsUi
 
 New-UiWindow -Title 'Conditional Demo' -Width 400 -Height 300 -Content {
     New-UiToggle -Label 'Enable advanced options' -Variable 'advanced'
-    
+
     # This input only enables when the toggle is checked
     New-UiInput -Label 'Server URL' -Variable 'serverUrl' -EnabledWhen 'advanced' -ClearIfDisabled
-    
+
     # This button only enables when the input has content
     New-UiButton -Text 'Connect' -Icon 'Globe' -Accent -EnabledWhen 'serverUrl' -Action {
         Write-Host "Connecting to $serverUrl..."
@@ -797,7 +797,7 @@ New-UiWindow -Title 'New User' -Content {
         New-UiDropdown -Label 'Department' -Variable 'dept' -Items @('Engineering', 'Sales', 'Support', 'HR')
         New-UiToggle -Label 'Active' -Variable 'isActive' -Checked
     }
-    
+
     New-UiButton -Text 'Create User' -Accent -Action {
         Write-Host "Creating user..."
         Write-Host "  Name: $name"
@@ -805,7 +805,7 @@ New-UiWindow -Title 'New User' -Content {
         Write-Host "  Role: $role"
         Write-Host "  Department: $dept"
         Write-Host "  Active: $isActive"
-        
+
         # Your actual user creation code here
         # New-ADUser -Name $name -Email $email ...
     }
@@ -825,23 +825,23 @@ New-UiTool -Command 'Get-Service' -ResultActions @(
     @{
         Text   = 'Start'
         Icon   = 'Play'
-        Action = { 
+        Action = {
             Write-Host "Starting $($_.Name)..."
-            $_ | Start-Service -WhatIf 
+            $_ | Start-Service -WhatIf
         }
     }
     @{
         Text   = 'Stop'
         Icon   = 'Cancel'
-        Action = { 
+        Action = {
             Write-Host "Stopping $($_.Name)..."
-            $_ | Stop-Service -WhatIf 
+            $_ | Stop-Service -WhatIf
         }
     }
     @{
         Text   = 'Properties'
         Icon   = 'Info'
-        Action = { 
+        Action = {
             $_ | Format-List * | Out-String | Write-Host
         }
     }
@@ -942,12 +942,12 @@ New-UiWindow -Title 'Server Provisioning' -Width 600 -Height 500 -Content {
             Write-Host "Provisioning $serverName..." -ForegroundColor Cyan
             Write-Host "Environment: $environ | OS: $osChoice"
             Write-Host "CPU: $cpu cores, RAM: ${ram}GB, Disk: ${disk}GB"
-            
+
             # Your PowerCLI / Azure / AWS provisioning code here
             Write-Progress -Activity 'Provisioning' -Status 'Creating VM...' -PercentComplete 50
             Start-Sleep -Seconds 2
             Write-Progress -Activity 'Provisioning' -Completed
-            
+
             Write-Host "Server $serverName provisioned!" -ForegroundColor Green
         }
     }
@@ -971,12 +971,12 @@ New-UiWindow -Title 'Remote Server Tool' -Width 600 -Height 400 -Content {
         New-UiCredential -Label 'Credentials' -Variable 'creds' -DefaultUsername "$env:USERDOMAIN\$env:USERNAME"
         New-UiToggle -Label 'Use SSL' -Variable 'useSsl' -Checked
     }
-    
+
     New-UiPanel -LayoutStyle Wrap -Content {
         New-UiButton -Text 'Test Connection' -Icon 'Globe' -Action {
             if (!$server) { Write-Host 'Enter a server name' -ForegroundColor Yellow; return }
             if (!$creds) { Write-Host 'Enter credentials' -ForegroundColor Yellow; return }
-            
+
             Write-Host "Testing connection to $server..."
             try {
                 # Your connection test here
@@ -988,13 +988,13 @@ New-UiWindow -Title 'Remote Server Tool' -Width 600 -Height 400 -Content {
                 Write-Host "Connection failed: $($_.Exception.Message)" -ForegroundColor Red
             }
         }
-        
+
         New-UiButton -Text 'Run Report' -Icon 'Document' -Accent -Action {
-            if (!$server -or !$creds) { 
+            if (!$server -or !$creds) {
                 Write-Host 'Connect to a server first' -ForegroundColor Yellow
-                return 
+                return
             }
-            
+
             Write-Host "Running report on $server..."
             # Your report code here
         }
@@ -1014,11 +1014,10 @@ New-UiWindow -Title 'Remote Server Tool' -Width 600 -Height 400 -Content {
 
 - **Large datasets degrade performance.** `Out-Datagrid` and `New-UiDataGrid` share an engine, and it handles 10k rows fine. 50k rows gets sluggish. 100k rows will make you wait. Filter before displaying large sets. I mean, this is PowerShell, man.
 
-- **Not a proper MVVM framework.** No INotifyPropertyChanged, no data binding expressions, no command pattern. PsUi is for internal tools, not production apps.
+- **Not a proper MVVM framework.** There is no INotifyPropertyChanged, no support for data binding expressions, and no command pattern. PsUi is for internal tools, not production apps.
 
 - **Variable sync has boundaries.** Values sync at action start and end, not continuously. If you need realtime binding, use events manually.
 
-- **Live objects don't cross runspaces.** Database connections, file handles, COM objects - they don't travel. Design around it.
 
 - **No designer.** You write code, you run it, you see what it looks like.
 
@@ -1030,7 +1029,7 @@ New-UiWindow -Title 'Remote Server Tool' -Width 600 -Height 400 -Content {
 
 The module is split into three layers:
 
-**C# Backend** (`src/`, compiled to `PsUi/lib/`) - Runspace pooling, UI thread handoff, host interception, threadsafe control proxies. The C# has grown as edge cases surfaced. Targets net472 (PowerShell 5.1) and net6.0-windows (PowerShell 7+), plus a net452 build for WinPE.
+**C# Backend** (`src/`, compiled to `PsUi/lib/`) - Runspace pooling, UI thread handoff, host interception, threadsafe control proxies. The C# has grown as edge cases surfaced. Targets net472 (5.1) and net6.0-windows (7+), plus a net452 build for WinPE.
 
 Key classes:
 - `AsyncExecutor` - Runs scripts on background threads, routes Write-Host/Progress/Error to UI events

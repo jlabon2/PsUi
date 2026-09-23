@@ -11,7 +11,7 @@ function Invoke-UiContent {
         [string]$CallerName = 'Content'
     )
 
-    # A block built at runtime has no File on its extent, which is why the fallback below is needed
+    # Blocks built at runtime carry no File on their extent, so the fallback below fills it in.
     $originalFile      = 'script'
     $originalStartLine = 1
     try {
@@ -19,7 +19,7 @@ function Invoke-UiContent {
         if ($extent.File) { $originalFile = Split-Path -Leaf $extent.File }
         $originalStartLine = $extent.StartLineNumber
     }
-    # A block built at runtime has no Extent, so the defaults above are used.
+    # It has no Extent either, so the defaults above work
     catch { }
 
     # With the extent blank, the session record of the calling script is all that is left to id.

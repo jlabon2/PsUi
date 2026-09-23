@@ -16,8 +16,6 @@ function New-ColumnVisibilityPopup {
         [scriptblock]$ItemsProvider
     )
 
-    $colors = Get-ThemeColors
-
     # Sized to match toolbar icon buttons (32x28, 6px gap).
     $colButton = [System.Windows.Controls.Button]@{
         Content = [System.Windows.Controls.TextBlock]@{
@@ -44,8 +42,6 @@ function New-ColumnVisibilityPopup {
     }
 
     $popupBorder = [System.Windows.Controls.Border]@{
-        Background      = ConvertTo-UiBrush $colors.ControlBg
-        BorderBrush     = ConvertTo-UiBrush $colors.Border
         BorderThickness = [System.Windows.Thickness]::new(1)
         Padding         = [System.Windows.Thickness]::new(8)
         CornerRadius    = [System.Windows.CornerRadius]::new(4)
@@ -58,6 +54,10 @@ function New-ColumnVisibilityPopup {
         }
     }
 
+    # One popup per grid, so a frozen brush would hold the theme it was first opened under.
+    $popupBorder.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'ControlBackgroundBrush')
+    $popupBorder.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, 'BorderBrush')
+
     $scrollViewer = [System.Windows.Controls.ScrollViewer]@{
         VerticalScrollBarVisibility   = 'Auto'
         HorizontalScrollBarVisibility = 'Disabled'
@@ -69,9 +69,9 @@ function New-ColumnVisibilityPopup {
         Text       = 'Visible Columns'
         FontWeight = [System.Windows.FontWeights]::SemiBold
         FontSize   = 12
-        Foreground = ConvertTo-UiBrush $colors.ControlFg
         Margin     = [System.Windows.Thickness]::new(0, 0, 0, 8)
     }
+    $headerLabel.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
     [void]$checkStack.Children.Add($headerLabel)
 
     $buttonPanel = [System.Windows.Controls.StackPanel]@{
@@ -121,10 +121,10 @@ function New-ColumnVisibilityPopup {
     [void]$checkStack.Children.Add($buttonPanel)
 
     $separator = [System.Windows.Controls.Border]@{
-        Height     = 1
-        Background = ConvertTo-UiBrush $colors.Border
-        Margin     = [System.Windows.Thickness]::new(0, 4, 0, 8)
+        Height = 1
+        Margin = [System.Windows.Thickness]::new(0, 4, 0, 8)
     }
+    $separator.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'BorderBrush')
     [void]$checkStack.Children.Add($separator)
 
     # Dynamic checkboxes live in this sub panel. Cleared/refilled per rebuild so the header and bulk action buttons above stay put.
@@ -132,17 +132,18 @@ function New-ColumnVisibilityPopup {
     [void]$checkStack.Children.Add($checkboxStack)
 
     $emptyPlaceholder = [System.Windows.Controls.TextBlock]@{
-        Text       = '(no columns yet)'
-        FontStyle  = [System.Windows.FontStyles]::Italic
-        FontSize   = 11
-        Foreground = ConvertTo-UiBrush $colors.SecondaryText
-        Margin     = [System.Windows.Thickness]::new(0, 4, 0, 4)
+        Text      = '(no columns yet)'
+        FontStyle = [System.Windows.FontStyles]::Italic
+        FontSize  = 11
+        Margin    = [System.Windows.Thickness]::new(0, 4, 0, 4)
     }
+    $emptyPlaceholder.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'SecondaryTextBrush')
 
     # State the bulk action buttons close over. Checkboxes is a stable List instance, rebuild changes it in place via Clear() and Add() so the closures see the current contents.
     $state = @{
         Signature      = $null
         Checkboxes     = [System.Collections.Generic.List[System.Windows.Controls.CheckBox]]::new()
+        CountTargets   = [System.Collections.Generic.List[System.Windows.Controls.CheckBox]]::new()
         PopulatedSet   = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         CountSignature = $null
     }
@@ -196,7 +197,7 @@ function New-ColumnVisibilityPopup {
         return $null
     }.GetNewClosure()
 
-    # Defined at function body on purpose as nested GetNewClosure captures only the immediate parent scope, so a handler built inside $rebuild sees $DataGrid = $null at click time.
+    # Defined at function body, since nested GetNewClosure captures only the immediate parent scope and a handler built inside $rebuild sees $DataGrid = $null at click time.
     # One instance attaches across every checkbox. $this IS the firing CheckBox. Attached to both Checked and Unchecked, $this.IsChecked says which way it just flipped.
     $onToggle = {
         $col = & $findColumn $this.Tag.Name
@@ -216,6 +217,7 @@ function New-ColumnVisibilityPopup {
         param($props)
         $checkboxStack.Children.Clear()
         $state.Checkboxes.Clear()
+        $state.CountTargets.Clear()
         $state.PopulatedSet.Clear()
 
         if ($props.Populated) {
@@ -225,7 +227,7 @@ function New-ColumnVisibilityPopup {
         $allProps = if ($props.All) { @($props.All) } else { @() }
         if ($allProps.Count -eq 0) {
             [void]$checkboxStack.Children.Add($emptyPlaceholder)
-            # Nothing for the bulk action buttons to act on - dim them.
+            # No columns for the bulk buttons to act on, so they dim.
             $selectAllBtn.IsEnabled   = $false
             $unselectAllBtn.IsEnabled = $false
             $defaultOnlyBtn.IsEnabled = $false
@@ -243,17 +245,16 @@ function New-ColumnVisibilityPopup {
             $tb       = [System.Windows.Controls.TextBlock]::new()
             $nameRun  = [System.Windows.Documents.Run]::new($propName)
             $countRun = [System.Windows.Documents.Run]::new('')
-            $countRun.Foreground = ConvertTo-UiBrush $colors.SecondaryText
-            $countRun.FontSize   = 11
+            $countRun.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'SecondaryTextBrush')
+            $countRun.FontSize = 11
             [void]$tb.Inlines.Add($nameRun)
             [void]$tb.Inlines.Add($countRun)
 
             $checkBox = [System.Windows.Controls.CheckBox]@{
-                Content    = $tb
-                FontSize   = 12
-                Foreground = ConvertTo-UiBrush $colors.ControlFg
-                Margin     = [System.Windows.Thickness]::new(0, 2, 0, 2)
-                MinWidth   = 150
+                Content  = $tb
+                FontSize = 12
+                Margin   = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                MinWidth = 150
             }
 
             $isDefault = $defaults -contains $propName
@@ -266,8 +267,11 @@ function New-ColumnVisibilityPopup {
             $frozenCount = [int]$DataGrid.FrozenColumnCount
             $isFrozen    = $matchedColumn -and $frozenCount -gt 0 -and $matchedColumn.DisplayIndex -lt $frozenCount
 
-            # Tag carries the bits the lazy compute handler needs - property name, default flag, count run.
+            # Tag carries what the lazy count needs, the property name, the default flag and the count run.
             $checkBox.Tag = @{ Name = $propName; IsDefault = $isDefault; CountRun = $countRun }
+
+            # Every column gets a count, and only the toggles skip the locked ones.
+            [void]$state.CountTargets.Add($checkBox)
 
             # Lock the primary column (first one) and any frozen column. Excluded from $state.Checkboxes so Select All / Unselect All / Default Only / Has Data don't touch them.
             if ($isFirst -or $isFrozen) {
@@ -278,7 +282,7 @@ function New-ColumnVisibilityPopup {
             else { [void]$state.Checkboxes.Add($checkBox) }
             $isFirst = $false
 
-            # Shared handler from function body - see the $onToggle comment for why nested closures fail here.
+            # Shared handler from the function body, for the reason the $onToggle comment gives.
             $checkBox.Add_Checked($onToggle)
             $checkBox.Add_Unchecked($onToggle)
 
@@ -369,9 +373,9 @@ function New-ColumnVisibilityPopup {
         # Lazy populated count fill. Only runs once per signature. Reruns after a rebuild.
         if ($state.CountSignature -eq $sig) { return }
         if (!$ItemsProvider)                { $state.CountSignature = $sig; return }
-        if ($state.Checkboxes.Count -eq 0)  { $state.CountSignature = $sig; return }
+        if ($state.CountTargets.Count -eq 0) { $state.CountSignature = $sig; return }
 
-        # Mark the signature first so a second Open while the async scan is in flight doesn't kick a duplicate runspace.
+        # Mark the signature first so a second Open while the fill is still running doesn't start a duplicate timer.
         $state.CountSignature = $sig
 
         try {
@@ -381,95 +385,83 @@ function New-ColumnVisibilityPopup {
             $total = $arr.Count
             if ($total -eq 0) { return }
 
-            $propNames = foreach ($cb in $state.Checkboxes) { [string]$cb.Tag.Name }
-
-            # Counts one property's populated cells over $arr. A non null value counts unless it's whitespace, the '[Access Denied]' sentinel, or an empty collection.
-            $tally = {
-                param($propName)
-                $count = 0
-                foreach ($row in $arr) {
-                    if ($null -eq $row) { continue }
-                    try {
-                        $value = $row.$propName
-                        if ($null -ne $value) {
-                            if ($value -is [string]) {
-                                if (![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]') { $count++ }
-                            }
-                            elseif ($value -is [System.Collections.ICollection]) {
-                                if ($value.Count -gt 0) { $count++ }
-                            }
-                            else { $count++ }
-                        }
-                    }
-                    catch { }
-                }
-                return $count
-            }.GetNewClosure()
-
-            # Small grids count inline - instant, and it dodges the runspace pool warmup that otherwise leaves the first picker open sitting on ' (...)' for a few seconds. Only the genuinely big grid (the 50 col x 10k row case that blocks ~2s) pays for the async scan.
-            if (($total * @($propNames).Count) -le 40000) {
-                foreach ($cb in $state.Checkboxes) {
-                    if ($cb.Tag.CountRun) { $cb.Tag.CountRun.Text = " ($(& $tally ([string]$cb.Tag.Name))/$total)" }
-                }
-                return
-            }
-
-            # 50 cols x 10k rows is the bad case - blocks the UI for ~2s on the open. Push to a background runspace and marshal the count Runs back to the UI thread on completion.
-            foreach ($cb in $state.Checkboxes) {
+            # Cell count is no guide (MainModule is ~7ms a row on 5.1, CommandLine about 30ms on 7, so eight seconds for one column over 280 rows).
+            # About 20ms a tick, resuming mid column, and the budget is checked before each row so one slow row still overruns it.
+            foreach ($cb in $state.CountTargets) {
                 if ($cb.Tag.CountRun) { $cb.Tag.CountRun.Text = ' (...)' }
             }
 
-            $countRuns = @{}
-            foreach ($cb in $state.Checkboxes) {
-                if ($cb.Tag.CountRun) { $countRuns[[string]$cb.Tag.Name] = $cb.Tag.CountRun }
+            # State travels in Tag ($this is the timer).
+            $fillTimer          = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
+            $fillTimer.Interval = [TimeSpan]::Zero
+            $fillTimer.Tag      = @{
+                Pending = [System.Collections.Generic.Queue[object]]::new($state.CountTargets)
+                Rows    = $arr
+                Total   = $total
+                Popup   = $popup
+                State   = $state
+                Current = $null
+                Index   = 0
+                Filled  = 0
+                Spent   = 0
             }
+            $fillTimer.Add_Tick({
+                $ft = $this.Tag
+                if (!$ft.Popup.IsOpen) {
+                    # Dismissing partway leaves the signature marked and the next open trusting a count that never landed
+                    $this.Stop()
+                    $ft.State.CountSignature = $null
+                    return
+                }
 
-            # Local copy for the OnError closure - the signature was marked before the async, so a failed scan has to clear it or the picker shows ' (...)' forever with no retry.
-            $stateRef = $state
+                $budget = [System.Diagnostics.Stopwatch]::StartNew()
+                while ($budget.ElapsedMilliseconds -lt 20) {
+                    if (!$ft.Current) {
+                        if ($ft.Pending.Count -eq 0) { $this.Stop(); return }
+                        $ft.Current = $ft.Pending.Dequeue()
+                        $ft.Index   = 0
+                        $ft.Filled  = 0
+                        $ft.Spent   = 0
+                    }
 
-            # -Variables, not -Arguments: the AsyncExecutor injects Arguments as ${Global:args} and the script's automatic $args shadows it. A param() block binds nothing either (called with no arguments). Named globals are the only delivery that lands.
-            Invoke-UiAsync -ScriptBlock {
-                $result = @{}
-                foreach ($propName in $countProps) {
-                    $count = 0
-                    foreach ($row in $countRows) {
+                    # Values count unless they're null, whitespace, the '[Access Denied]' string, or an empty list, and Count reads -1 for a scalar so only an empty list or hashtable fails.
+                    $propName  = [string]$ft.Current.Tag.Name
+                    $tickStart = $budget.ElapsedMilliseconds
+                    while ($ft.Index -lt $ft.Rows.Count -and $budget.ElapsedMilliseconds -lt 20) {
+                        $row = $ft.Rows[$ft.Index]
+                        $ft.Index++
                         if ($null -eq $row) { continue }
                         try {
                             $value = $row.$propName
                             if ($null -ne $value) {
                                 if ($value -is [string]) {
-                                    if (![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]') { $count++ }
+                                    if (![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]') { $ft.Filled++ }
                                 }
-                                elseif ($value -is [System.Collections.ICollection]) {
-                                    if ($value.Count -gt 0) { $count++ }
-                                }
-                                else { $count++ }
+                                elseif ([PsUi.ValueKind]::Count($value) -ne 0) { $ft.Filled++ }
                             }
                         }
                         catch { }
                     }
-                    $result[$propName] = $count
+
+                    $ft.Spent += $budget.ElapsedMilliseconds - $tickStart
+
+                    if ($ft.Index -ge $ft.Rows.Count) {
+                        if ($ft.Current.Tag.CountRun) { $ft.Current.Tag.CountRun.Text = " ($($ft.Filled)/$($ft.Total))" }
+                        $ft.Current = $null
+                    }
+                    elseif ($ft.Spent -ge 250) {
+                        # All of CommandLine holds the other sixty up for half a minute.
+                        # Loosening the cap starves the cheap columns, since one row of Description blocks most of a second on a protected process.
+                        if ($ft.Current.Tag.CountRun) { $ft.Current.Tag.CountRun.Text = '' }
+                        $ft.Current = $null
+                    }
                 }
-                @{ Counts = $result; Total = $countRows.Count }
-            } -Variables @{ countRows = $arr; countProps = $propNames } -NoAutoCapture -NoActiveExecutor -OnComplete {
-                param($payload)
-                if (!$payload -or !$payload.Counts) { return }
-                $total = $payload.Total
-                foreach ($name in $payload.Counts.Keys) {
-                    $run = $countRuns[$name]
-                    if ($run) { $run.Text = " ($($payload.Counts[$name])/$total)" }
-                }
-            }.GetNewClosure() -OnError {
-                param($err)
-                Write-Debug "Lazy column count scan failed: $err"
-                # Drop the ' (...)' so it doesn't hang there, and unmark the signature so the next open retries instead of trusting a scan that never delivered.
-                foreach ($run in $countRuns.Values) { if ($run) { $run.Text = '' } }
-                $stateRef.CountSignature = $null
-            }.GetNewClosure()
+            })
+            $fillTimer.Start()
         }
         catch {
             Write-Debug "Lazy column count failed: $_"
-            # Failed before completion - allow a retry on the next open.
+            # Failed before completion, so the next open retries.
             $state.CountSignature = $null
         }
     }.GetNewClosure())

@@ -72,7 +72,7 @@
             - ActiveExecutor: the background run in progress, and what Stop-UiAsync cancels.
             - CurrentDefinition: where New-UiTool sets its definition so its own handlers
               read it without a closure.
-        - Behind New-UiList:
+        - Behind the list builders (New-UiList, New-UiDropdown, New-UiDataGrid):
             - RegisterListCollection: stores the list behind a -Variable name.
             - GetListCollection: reads that list back.
             - RegisterListDisplayFormat: stores the display template for that name.
@@ -146,8 +146,8 @@
     .NOTES
         GetControl hands back the raw control with no thread guard around it, so touch what it
         returns only from code already on the UI thread. That means -Content, plus any -NoAsync
-        action, -OnChange handler, or event handler you attached manually From an async action use
-        Get-UiValue and Set-UiValue, which handle the thread stuff themselves.
+        action, -OnChange handler, or event handler attached manually. From an async action
+        use Get-UiValue and Set-UiValue, which handle the thread stuff themselves.
 
         Get-UiSession itself is safe to call from an async action. It is the raw WPF objects it
         hands back that are not.

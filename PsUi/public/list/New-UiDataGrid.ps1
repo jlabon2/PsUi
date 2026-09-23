@@ -1,4 +1,4 @@
-﻿function New-UiDataGrid {
+function New-UiDataGrid {
     <#
     .SYNOPSIS
         Themed datagrid. Drops inside a New-UiWindow next to other controls.
@@ -37,14 +37,17 @@
           - a variable rebound to a different value after the call: $list = Get-Process
           - a variable captured by a closure built before the call
 
-        In all of those, the grid still binds but you have no handle - use a local
-        variable or [ref] (or skip the variable bind entirely with -NoBind).
-        Can't be combined with -Items.
+        In all of those the grid still binds, but you have no handle. Use a local variable, or
+        pass an ObservableCollection, which the grid follows wherever it lives. A [ref] helps
+        only when it points at a variable: a [ref] built from a property or a hashtable entry
+        fills the holder and leaves the original where it was, and the grid warns when it spots
+        one. Can't be combined with -Items.
     .PARAMETER NoBind
         Skip the variable bind step. -ItemsSource still wraps the collection and points the grid
-        at the wrap, but the variable you passed in keeps its original value. Mutations from
-        outside the wrap won't reach the grid. Drive it through [ref] or the
-        Set-/Add-/Clear-UiDataGridItems helpers. Off by default.
+        at the wrap, but the variable you passed in keeps its original value, and a [ref] keeps
+        pointing where it pointed. The two only stay in step while the mirror holds, so an
+        ObservableCollection carries its own changes across and a plain list does not. Drive it
+        through Set-UiDataGridItems, Add-UiDataGridItem and Clear-UiDataGridItems. Off by default.
     .PARAMETER Columns
         How to lay out columns. Three options:
           - omit it: auto-generate from the first row
@@ -134,9 +137,14 @@
         Don't mark empty cells. By default null / empty-string cells get a subtle diagonal
         hatch so empty data is easier to spot at a glance. Only applies to text columns.
     .PARAMETER CaptureScrollWheel
-        Keep mouse-wheel events inside the grid instead of getting grabbed by the parent. The PsUi
-        default lets the wheel reach the outer window so it scrolls under the cursor. Turn this
-        on for grids tall enough or with enough meaningful data to need their own scroll.
+        Keep every mouse-wheel event inside the grid, ends included. Same as -ScrollWheel Capture.
+    .PARAMETER ScrollWheel
+        Says what gets the wheel while the cursor is over the grid. Page, the default, hands every
+        wheel event to the page, so a window full of them still scrolls. Edge scrolls the grid's
+        own rows until it reaches the top or bottom and gives the page the wheel from there.
+        Capture holds on at the ends as well, so the page stays put while the cursor is here.
+        A -Fill grid starts on Edge instead, since it holds the viewport and the page behind it
+        has almost no scroll of its own left. Pass -ScrollWheel to override that.
     .PARAMETER OnSelectionChanged
         Runs when the selected row(s) change. Usage: param($selectedItems)
         Example: -OnSelectionChanged { param($sel) Write-Host "Selected $($sel.Count) row(s)" }
@@ -393,7 +401,11 @@
         # Untyped, so it takes a New-UiMenuItem definition block or array, or the legacy IDictionary keyed by label. No [hashtable] constraint on the legacy form: it silently converts [ordered]@{} to Hashtable and scrambles the declared menu order.
         $RowContextMenu,
 
-        [switch]$SanitizeFormulas
+        [switch]$SanitizeFormulas,
+
+        # Last in the list, so it takes no position an existing positional call already uses.
+        [ValidateSet('Page', 'Edge', 'Capture')]
+        [string]$ScrollWheel = 'Page'
     )
 
     begin {  $accumulated = [System.Collections.Generic.List[object]]::new() }
@@ -409,7 +421,7 @@
         }
 
         if ($PSBoundParameters.ContainsKey('ItemsSource') -and $NoSafeWrap) {
-            Write-Warning "New-UiDataGrid: -NoSafeWrap has no effect with -ItemsSource. The caller's collection is bound as-is; the safe-wrap pass only runs on the -Items path."
+            Write-Warning "New-UiDataGrid: -NoSafeWrap has no effect with -ItemsSource. The collection is used as it is, and the safe wrap pass only runs on the -Items path."
         }
 
         $session = Assert-UiSession -CallerName 'New-UiDataGrid'
@@ -456,8 +468,8 @@
 
             # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's unwrapped ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
             # Only PsUi.AsyncObservableCollection is safe to bind directly. Everything else gets wrapped + mirrored.
-            $itemsSourceKind = Get-UiCollectionKind -Obj $ItemsSource
-            switch ($itemsSourceKind) {
+            $itemsSourceType = Get-UiCollectionType -Obj $ItemsSource
+            switch ($itemsSourceType) {
                 'Null' {
                     $collection = [PsUi.GridOwnedCollection[object]]::new()
                     $isOwned    = $true
@@ -483,24 +495,51 @@
                 # [ref] promotion
                 'Ref' {
                     $orig     = $ItemsSource.Value
-                    $origKind = Get-UiCollectionKind -Obj $orig
-                    if ($origKind -eq 'PsUiObservable') {
+                    $origType = Get-UiCollectionType -Obj $orig
+                    if ($origType -eq 'PsUiObservable') {
                         try { $orig.UpdateDispatcher() } catch { Write-Debug "UpdateDispatcher failed: $_" }
                         $collection = $orig
                     }
                     else {
-                        $wrapper    = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher)
+                        $origName = if ($null -eq $orig) { 'null' } else { $orig.GetType().Name }
+                        try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher) }
+                        catch {
+                            throw "New-UiDataGrid -ItemsSource takes a list. The [ref] points at a $origName, which is not one, and PowerShell cannot read it as a sequence either."
+                        }
+
+                        # Without this an ObservableCollection behind [ref]$state.Rows seeds the grid once and never reaches it again.
+                        if ($orig -is [System.Collections.IList] -and !$orig.IsReadOnly -and !$orig.IsFixedSize) {
+                            $wrapper.AttachMirror($orig)
+                            $mirrorAttached = $true
+                        }
                         $collection = $wrapper
 
-                        # -NoBind promises the thing you passed keeps its value, and a [ref] is that thing.
-                        if (!$NoBind) { $ItemsSource.Value = $wrapper }
+                        if (!$NoBind) {
+                            try { $ItemsSource.Value = $wrapper } catch { Write-Debug "[ref] target refused the wrap: $_" }
+
+                            # [ArrayList]$rows behind the ref converts the wrap, so the read back is a copy the grid never sees again.
+                            $landed = $ItemsSource.Value
+                            if (!([object]::ReferenceEquals($landed, $wrapper))) {
+                                $landedDesc = if ($null -eq $landed) { 'refused it and kept its null' } else { "converted it into a fresh $($landed.GetType().Name) the grid cannot see" }
+                                Write-Warning "New-UiDataGrid -ItemsSource: the variable behind the [ref] is type constrained, so PowerShell $landedDesc. Drop the type, or use -NoBind and drive the grid with Add-UiDataGridItem."
+                            }
+                            # [ref]$state.Rows stops at the holder, and an ObservableCollection there still reaches the grid through the mirror, so warning about it would be wrong.
+                            elseif (!(Test-UiRefWritesThrough -Reference $ItemsSource) -and
+                                    $orig -isnot [System.Collections.Specialized.INotifyCollectionChanged]) {
+                                Write-Warning 'New-UiDataGrid -ItemsSource: only a [ref] to a variable can be repointed, so a [ref] built from a property still holds the original list. Add through the [ref] .Value.'
+                            }
+                        }
                     }
                     break
                 }
 
                 # Value type collection (ArrayList, List<T>, array, anything else IEnumerable).
                   default {
-                    $wrapper = [PsUi.AsyncObservableCollection[object]]::new($ItemsSource, $uiDispatcher)
+                    try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($ItemsSource, $uiDispatcher) }
+                    catch {
+                        throw "New-UiDataGrid -ItemsSource takes a list. A $($ItemsSource.GetType().Name) is not one, and PowerShell cannot read it as a sequence either."
+                    }
+
                     if ($ItemsSource -is [System.Collections.IList] -and !$ItemsSource.IsReadOnly -and !$ItemsSource.IsFixedSize) {
                         $wrapper.AttachMirror($ItemsSource)
                         $mirrorAttached = $true
@@ -510,13 +549,14 @@
             }
 
             # Walk up the scopes, repoint every variable that ref equals the original at the wrap.
-            # $list.Add() from outside now lands on the threadsafe collection. Ref/PsUiObservable are handled above. Null branch has nothing to wrap.
+            # $list.Add() from outside now lands on the threadsafe collection. Ref/PsUiObservable are handled above. The Null branch has no collection to wrap.
             if (!$NoBind -and
-                $itemsSourceKind -in 'WpfObservable', 'Other' -and
+                $itemsSourceType -in 'WpfObservable', 'Other' -and
                 $null -ne $collection -and
                 !([object]::ReferenceEquals($collection, $ItemsSource))) {
 
-                $promotedNames = [System.Collections.Generic.List[string]]::new()
+                $promotedNames  = [System.Collections.Generic.List[string]]::new()
+                $convertedNames = [System.Collections.Generic.List[string]]::new()
                 for ($scopeIdx = 1; $scopeIdx -lt 50; $scopeIdx++) {
                     try {
                         $scopeVars = Get-Variable -Scope $scopeIdx -ErrorAction Stop
@@ -532,27 +572,42 @@
                         if ($matched) {
                             try {
                                 Set-Variable -Name $psVar.Name -Value $collection -Scope $scopeIdx -Force -ErrorAction Stop
-                                [void]$promotedNames.Add("`$$($psVar.Name)@$scopeIdx")
+
+                                $landed = $collection
+                                try { $landed = Get-Variable -Name $psVar.Name -Scope $scopeIdx -ValueOnly -ErrorAction Stop }
+                                catch { Write-Debug "Variable bind read back of '$($psVar.Name)' failed: $_" }
+
+                                if ([object]::ReferenceEquals($landed, $collection)) {
+                                    [void]$promotedNames.Add("`$$($psVar.Name)@$scopeIdx")
+                                }
+                                else {
+                                    $landedDesc = if ($null -eq $landed) { 'which refused it and holds null' } else { "now a fresh $($landed.GetType().Name)" }
+                                    [void]$convertedNames.Add("`$$($psVar.Name), $landedDesc")
+                                }
                             }
                             catch { Write-Debug "Variable bind rewrite of '$($psVar.Name)' at scope $scopeIdx failed: $_" }
                         }
                     }
                 }
-                if ($promotedNames.Count -gt 0) {
-                    Write-Debug "Variables bound: $($promotedNames -join ', ')"
+                if ($convertedNames.Count -gt 0) {
+                    Write-Warning "New-UiDataGrid -ItemsSource: a type constrained target converted the threadsafe collection on assignment, and the grid never sees the copy ($($convertedNames -join ', ')). Drop the type, or use -NoBind and drive the grid with Add-UiDataGridItem."
                 }
-                else {
+
+                if ($promotedNames.Count -gt 0) { Write-Debug "Variables bound: $($promotedNames -join ', ')" }
+                
+                # The conversion branch above already warned about this variable.
+                elseif ($convertedNames.Count -eq 0) {
                     Write-Debug "Variables bound: nothing matched"
-                    # Zero rewrite usually means -ItemsSource got fed a property access ($obj.Items) or an unbound expression (eg Get-Garbage). The grid still binds against the wrap but you have no handle - Add-/Set-/Clear-UiDataGridItems and outside $list.Add() drop on the floor with no obvious clue why.
-                    Write-Warning 'New-UiDataGrid -ItemsSource: could not repoint any caller variable to the autowrapped collection. Use a local variable or [ref] so $list.Add() and the helpers stay connected to the grid.'
+                    # Zero rewrites usually means a property access ($obj.Items) or an expression without a variable behind it.
+                    Write-Warning 'New-UiDataGrid -ItemsSource: could not repoint any script variable to the autowrapped collection. Use a local variable or [ref] so $list.Add() and the helpers stay connected to the grid.'
                 }
             }
             elseif ($NoBind -and
-                    $itemsSourceKind -in 'WpfObservable', 'Other' -and
+                    $itemsSourceType -in 'WpfObservable', 'Other' -and
                     $null -ne $collection -and
                     !([object]::ReferenceEquals($collection, $ItemsSource))) {
-                # You asked for explicit binding management. Skip the scope rewrite. The wrap is still attached to the grid, but your $list keeps pointing at the original.
-                Write-Debug "Variable bind skipped (-NoBind). Caller's variable still points at the original collection."
+                # -NoBind leaves $list on the original with the wrap still attached to the grid.
+                Write-Debug "Variable bind skipped (-NoBind). The variable still points at the original collection."
             }
         }
         else {
@@ -560,7 +615,7 @@
             $safeItems = if ($NoSafeWrap -or $rawItems.Count -eq 0) { $rawItems }
                          else { @(ConvertTo-SafeDataArray -DataArray $rawItems) }
 
-            # Flatten to PSCustomObject so WPF binding stops pretending PowerShell added properties don't exist. The snapshot tucks a cached _SearchText on each row for the filter and keeps the original at $row._BaseObject. Skip on empty input - Mandatory binding chokes.
+            # Flatten to PSCustomObject so WPF binding stops pretending PS added properties don't exist. The snapshot tucks a cached _SearchText on each row for the filter and keeps the original at $row._BaseObject. Skip on empty input - Mandatory binding chokes.
             $snapItems = if ($null -eq $safeItems -or $safeItems.Count -eq 0) { @() }
             else { @(ConvertTo-UiDataGridSnapshot -Items $safeItems -BuildSearchIndex) }
 
@@ -679,8 +734,8 @@
             catch { Write-Debug "Flood prompt at construction failed: $_" }
         }
 
-        # Tag carries the bookkeeping the column picker reaches for on each visibility toggle.
-        # StretchLastColumn is the gate that reruns Set-LastDataColumnStar, and it still honours the original -NoStretchLastColumn switch passed at construction.
+        # Tag carries the state the column picker reads on each visibility toggle.
+        # StretchLastColumn is the gate that reruns Set-LastDataColumnStar, and it still honors the original -NoStretchLastColumn switch passed at construction.
         $dataGrid.Tag = @{
             AllProperties       = $colInfo.AllProperties
             DefaultProperties   = $colInfo.DefaultProperties
@@ -688,14 +743,11 @@
             Collection          = $collection
             StretchLastColumn   = !$NoStretchLastColumn
             IsOwned             = $isOwned
-            # New-UiTab's PreviewMouseWheel reads this and lets the wheel through when set.
-            CaptureScrollWheel  = [bool]$CaptureScrollWheel
             # Export / copy paths consult this and quote prefix Excel formula triggers.
             SanitizeFormulas    = [bool]$SanitizeFormulas
         }
 
         # Resize unlock already attached inside New-StyledDataGrid (skipped under -NoStretchLastColumn: no star, no lockout).
-
         # No starter data means no row to read property names from. Watch for the first add, seed columns, then drop the sub so later Adds don't reenter the guard.
         if ($colInfo.AllProperties.Count -eq 0 -and $collection -is [System.Collections.Specialized.INotifyCollectionChanged]) {
             $seedState = @{
@@ -731,10 +783,10 @@
                         if ($items.Count -eq 0) { return }
 
                         # Detach ItemsSource for the whole surgery. Building columns on a LIVE grid corrupts the ItemContainerGenerator's change bookkeeping ("ItemsControl is inconsistent with its items source" on every layout pass after), and DeferRefresh is no answer - Build's BeginInit/EndInit refreshes the ItemCollection, which throws on a defer pending view.
-                        # Unbound, there is no view processing to corrupt. Reattaching is a fresh bind, same as construction. Adds landing mid surgery are absorbed by it.
+                        # Without an ItemsSource attached there is no view processing to corrupt, and the reattach is a fresh bind that absorbs any adds landing mid surgery.
                         #
                         # No try/finally: PS's CheckActionPreference NREs on try block exit when the scriptblock runs off pipeline (this is a Dispatcher delegate), and the hijacked unwind SKIPS finally - the grid stayed detached, showing zero rows forever. trap handles the error path. The tail reattach handles success. Same pattern as Add-UiDataGridRowDetails.
-                        # $seedGrid is a plain local on purpose. $rebind below closes over it, and an inner GetNewClosure only captures THIS scope's locals - reaching for $localState (an outer closure capture) in there hands back $null, so the reattach never runs and the grid stays empty.
+                        # An inner GetNewClosure only captures THIS scope's locals ($rebind reads $null for anything else and the reattach never runs).
                         $seedGrid    = $localState.DataGrid
                         $savedSource = $seedGrid.ItemsSource
                         $savedView   = $savedSource -as [System.ComponentModel.ICollectionView]
@@ -767,7 +819,7 @@
                         $rebuildParams.Items = $items
                         $newInfo = Build-UiDataGridColumns @rebuildParams
 
-                        # First arriving row had nothing readable - rearm so a later row can try.
+                        # The first row to arrive had no readable property, so rearm for a later one.
                         if (!$newInfo -or $newInfo.AllProperties.Count -eq 0) {
                             if ($localState.SelfRef -and !$localState.Handler) {
                                 $localState.Handler = $localState.SelfRef
@@ -798,7 +850,7 @@
                             }
                         }
 
-                        # One known cosmetic wrinkle, where the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze and filter behave. Leaving it.
+                        # The last column's star width renders natural after the rebind, leaving dead space to its right. Neither a deferred star reapply nor reactive arm suspension fixes it.
                         & $rebind
                     }.GetNewClosure())
             }.GetNewClosure()
@@ -836,6 +888,7 @@
                 }.GetNewClosure())
                 $cleanup.Done = $true
             }.GetNewClosure()
+
             # Initialized fallback - grids built and disposed without ever loading still get the detach hook. Double hook protection lives in $cleanup.Done.
             $dataGrid.Add_Loaded($hookCleanup)
             $dataGrid.Add_Initialized($hookCleanup)
@@ -843,10 +896,7 @@
 
         if (!$NoArrayPopup)      { Add-ArrayCellPopupHandler -DataGrid $dataGrid }
         if (!$NoDictionaryPopup) { Add-DictionaryValuePopupHandler -DataGrid $dataGrid }
-
-        if ($Editable) {
-            Add-UiDataGridEditHandling -Grid $dataGrid -Columns $Columns -OnCellEdit $OnCellEdit -OnRowEdit $OnRowEdit
-        }
+        if ($Editable) { Add-UiDataGridEditHandling -Grid $dataGrid -Columns $Columns -OnCellEdit $OnCellEdit -OnRowEdit $OnRowEdit }
 
         if ($OnSelectionChanged -and $SelectionMode -ne 'None') {
             $selHandler = $OnSelectionChanged
@@ -901,28 +951,20 @@
 
         if (!$NoAlternatingRowBrush) { Add-UiDataGridAlternatingBrush -DataGrid $dataGrid }
 
-        # By default the wheel goes to the parent so the outer window scrolls with the cursor over the grid.
-        # -CaptureScrollWheel keeps it inside the grid for its own scroll.
-        if (!$CaptureScrollWheel) {
-            $dataGrid.Add_PreviewMouseWheel({
-                param($sender, $eventArgs)
-                if ($eventArgs.Handled) { return }
-                $eventArgs.Handled = $true
-                $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
-                $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
-                $newEvent.Source = $sender
-                $parentEl = $sender.Parent -as [System.Windows.UIElement]
-                if ($parentEl) { $parentEl.RaiseEvent($newEvent) }
-            })
+        # -CaptureScrollWheel predates -ScrollWheel and only ever meant Capture.
+        $wheelMode = if ($CaptureScrollWheel) { 'Capture' } else { $ScrollWheel }
+
+        # -Fill leaves the page almost no scroll of its own for Page mode to hand the wheel to.
+        if ($Fill -and $wheelMode -eq 'Page' -and !$PSBoundParameters.ContainsKey('ScrollWheel')) {
+            $wheelMode = 'Edge'
         }
+        Set-UiWheelRouting -Control $dataGrid -Mode $wheelMode
 
         $useToolbar = !$NoToolbar -and !($NoFilter -and $NoExport -and $NoCopy -and $NoColumnPicker)
 
         # Overlay wraps the DataGrid, not the dock panel. Otherwise the icon floats over the toolbar instead of the column header band.
         $gridArea = $dataGrid
-        if (![string]::IsNullOrEmpty($EmptyMessage)) {
-            $gridArea = Add-UiDataGridEmptyOverlay -HostControl $dataGrid -DataGrid $dataGrid -Message $EmptyMessage
-        }
+        if (![string]::IsNullOrEmpty($EmptyMessage)) { $gridArea = Add-UiDataGridEmptyOverlay -HostControl $dataGrid -DataGrid $dataGrid -Message $EmptyMessage }
 
         $hostControl = $gridArea
 

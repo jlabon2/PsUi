@@ -130,7 +130,8 @@ function ConvertTo-UiDataGridSnapshot {
 
                 $snap[$name] = $val
                 if ($searchBuffer -and $null -ne $val) {
-                    [void]$searchBuffer.Append([string]$val)
+                    # [string] read a hashtable as its type name
+                    [void]$searchBuffer.Append([PsUi.ValueKind]::IndexText($val, 25, 512))
                     [void]$searchBuffer.Append(' ')
                 }
             }

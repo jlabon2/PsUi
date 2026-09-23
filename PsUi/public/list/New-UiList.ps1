@@ -12,15 +12,14 @@ function New-UiList {
     .PARAMETER Items
         Array of static items to display. Mutually exclusive with ItemsSource.
     .PARAMETER ItemsSource
-        A collection to bind as the list's data source. Use this for lists that change at
-        runtime. Anything that isn't already a PsUi thread-safe collection gets wrapped in one,
-        and your variable is repointed at the wrap so $list.Add() from a background action keeps
-        working. The wrap means $list is no longer the type you passed in, so .AddRange(),
-        .Sort() and -is [ArrayList] stop working on it. Use -NoBind to keep your own reference.
+        A collection to bind as the list's data source, for lists that change at runtime.
+        Anything that isn't already a PsUi threadsafe collection gets wrapped in one, and the
+        variable is repointed at the wrap so $list.Add() from a background action keeps working.
+        The wrap is no longer the type passed in, so .AddRange(), .Sort() and -is [ArrayList]
+        stop working. A [ref] has its .Value repointed instead. -NoBind skips the repoint.
     .PARAMETER NoBind
-        Skip repointing your variable at the wrapped collection. The list still binds to the
-        wrap, but your variable keeps pointing at the original, and the two only stay in step
-        while the mirror holds. For when you want to manage the binding yourself.
+        Skip the repoint. The list still binds the wrap, the original keeps its own identity,
+        and the two only stay in step while the mirror holds.
     .PARAMETER DisplayFormat
         Format string for displaying objects. Use property names in braces.
         Example: "{Username} ({AccountType})" shows "jsmith (Admin)".
@@ -43,6 +42,15 @@ function New-UiList {
     .PARAMETER Fill
         Grow to the rest of the window's vertical viewport instead of the fixed -Height.
         List resizes with the window. Use when the list is the dominant content in the view.
+    .PARAMETER CaptureScrollWheel
+        Keep every mouse-wheel event inside the list, ends included. Same as -ScrollWheel Capture.
+    .PARAMETER ScrollWheel
+        Says who gets the wheel while the cursor is over the list. Page, the default, hands every
+        wheel event to the page, so a window full of them still scrolls. Edge scrolls the list's
+        own rows until it reaches the top or bottom and gives the page the wheel from there.
+        Capture holds on at the ends as well, so the page stays put while the cursor is here.
+        A -Fill list starts on Edge instead, since it holds the viewport and the page behind it
+        has almost no scroll of its own left. Pass -ScrollWheel to override that.
     .PARAMETER FullWidth
         Stretches the list to fill available width.
     .PARAMETER EnabledWhen
@@ -71,9 +79,9 @@ function New-UiList {
         [Parameter()]
         [string[]]$Items,
 
-        # Typed, unlike the grid's. A [ref] doesn't implement IEnumerable, so parameter binding rejects it here and the list skips the grid's whole ref promotion path.
+        # Untyped so the [ref] reaches Resolve-UiListSource whole.
         [Parameter()]
-        [System.Collections.IEnumerable]$ItemsSource,
+        $ItemsSource,
 
         [switch]$NoBind,
 
@@ -94,16 +102,21 @@ function New-UiList {
 
         [switch]$Fill,
 
+        [switch]$CaptureScrollWheel,
+
         [switch]$FullWidth,
 
         [Parameter()]
         [object]$EnabledWhen,
 
         [Parameter()]
-        [hashtable]$WPFProperties
+        [hashtable]$WPFProperties,
+
+        [ValidateSet('Page', 'Edge', 'Capture')]
+        [string]$ScrollWheel = 'Page'
     )
 
-    # ContainsKey, not truthiness. An empty -ItemsSource collection is still your script saying "bind to this one".
+    # An empty -ItemsSource collection evaluates as false and still means "bind to this one".
     if ($Items.Count -gt 0 -and $PSBoundParameters.ContainsKey('ItemsSource')) {
         throw "New-UiList cannot use both -Items and -ItemsSource. Choose one."
     }
@@ -119,21 +132,12 @@ function New-UiList {
     $listBox.Margin = [System.Windows.Thickness]::new(0)
     $listBox.SelectionMode = if ($MultiSelect) { 'Extended' } else { 'Single' }
 
-    # Raise scroll events to the parent ScrollViewer so the list doesn't swallow them.
-    # Skipped under -Fill: a filled list already claims the viewport, so raising the wheel again would leave nothing to scroll and kill it entirely. The list's own scrollbar owns it.
-    if (!$Fill) {
-        $listBox.Add_PreviewMouseWheel({
-            param($sender, $eventArgs)
-            if (!$eventArgs.Handled) {
-                $eventArgs.Handled = $true
-                $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
-                $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
-                $newEvent.Source = $sender
-                $parentElement = $sender.Parent -as [System.Windows.UIElement]
-                if ($parentElement) { $parentElement.RaiseEvent($newEvent) }
-            }
-        })
+    $wheelMode = if ($CaptureScrollWheel) { 'Capture' } else { $ScrollWheel }
+
+    if ($Fill -and $wheelMode -eq 'Page' -and !$PSBoundParameters.ContainsKey('ScrollWheel')) {
+        $wheelMode = 'Edge'
     }
+    Set-UiWheelRouting -Control $listBox -Mode $wheelMode
 
     if ($DisplayFormat) {
         Write-Debug "Registering DisplayFormat: $DisplayFormat"
@@ -144,7 +148,7 @@ function New-UiList {
     Set-ListBoxStyle -ListBox $listBox
 
     # Build the data source before filter setup - filtering needs a collection behind a CollectionView.
-    # Also before the toolbar: the filter box and + button close over $sourceCollection by value.
+    # Also before the toolbar, since the filter box and + button close over $sourceCollection by value.
     $sourceCollection = $null
     $mirrorAttached   = $false
     if ($PSBoundParameters.ContainsKey('ItemsSource')) {
@@ -153,8 +157,16 @@ function New-UiList {
         $sourceCollection = $resolved.Collection
         $mirrorAttached   = $resolved.MirrorAttached
 
-        if ($resolved.NeedsBind -and !$NoBind -and $resolved.Repointed.Count -eq 0) {
-            Write-Warning 'New-UiList -ItemsSource: could not repoint any caller variable to the autowrapped collection. Use a variable declared before New-UiWindow (or inside -Content) so $list.Add() and Add-UiListItem stay connected to the list.'
+        if ($resolved.NeedsBind -and !$NoBind -and $resolved.Repointed.Count -eq 0 -and $resolved.Converted.Count -eq 0) {
+            Write-Warning 'New-UiList -ItemsSource: could not repoint any script variable to the autowrapped collection. Use a variable declared before New-UiWindow (or inside -Content) so $list.Add() and Add-UiListItem stay connected to the list.'
+        }
+
+        if ($resolved.RefWriteMissed) {
+            Write-Warning 'New-UiList -ItemsSource: only a [ref] to a variable can be repointed, so a [ref] built from a property still holds the original list. Add through the [ref] .Value, or pass an ObservableCollection, which the list tracks wherever it lives.'
+        }
+
+        if ($resolved.Converted.Count -gt 0) {
+            Write-Warning "New-UiList -ItemsSource: a type constrained target converted the threadsafe collection on assignment, and the copy never reaches the list ($($resolved.Converted -join ', ')). Drop the type, or use -NoBind and drive the list with Add-UiListItem."
         }
 
         $session.RegisterListCollection($Variable, $sourceCollection)
@@ -180,7 +192,7 @@ function New-UiList {
         $listBox.ItemsSource = $collectionView
     }
 
-    # Container: DockPanel with toolbar, or the bare listBox on its own.
+    # With a toolbar the whole thing goes in a DockPanel, and without one the ListBox goes in on its own.
     if ($needsToolbar) {
         $container = [System.Windows.Controls.DockPanel]@{
             Margin = [System.Windows.Thickness]::new(4, 4, 4, 8)
@@ -392,10 +404,10 @@ function New-UiList {
                 $result = Show-UiInputDialog -Title 'Add Item' -Prompt $addState.PromptText
                 if (![string]::IsNullOrWhiteSpace($result)) {
                     [void]$addState.Collection.Add($result)
-                    
+
                     # Auto-select the newly added item (keeps existing selections)
                     $addState.ListView.SelectedItems.Add($result)
-                    
+
                     if ($addState.CountLabel) {
                         $selected = $addState.ListView.SelectedItems.Count
                         $total    = $addState.ListView.Items.Count
@@ -456,7 +468,7 @@ function New-UiList {
                     $filterText = $textBox.Text.Trim()
                     $view       = $tagData.View
 
-                    # Filter the view, do NOT swap ItemsSource. Building a throwaway collection per keystroke used to leave the ListBox attached to that throwaway forever, so every later Add-UiListItem landed in the registered collection and never showed up.
+                    # Filter the view, do NOT swap ItemsSource. Building a throwaway collection per keystroke leaves the ListBox attached to that throwaway forever, and every later Add-UiListItem then lands in the registered collection where the list never sees it.
                     if ($null -ne $view) {
                         $needle = $filterText
                         if ([string]::IsNullOrEmpty($needle)) {

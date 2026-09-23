@@ -2,11 +2,11 @@
 .SYNOPSIS
     Builds the PsUi C# backend into framework-specific DLLs.
 .DESCRIPTION
-    Compiles the C# source in ./src to DLLs targeting both .NET Framework 4.7.2 
-    (for PowerShell 5.1) and .NET 6.0 (for PowerShell 7+).
-    
-    Output is placed in ./PsUi/lib/desktop/ and ./PsUi/lib/core/
-    
+    Compiles the C# source in ./src to DLLs for three targets: .NET Framework 4.5.2 (WinPE),
+    .NET Framework 4.7.2 (for 5.1) and .NET 6.0 (for 7+).
+
+    Output is placed in ./PsUi/lib/net452/, ./PsUi/lib/desktop/ and ./PsUi/lib/core/
+
     Includes WebView2 dependencies for embedded browser support.
 .PARAMETER Configuration
     Build configuration: Debug or Release. Default is Release.
@@ -39,15 +39,10 @@ if (!(Get-Command dotnet -ErrorAction SilentlyContinue)) {
     return
 }
 
-# Clean previous builds
+# No wipe of lib/ up front. One locked file used to leave the module half deleted with no way back but another build, so every file is replaced on its own below.
 $libPath = Join-Path $modulePath 'lib'
-if (Test-Path $libPath) {
-    Remove-Item $libPath -Recurse -Force
-}
 
-# Build each target sequentially to avoid obj/ file-lock race condition.
-# Multi-target parallel builds share obj/Release/ intermediates and collide
-# when three frameworks write to the same PsUi.dll at the same time.
+# Parallel builds share the obj/Release/ intermediates and collide when three frameworks write the same PsUi.dll at once.
 Push-Location $srcPath
 try {
     foreach ($tfm in @('net452', 'net472', 'net6.0-windows')) {
@@ -62,9 +57,9 @@ finally {
     Pop-Location
 }
 
-# Clean up SDK artifacts that shouldn't be in the module
-$net6Path = Join-Path $libPath 'net6.0-windows'
+$net6Path   = Join-Path $libPath 'net6.0-windows'
 $net472Path = Join-Path $libPath 'net472'
+$net452Path = Join-Path $libPath 'net452'
 
 # Remove known SDK artifacts and keep only PsUi + WebView2
 $keepFiles = @('PsUi.dll', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Wpf.dll')
@@ -72,10 +67,10 @@ $keepFolders = @('runtimes')
 
 foreach ($frameworkPath in @($net6Path, $net472Path)) {
     if (!(Test-Path $frameworkPath)) { continue }
-    
+
     # Remove unwanted files (SDK dependencies we don't need)
     Get-ChildItem $frameworkPath -File | Where-Object { $_.Name -notin $keepFiles } | Remove-Item -Force -ErrorAction SilentlyContinue
-    
+
     # Remove unwanted folders (localization, ref assemblies, etc.)
     Get-ChildItem $frameworkPath -Directory | Where-Object { $_.Name -notin $keepFolders } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -83,16 +78,16 @@ foreach ($frameworkPath in @($net6Path, $net472Path)) {
 # Clean up WebView2 runtimes and copy native loader to lib root
 function Clean-WebView2Runtimes {
     param([string]$TargetPath)
-    
+
     $runtimesPath = Join-Path $TargetPath 'runtimes'
     if (!(Test-Path $runtimesPath)) { return }
-    
+
     # Copy WebView2Loader.dll for each architecture to lib folder root
     $platforms = @(
         @{ Arch = 'win-x64'; Suffix = '' }       # Default for x64 (most common)
         @{ Arch = 'win-x86'; Suffix = '.x86' }   # Fallback for x86
     )
-    
+
     foreach ($plat in $platforms) {
         $srcLoader = Join-Path $runtimesPath "$($plat.Arch)\native\WebView2Loader.dll"
         if (Test-Path $srcLoader) {
@@ -100,7 +95,7 @@ function Clean-WebView2Runtimes {
             Copy-Item $srcLoader $dstLoader -Force
         }
     }
-    
+
     # Remove runtimes folder - native DLLs now in lib root
     Remove-Item $runtimesPath -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -108,18 +103,35 @@ function Clean-WebView2Runtimes {
 Clean-WebView2Runtimes -TargetPath $net6Path
 Clean-WebView2Runtimes -TargetPath $net472Path
 
-# Rename framework folders to edition-agnostic names (future-proofing)
-$desktopPath = Join-Path $libPath 'desktop'
-$corePath = Join-Path $libPath 'core'
+# A file some process holds open keeps its old copy and is named at the end.
+$held = [System.Collections.Generic.List[string]]::new()
+function Update-LibFolder {
+    param([string]$Source, [string]$Target)
+    if (!(Test-Path $Source)) { return }
+    $fresh = @(Get-ChildItem $Source -File)
+    if ($fresh.Count -eq 0) { return }
+    if (!(Test-Path $Target)) { $null = New-Item -ItemType Directory -Path $Target }
 
-if (Test-Path $net472Path) {
-    if (Test-Path $desktopPath) { Remove-Item $desktopPath -Recurse -Force }
-    Rename-Item $net472Path $desktopPath
+    foreach ($file in $fresh) {
+        try { Copy-Item $file.FullName (Join-Path $Target $file.Name) -Force -ErrorAction Stop }
+        catch { $held.Add((Join-Path $Target $file.Name)) }
+    }
+
+    # Whatever the build stopped producing goes too, unless it is held.
+    foreach ($stale in @(Get-ChildItem $Target -File | Where-Object { $_.Name -notin $fresh.Name })) {
+        try { Remove-Item $stale.FullName -Force -ErrorAction Stop }
+        catch { $held.Add($stale.FullName) }
+    }
 }
 
-if (Test-Path $net6Path) {
-    if (Test-Path $corePath) { Remove-Item $corePath -Recurse -Force }
-    Rename-Item $net6Path $corePath
+Update-LibFolder -Source $net472Path -Target (Join-Path $libPath 'desktop')
+Update-LibFolder -Source $net6Path   -Target (Join-Path $libPath 'core')
+Remove-Item $net472Path, $net6Path -Recurse -Force -ErrorAction SilentlyContinue
+
+# WinPE ships the DLL and its pdb and no more.
+if (Test-Path $net452Path) {
+    Get-ChildItem $net452Path -File | Where-Object { $_.Name -notin @('PsUi.dll', 'PsUi.pdb') } | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $net452Path -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Verify output
@@ -152,4 +164,8 @@ if (Test-Path $net452Dll) {
 }
 else {
     Write-Host "  [MISSING] net452 (WinPE)" -ForegroundColor Red
+}
+
+if ($held.Count -gt 0) {
+    throw "Held open by another process and left at the old copy: $($held -join ', '). Close it and build again."
 }

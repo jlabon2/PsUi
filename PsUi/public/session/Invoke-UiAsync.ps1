@@ -188,7 +188,7 @@ function Invoke-UiAsync {
     $capturedSessionId = [PsUi.SessionManager]::CurrentSessionId
 
     $state = [hashtable]::Synchronized(@{
-        Results       = [System.Collections.Generic.List[object]]::new()
+        Results       = [System.Collections.Generic.List[psobject]]::new()
         Errors        = [System.Collections.Generic.List[object]]::new()
         OnComplete    = $OnComplete
         OnError       = $OnError

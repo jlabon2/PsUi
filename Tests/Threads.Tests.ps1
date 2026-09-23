@@ -1,4 +1,4 @@
-﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 
 # Runspaces and background threads, and what is left behind when an async run ends.
 . (Join-Path $PSScriptRoot '_Setup.ps1')
@@ -61,6 +61,24 @@ Describe 'AsyncExecutor Events' {
         $output | Should -Contain 1
         $output | Should -Contain 2
         $output | Should -Contain 3
+    }
+
+    It 'Keeps what a script produced before it threw' {
+        # Invoke() only handed its collection back once the pipeline completed, so a terminating error threw every earlier object away with it.
+        $executor                      = [PsUi.AsyncExecutor]::new()
+        $executor.UsePipelineQueueMode = $true
+        $executor.ExecuteAsync([scriptblock]::Create('1; 2; throw "boom"'), $null, $null, $null, $null, $false)
+
+        $timeout = [DateTime]::Now.AddSeconds(5)
+        while ($executor.IsRunning -and [DateTime]::Now -lt $timeout) { Start-Sleep -Milliseconds 50 }
+        Start-Sleep -Milliseconds 100
+
+        $output = $executor.DrainPipelineQueue(100)
+        $executor.Dispose()
+
+        $output.Count | Should -Be 2
+        $output | Should -Contain 1
+        $output | Should -Contain 2
     }
 
     It 'Should track IsRunning state correctly' {

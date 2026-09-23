@@ -247,8 +247,16 @@ function New-UiDataGridToolbar {
         [void]$toolbar.Children.Add($copyButton)
 
         $gridRef = $DataGrid
+
+        # Click handlers resolve command names in the runspace global scope, and a grid built outside a window has no PsUi there.
+        $copyToClipboard = ${function:Invoke-UiDataGridCopyToClipboard}
+        $buttonFeedback  = ${function:Start-UiButtonFeedback}
+
+        # Throwing in a click handler doesn't stop the statements after it, so an unguarded feedback call flashes the tick over an empty clipboard.
         $copyButton.Add_Click({
-            Invoke-UiDataGridCopyToClipboard -DataGrid $gridRef
+            if (& $copyToClipboard -DataGrid $gridRef) {
+                & $buttonFeedback -Button $this -OriginalIconChar ([PsUi.ModuleContext]::GetIcon('Copy'))
+            }
         }.GetNewClosure())
 
         # Copy with zero selection does nothing, silently. Disable until the user picks a row.
@@ -273,7 +281,7 @@ function New-UiDataGridToolbar {
     return @{
         Container    = $toolbar
         FilterBox    = $filterBox
-        ColumnButton = $colButtona
+        ColumnButton = $colButton
         CopyButton   = $copyButton
         ExportButton = $exportButton
     }

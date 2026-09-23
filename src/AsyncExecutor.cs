@@ -20,7 +20,7 @@ namespace PsUi
     // Runs PS scripts on background threads, routes Write-Host/Progress/etc to WPF via events.
     // Partial classes: Routing.cs (event handlers), Setup.cs (proxy function injection)
     //
-    // Complexity warning! Running PS on a background thread breaks Write-Host, Read-Host, progress bars, and Get-Credential. We intercept all of them, marshal to the UI thread, and handle backpressure when output floods in. 
+    // Complexity warning! Running PS on a background thread breaks Write-Host, Read-Host, progress bars, and Get-Credential. We intercept all of them, marshal to the UI thread, and handle backpressure when output floods in.
     // The batching and queue modes exist because we've seen scripts emit 50k lines in seconds - without throttling, the dispatcher queue grows unbounded and the UI shits the bed.
     public partial class AsyncExecutor : IDisposable
     {
@@ -36,7 +36,7 @@ namespace PsUi
         public event Action OnComplete;
         public event Action OnCancelled;
         public event Action<string> OnWindowTitle;
-        
+
         // Fires when execution is queued waiting for a thread slot
         public event Action OnQueued;
         // Fires when execution starts (thread slot acquired)
@@ -44,7 +44,7 @@ namespace PsUi
         // Fires when internal framework operations fail (dehydration, capture, cleanup).
         // These aren't script errors - they're problems in PsUi itself. Hook this if you need to debug why a variable didn't sync back to a control.
         public event Action<string> OnFrameworkError;
-        
+
         public ScriptBlock InputProvider { get; set; }
         public ScriptBlock SecureInputProvider { get; set; }
         public ScriptBlock ChoiceProvider { get; set; }
@@ -53,15 +53,15 @@ namespace PsUi
         public ScriptBlock ReadKeyProvider { get; set; }
         public ScriptBlock ClearHostProvider { get; set; }
         public ScriptBlock PauseProvider { get; set; }
-        
+
         private PowerShell _powershell;
         private CancellationTokenSource _cts;
         private readonly object _ctsLock = new object();
         private volatile Dispatcher _uiDispatcher;
-        
-        public Dispatcher UiDispatcher 
-        { 
-            get 
+
+        public Dispatcher UiDispatcher
+        {
+            get
             {
                 if (_uiDispatcher == null) _uiDispatcher = CaptureDispatcher();
                 return _uiDispatcher;
@@ -72,7 +72,7 @@ namespace PsUi
         private DateTime _lastProgressUpdate = DateTime.MinValue;
         private readonly object _progressLock = new object();
         private const int PROGRESS_THROTTLE_MS = 100;
-        
+
         // Host output batching - prevents dispatcher from getting flooded
         private List<HostOutputRecord> _hostBatch = new List<HostOutputRecord>();
         private readonly object _hostBatchLock = new object();
@@ -82,27 +82,27 @@ namespace PsUi
         private DateTime _lastObservedFlush = DateTime.MinValue;
         private const int HOST_BATCH_SIZE = 50;
         private const int HOST_FLUSH_MS = 50;
-        
+
         // Queue-based output for polling (avoids dispatcher flooding)
         private System.Collections.Concurrent.ConcurrentQueue<HostOutputRecord> _hostQueue = new System.Collections.Concurrent.ConcurrentQueue<HostOutputRecord>();
         public bool UseQueueMode { get; set; }
-        
+
         // Queue-based pipeline output (avoids dispatcher saturation with large result sets)
         private System.Collections.Concurrent.ConcurrentQueue<object> _pipelineQueue = new System.Collections.Concurrent.ConcurrentQueue<object>();
         public bool UsePipelineQueueMode { get; set; }
-        
+
         // Variables to capture from runspace after script finishes
         public string[] CaptureVariables { get; set; }
-        
+
         // Session ID from UI thread - passed to background runspaces
         private Guid _capturedSessionId;
-        
+
         // Debug mode - when true, writes debug output to console
         public static bool DebugMode { get; set; }
-        
+
         // Throttle delay in ms - slows down script execution to let UI breathe
         public int HostThrottleMs { get; set; }
-        
+
         // Suppress progress events during setup phase (module imports emit Write-Progress records that leak through the host and trigger OnProgress handlers prematurely)
         private volatile bool _suppressProgress = true;
 
@@ -113,28 +113,28 @@ namespace PsUi
             get { return _isRunning; }
             private set { _isRunning = value; }
         }
-        
+
         // Thread-local reference for MinimalHost output routing
         [ThreadStatic]
         private static AsyncExecutor _currentExecutor;
-        
+
         public static AsyncExecutor CurrentExecutor
         {
             get { return _currentExecutor; }
             set { _currentExecutor = value; }
         }
-        
+
         // Semaphore to throttle thread creation - prevents spawning more threads than runspaces.
         // Yeah, ThreadPool threads block on Wait() when all 8 slots are taken. That's fine - the pool grows dynamically, capped at 8 waiters. Without this gate, mashing a button spawns unlimited runspaces and you OOM.
         private static readonly SemaphoreSlim _threadGate = new SemaphoreSlim(8, 8);
-        
+
         // Background thread with STA/MTA based on session. Semaphore gates thread creation to match pool size - prevents "thread bomb" from rapid button clicks.
         private void RunOnBackgroundThread(Action action)
         {
             // Check session for threading preference
             var session = SessionManager.GetSession(_capturedSessionId);
             bool useMta = session != null && session.UseMtaThreading;
-            
+
             // Queue the work through ThreadPool first, then gate actual execution
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -150,10 +150,10 @@ namespace PsUi
                         return;
                     }
                 }
-                
+
                 // Got a slot - notify UI we're starting
                 RaiseOnStarted();
-                
+
                 try
                 {
                     if (useMta)
@@ -174,7 +174,7 @@ namespace PsUi
                             IsBackground = true
                         };
                         staThread.SetApartmentState(ApartmentState.STA);
-                        
+
                         try
                         {
                             staThread.Start();
@@ -198,7 +198,7 @@ namespace PsUi
                 }
             });
         }
-        
+
         private void RaiseOnQueued()
         {
             var handler = OnQueued;
@@ -207,7 +207,7 @@ namespace PsUi
                 UiDispatcher.BeginInvoke(handler);
             }
         }
-        
+
         private void RaiseOnStarted()
         {
             var handler = OnStarted;
@@ -216,19 +216,19 @@ namespace PsUi
                 UiDispatcher.BeginInvoke(handler);
             }
         }
-        
+
         private void RaiseFrameworkError(string context, Exception ex)
         {
             string msg = string.Format("[{0}] {1}", context, ex.Message);
             Debug.WriteLine("AsyncExecutor " + msg);
-            
+
             var handler = OnFrameworkError;
             if (handler != null && UiDispatcher != null)
             {
                 UiDispatcher.BeginInvoke(new Action(() => handler(msg)));
             }
         }
-        
+
         public AsyncExecutor()
         {
             _uiDispatcher = CaptureDispatcher();
@@ -237,41 +237,41 @@ namespace PsUi
             // Pre-warm the pool on first AsyncExecutor creation
             RunspacePoolManager.EnsureInitialized();
         }
-        
+
         private static bool IsReservedVariable(string name)
         {
             return Constants.IsReservedVariable(name);
         }
-        
+
         private static Dispatcher CaptureDispatcher()
         {
             try
             {
-                if (System.Windows.Application.Current != null && 
+                if (System.Windows.Application.Current != null &&
                     System.Windows.Application.Current.Dispatcher != null)
                 {
                     return System.Windows.Application.Current.Dispatcher;
                 }
             }
-            catch (Exception ex) 
-            { 
+            catch (Exception ex)
+            {
                 System.Diagnostics.Debug.WriteLine("CaptureDispatcher failed: " + ex.Message);
             }
             return null;
         }
-        
+
         // Accepts modulesToLoad, uses RunspacePool for speed
         public void ExecuteAsync(ScriptBlock script, Hashtable parameters, IDictionary variablesToDefine = null, IDictionary functionsToDefine = null, IEnumerable<string> modulesToLoad = null, bool debugEnabled = false)
         {
             if (IsRunning) return;
-            
+
             // Reset disposed flag so a previously cancelled instance can be reused
             _disposed = false;
             _suppressProgress = true;
-            
+
             // Reset input session state so ReadKey calls work (cleared on window close)
             KeyCaptureDialog.BeginInputSession();
-            
+
             // Dispose existing CTS before creating new one (synchronized to prevent race conditions)
             lock (_ctsLock)
             {
@@ -280,16 +280,16 @@ namespace PsUi
                     try { _cts.Dispose(); } catch (ObjectDisposedException) { }
                     _cts = null;
                 }
-                
+
                 _cts = new CancellationTokenSource();
             }
             IsRunning = true;
-            
+
             // Determine execution mode and use dedicated runspace only if we need host interception (Read-Host, PromptForChoice, etc.) - otherwise use faster pooled execution
-            bool needsHostInterception = InputProvider != null || SecureInputProvider != null || 
+            bool needsHostInterception = InputProvider != null || SecureInputProvider != null ||
                                           ChoiceProvider != null || CredentialProvider != null ||
                                           PromptProvider != null || ReadKeyProvider != null;
-            
+
             if (needsHostInterception)
             {
                 // Use dedicated runspace with custom host for interactive features
@@ -301,7 +301,7 @@ namespace PsUi
                 ExecuteWithPool(script, parameters, variablesToDefine, functionsToDefine, modulesToLoad, debugEnabled);
             }
         }
-        
+
         private void ExecuteWithPool(ScriptBlock script, Hashtable parameters, IDictionary variablesToDefine, IDictionary functionsToDefine, IEnumerable<string> modulesToLoad, bool debugEnabled)
         {
             // Use session-configured threading (MTA default, STA opt-in via -AsyncApartment)
@@ -312,7 +312,7 @@ namespace PsUi
                 {
                     SessionManager.SetCurrentSession(_capturedSessionId);
                 }
-                
+
                 PowerShell ps = null;
                 Dictionary<string, object> hydratedValues = null;
                 string originalPwd = null;
@@ -322,37 +322,37 @@ namespace PsUi
                 {
                     var cts = _cts;
                     if (cts == null || cts.IsCancellationRequested) return;
-                    
+
                     ps = PowerShell.Create();
                     ps.RunspacePool = RunspacePoolManager.Pool;
                     _powershell = ps;
-                    
+
                     // Set the thread local instance so MinimalHost can route output
                     AsyncExecutor.CurrentExecutor = this;
-                    
+
                     // Inject functions and modules, propagate the session ID
                     ExecuteSetupPhase(ps, functionsToDefine, modulesToLoad, debugEnabled);
-                    
+
                     // Inject user-defined variables from LinkedVariables
                     Dictionary<string, object> definedVarValues;
                     definedVarNames = InjectUserVariables(ps, variablesToDefine, out definedVarValues);
-                    
+
                     // Hydrate UI control values as PowerShell variables
                     hydratedValues = StateHydrationEngine.HydrateViaScript(ps, definedVarNames);
                     MergeDefinedVariables(hydratedValues, definedVarValues);
-                    
+
                     // Inject the AsyncExecutor reference so Write-Host routes to UI
                     InjectAsyncExecutorReference(ps);
-                    
+
                     // Snapshot PWD so we can restore it after execution
                     originalPwd = SnapshotWorkingDirectory(ps);
-                    
+
                     // Build wrapped script with localizer/dehydrator
                     string wrappedScript = ScriptBuilder.WrapUserScript(
-                        script.ToString(), 
-                        hydratedValues != null ? hydratedValues.Keys : null, 
+                        script.ToString(),
+                        hydratedValues != null ? hydratedValues.Keys : null,
                         _capturedSessionId);
-                    
+
                     // Setup complete - allow progress events from user script
                     _suppressProgress = false;
 
@@ -374,18 +374,18 @@ namespace PsUi
                 }
             });
         }
-        
+
         // Setup phase: inject functions, import modules, propagate session ID
         private void ExecuteSetupPhase(PowerShell ps, IDictionary functionsToDefine, IEnumerable<string> modulesToLoad, bool debugEnabled)
         {
             string setupScript = BuildSetupScript(functionsToDefine, modulesToLoad, debugEnabled);
-            
+
             // Prepend session propagation
             if (_capturedSessionId != Guid.Empty)
             {
                 setupScript = ScriptBuilder.BuildSessionPropagation(_capturedSessionId) + "\n" + setupScript;
             }
-            
+
             if (!string.IsNullOrEmpty(setupScript))
             {
                 ps.AddScript(setupScript);
@@ -393,37 +393,37 @@ namespace PsUi
                 ps.Commands.Clear();
             }
         }
-        
+
         // Inject user variables from -LinkedVariables. Returns names for collision detection.
         private HashSet<string> InjectUserVariables(PowerShell ps, IDictionary variablesToDefine, out Dictionary<string, object> definedVarValues)
         {
             var definedVarNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             definedVarValues = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-            
+
             if (variablesToDefine == null) return definedVarNames;
-            
+
             // Collect valid variables first
             var validVars = new List<KeyValuePair<string, object>>();
             foreach (DictionaryEntry kvp in variablesToDefine)
             {
                 string varName = kvp.Key.ToString();
                 if (IsReservedVariable(varName)) continue;
-                
+
                 if (!Constants.IsValidIdentifier(varName))
                 {
                     if (OnError != null) RaiseOnError(string.Format("Invalid variable name '{0}': must contain only letters, digits, underscore, or hyphen", varName));
                     continue;
                 }
-                
+
                 validVars.Add(new KeyValuePair<string, object>(varName, kvp.Value));
             }
-            
+
             // Batch inject all variables in a single Invoke call
             if (validVars.Count > 0)
             {
                 var varNames = new List<string>(validVars.Count);
                 foreach (var kv in validVars) varNames.Add(kv.Key);
-                
+
                 string batchScript = ScriptBuilder.BuildBatchVariableInjection(varNames);
                 if (batchScript != null)
                 {
@@ -432,22 +432,22 @@ namespace PsUi
                     ps.Invoke();
                     ps.Commands.Clear();
                 }
-                
+
                 foreach (var kv in validVars)
                 {
                     definedVarNames.Add(kv.Key);
                     definedVarValues[kv.Key] = kv.Value;
                 }
             }
-            
+
             return definedVarNames;
         }
-        
+
         // Add LinkedVariables to hydrated set for dehydration tracking
         private static void MergeDefinedVariables(Dictionary<string, object> hydratedValues, Dictionary<string, object> definedVarValues)
         {
             if (hydratedValues == null || definedVarValues == null) return;
-            
+
             foreach (var kvp in definedVarValues)
             {
                 if (!hydratedValues.ContainsKey(kvp.Key))
@@ -456,7 +456,7 @@ namespace PsUi
                 }
             }
         }
-        
+
         private void InjectAsyncExecutorReference(PowerShell ps)
         {
             ps.AddScript("$Global:AsyncExecutor = $args[0]");
@@ -464,7 +464,7 @@ namespace PsUi
             ps.Invoke();
             ps.Commands.Clear();
         }
-        
+
         // Grab PWD before user script runs so we can restore it after
         private static string SnapshotWorkingDirectory(PowerShell ps)
         {
@@ -474,23 +474,23 @@ namespace PsUi
                 ps.AddScript("$PWD.Path");
                 var pwdResult = ps.Invoke();
                 ps.Commands.Clear();
-                
+
                 if (pwdResult != null && pwdResult.Count > 0 && pwdResult[0] != null)
                 {
                     return pwdResult[0].ToString();
                 }
             }
-            catch (Exception ex) 
-            { 
-                Debug.WriteLine("AsyncExecutor PWD snapshot error: " + ex.Message); 
+            catch (Exception ex)
+            {
+                Debug.WriteLine("AsyncExecutor PWD snapshot error: " + ex.Message);
             }
             return null;
         }
-        
+
         private void ExecuteUserScript(PowerShell ps, string wrappedScript, Hashtable parameters)
         {
             ps.AddScript(wrappedScript);
-            
+
             if (parameters != null)
             {
                 foreach (object key in parameters.Keys)
@@ -498,24 +498,23 @@ namespace PsUi
                     ps.AddParameter(key.ToString(), parameters[key]);
                 }
             }
-            
+
             // Attach stream handlers
             WireStreamHandlers(ps);
-            
-            // Execute and process results
-            foreach (PSObject result in ps.Invoke())
+
+            // Invoke() hands its collection back only once the pipeline completes, and a terminating error makes it throw instead, so everything a script produced before it died was lost.
+            PSDataCollection<PSObject> output = new PSDataCollection<PSObject>();
+            output.DataAdded += delegate (object sender, DataAddedEventArgs e)
             {
                 var cts = _cts;
-                if (cts != null && cts.IsCancellationRequested) break;
-                
+                if (cts != null && cts.IsCancellationRequested) return;
+
+                PSObject result = output[e.Index];
                 if (result != null)
                 {
+                    // WPF binds CLR members only. Dropping the PSObject renders Mode and every other PS* column blank downstream.
                     object safeOutput = result;
-                    if (result.BaseObject != null && !(result.BaseObject is PSCustomObject))
-                    {
-                        safeOutput = result.BaseObject;
-                    }
-                    
+
                     if (UsePipelineQueueMode)
                     {
                         _pipelineQueue.Enqueue(safeOutput);
@@ -525,33 +524,42 @@ namespace PsUi
                         MarshalToUi(delegate { if (OnPipelineOutput != null) OnPipelineOutput(safeOutput); });
                     }
                 }
-            }
+            };
+            InvokeWithOutput(ps, output);
         }
-        
+
+        // A completed empty collection is how this overload is told there is no input. A failed pipeline still throws outta here.
+        private static void InvokeWithOutput(PowerShell ps, PSDataCollection<PSObject> output)
+        {
+            PSDataCollection<PSObject> input = new PSDataCollection<PSObject>();
+            input.Complete();
+            ps.Invoke<PSObject, PSObject>(input, output, null);
+        }
+
         // Hook all PowerShell streams to route output to our UI handlers
         private void WireStreamHandlers(PowerShell ps)
         {
-            ps.Streams.Error.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-            { 
-                RaiseOnError(ps.Streams.Error[e.Index]); 
+            ps.Streams.Error.DataAdded += delegate(object sender, DataAddedEventArgs e)
+            {
+                RaiseOnError(ps.Streams.Error[e.Index]);
             };
-            ps.Streams.Warning.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-            { 
-                RaiseOnWarning(ps.Streams.Warning[e.Index].ToString()); 
+            ps.Streams.Warning.DataAdded += delegate(object sender, DataAddedEventArgs e)
+            {
+                RaiseOnWarning(ps.Streams.Warning[e.Index].ToString());
             };
-            ps.Streams.Verbose.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-            { 
-                RaiseOnVerbose(ps.Streams.Verbose[e.Index].ToString()); 
+            ps.Streams.Verbose.DataAdded += delegate(object sender, DataAddedEventArgs e)
+            {
+                RaiseOnVerbose(ps.Streams.Verbose[e.Index].ToString());
             };
-            ps.Streams.Debug.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-            { 
-                RaiseOnDebug(ps.Streams.Debug[e.Index].ToString()); 
+            ps.Streams.Debug.DataAdded += delegate(object sender, DataAddedEventArgs e)
+            {
+                RaiseOnDebug(ps.Streams.Debug[e.Index].ToString());
             };
-            ps.Streams.Progress.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-            { 
-                RaiseOnProgress(ps.Streams.Progress[e.Index]); 
+            ps.Streams.Progress.DataAdded += delegate(object sender, DataAddedEventArgs e)
+            {
+                RaiseOnProgress(ps.Streams.Progress[e.Index]);
             };
-            
+
             // Information stream: process Write-Information, skip Write-Host (handled by global override)
             ps.Streams.Information.DataAdded += delegate(object sender, DataAddedEventArgs e)
             {
@@ -563,16 +571,16 @@ namespace PsUi
                 }
             };
         }
-        
+
         // Restore state and sync variables back to controls
         private void ExecuteCleanupPhase(PowerShell ps, string originalPwd, Dictionary<string, object> hydratedValues, IDictionary variablesToDefine)
         {
             IsRunning = false;
             _suppressProgress = true;
-            
+
             // Clear the thread local reference
             AsyncExecutor.CurrentExecutor = null;
-            
+
             // Put PWD back where we found it
             if (ps != null && originalPwd != null)
             {
@@ -585,7 +593,7 @@ namespace PsUi
                 }
                 catch (Exception ex) { RaiseFrameworkError("PWD restore", ex); }
             }
-            
+
             // Push changed values back to UI controls
             if (ps != null && hydratedValues != null && hydratedValues.Count > 0)
             {
@@ -595,7 +603,7 @@ namespace PsUi
                 }
                 catch (Exception ex) { RaiseFrameworkError("Dehydration", ex); }
             }
-            
+
             // Capture specified variables to SessionContext for cross-button access
             if (ps != null && CaptureVariables != null && CaptureVariables.Length > 0)
             {
@@ -605,7 +613,7 @@ namespace PsUi
                 }
                 catch (Exception ex) { RaiseFrameworkError("Variable capture", ex); }
             }
-            
+
             // Cleanup hydrated variables
             if (ps != null && hydratedValues != null && hydratedValues.Count > 0)
             {
@@ -615,7 +623,7 @@ namespace PsUi
                 }
                 catch (Exception ex) { RaiseFrameworkError("Cleanup", ex); }
             }
-            
+
             // Cleanup user-defined variables
             if (ps != null && variablesToDefine != null && variablesToDefine.Count > 0)
             {
@@ -636,7 +644,7 @@ namespace PsUi
                 }
                 catch (Exception ex) { Debug.WriteLine("AsyncExecutor Cleanup Script Error: " + ex.Message); }
             }
-            
+
             // Sweep any leftover user-created globals from the pooled runspace.
             // Without this, $Global:secret set in Window A's button leaks to Window B's next action.
             if (ps != null)
@@ -657,10 +665,10 @@ namespace PsUi
                 ps.Dispose();
             }
             _powershell = null;
-            
+
             // Flush batched output
             FlushHostBatch();
-            
+
             if (DebugMode)
             {
                 var ctsRef = _cts;
@@ -668,7 +676,7 @@ namespace PsUi
                     OnComplete == null,
                     ctsRef != null && ctsRef.IsCancellationRequested);
             }
-            
+
             // Fire completion event
             var ctsSnap = _cts;
             if (OnComplete != null && (ctsSnap == null || !ctsSnap.IsCancellationRequested))
@@ -689,13 +697,13 @@ namespace PsUi
                     }
                 });
             }
-            
+
             // Clear thread-local session ID before returning to pool
             SessionManager.ClearCurrentSession();
         }
-        
+
         // BuildSetupScript moved to AsyncExecutor.Setup.cs
-        
+
         private void ExecuteWithDedicatedRunspace(ScriptBlock script, Hashtable parameters, IDictionary variablesToDefine, IDictionary functionsToDefine, IEnumerable<string> modulesToLoad, bool debugEnabled)
         {
             // Use session-configured threading (MTA default, STA opt-in via -AsyncApartment)
@@ -706,7 +714,7 @@ namespace PsUi
                 {
                     SessionManager.SetCurrentSession(_capturedSessionId);
                 }
-                
+
                 Runspace rs = null;
                 PowerShell ps = null;
                 Dictionary<string, object> hydratedValues = null;
@@ -715,7 +723,7 @@ namespace PsUi
                 {
                     var cts = _cts;
                     if (cts == null || cts.IsCancellationRequested) return;
-                    
+
                     InitialSessionState iss = InitialSessionState.CreateDefault();
                     rs = RunspaceFactory.CreateRunspace(new StreamingHost(this), iss);
                     rs.ApartmentState = System.Threading.ApartmentState.STA;
@@ -731,7 +739,7 @@ namespace PsUi
                         {
                             psSession.Runspace = rs;
                             psSession.AddScript(string.Format(
-                                "$Global:__PsUiSessionId = '{0}'; [PsUi.SessionManager]::SetCurrentSession([Guid]'{0}')", 
+                                "$Global:__PsUiSessionId = '{0}'; [PsUi.SessionManager]::SetCurrentSession([Guid]'{0}')",
                                 _capturedSessionId));
                             psSession.Invoke();
                         }
@@ -740,14 +748,14 @@ namespace PsUi
                     using (PowerShell psSetup = PowerShell.Create())
                     {
                         psSetup.Runspace = rs;
-                        
+
                         // Use the same cached setup script as the pooled path
                         string setupScript = BuildSetupScript(functionsToDefine, modulesToLoad, debugEnabled);
                         psSetup.AddScript(setupScript);
 
                         try { psSetup.Invoke(); } catch (Exception ex) { Debug.WriteLine("AsyncExecutor Setup Script Error: " + ex.Message); }
                     }
-                        
+
                     // Hydrate Variables (skip reserved names to avoid read-only errors)
                     // Track which variables we define so hydration can skip them (collision detection)
                     // Also store initial values for dehydration tracking
@@ -759,7 +767,7 @@ namespace PsUi
                         {
                             string varName = kvp.Key.ToString();
                             if (IsReservedVariable(varName)) continue;
-                            
+
                             try
                             {
                                 rs.SessionStateProxy.PSVariable.Set(varName, kvp.Value);
@@ -772,10 +780,10 @@ namespace PsUi
                             }
                         }
                     }
-                    
+
                     // Inject control values as PS variables (skip names already defined via LinkedVariables)
                     hydratedValues = StateHydrationEngine.Hydrate(rs, definedVarNames);
-                    
+
                     // Include LinkedVariable values in the set we'll sync back later
                     foreach (var kvp in definedVarValues)
                     {
@@ -784,12 +792,12 @@ namespace PsUi
                             hydratedValues[kvp.Key] = kvp.Value;
                         }
                     }
-                    
+
                     ps = PowerShell.Create();
                     _powershell = ps;
                     ps.Runspace = rs;
                     ps.AddScript(script.ToString());
-                    
+
                     if (parameters != null)
                     {
                         foreach (object key in parameters.Keys)
@@ -797,15 +805,15 @@ namespace PsUi
                             ps.AddParameter(key.ToString(), parameters[key]);
                         }
                     }
-                    
+
                     ps.Streams.Error.DataAdded += delegate(object sender, DataAddedEventArgs e) { RaiseOnError(ps.Streams.Error[e.Index]); };
                     ps.Streams.Warning.DataAdded += delegate(object sender, DataAddedEventArgs e) { RaiseOnWarning(ps.Streams.Warning[e.Index].ToString()); };
                     ps.Streams.Verbose.DataAdded += delegate(object sender, DataAddedEventArgs e) { RaiseOnVerbose(ps.Streams.Verbose[e.Index].ToString()); };
                     ps.Streams.Debug.DataAdded += delegate(object sender, DataAddedEventArgs e) { RaiseOnDebug(ps.Streams.Debug[e.Index].ToString()); };
                     ps.Streams.Progress.DataAdded += delegate(object sender, DataAddedEventArgs e) { RaiseOnProgress(ps.Streams.Progress[e.Index]); };
                     // Information stream: Only process Write-Information, skip Write-Host (handled by global override)
-                    ps.Streams.Information.DataAdded += delegate(object sender, DataAddedEventArgs e) 
-                    { 
+                    ps.Streams.Information.DataAdded += delegate(object sender, DataAddedEventArgs e)
+                    {
                         var info = ps.Streams.Information[e.Index];
                         if (info != null && info.MessageData != null)
                         {
@@ -814,36 +822,37 @@ namespace PsUi
                             RaiseOnHost(info.MessageData.ToString());
                         }
                     };
-                    
+
                     // Setup complete - allow progress events from user script
                     _suppressProgress = false;
 
                     if (DebugMode) System.Console.WriteLine("Invoke() starting, QueueMode={0}", UsePipelineQueueMode);
-                    foreach (PSObject result in ps.Invoke())
+
+                    PSDataCollection<PSObject> output = new PSDataCollection<PSObject>();
+                    output.DataAdded += delegate (object sender, DataAddedEventArgs e)
                     {
                         var cts2 = _cts;
-                        if (cts2 != null && cts2.IsCancellationRequested) break;
-                        
+                        if (cts2 != null && cts2.IsCancellationRequested) return;
+
+                        PSObject result = output[e.Index];
                         if (result != null)
                         {
+                            // Keep the PSObject here too, or every PS* column'll be blank.
                             object safeOutput = result;
-                            if (result.BaseObject != null && !(result.BaseObject is PSCustomObject))
-                            {
-                                safeOutput = result.BaseObject;
-                            }
-                            
+
                             // Queue mode: enqueue for UI timer to drain (prevents dispatcher saturation)
                             // Push mode: marshal immediately (legacy behavior for small result sets)
                             if (UsePipelineQueueMode)
                             {
                                 _pipelineQueue.Enqueue(safeOutput);
                             }
-                            else if (OnPipelineOutput != null) 
+                            else if (OnPipelineOutput != null)
                             {
                                 MarshalToUi(delegate { if (OnPipelineOutput != null) OnPipelineOutput(safeOutput); });
                             }
                         }
-                    }
+                    };
+                    InvokeWithOutput(ps, output);
                     if (DebugMode) System.Console.WriteLine("Invoke() done, queue: {0}", _pipelineQueue.Count);
                 }
                 catch (Exception ex)
@@ -858,7 +867,7 @@ namespace PsUi
                 {
                     IsRunning = false;
                     _suppressProgress = true;
-                    
+
                     // Push modified values back to their controls
                     if (rs != null && hydratedValues != null && hydratedValues.Count > 0)
                     {
@@ -868,7 +877,7 @@ namespace PsUi
                         }
                         catch (Exception ex) { RaiseFrameworkError("Dedicated runspace dehydration", ex); }
                     }
-                    
+
                     // Capture specified variables to SessionContext for cross-button access
                     if (rs != null && CaptureVariables != null && CaptureVariables.Length > 0)
                     {
@@ -878,40 +887,40 @@ namespace PsUi
                         }
                         catch (Exception ex) { RaiseFrameworkError("Dedicated runspace capture", ex); }
                     }
-                    
+
                     if (ps != null) { ps.Dispose(); ps = null; }
                     if (rs != null) { rs.Dispose(); }
                     _powershell = null;
 
                     // Flush any remaining batched output before signaling complete
                     FlushHostBatch();
-                    
+
                     if (DebugMode) System.Console.WriteLine("Marshal OnComplete, queue: {0}", _pipelineQueue.Count);
                     var ctsFinally = _cts;
                     if (OnComplete != null && (ctsFinally == null || !ctsFinally.IsCancellationRequested))
                     {
-                         MarshalToUi(delegate { 
+                         MarshalToUi(delegate {
                              if (DebugMode) System.Console.WriteLine("OnComplete on UI thread");
-                             if (OnComplete != null) OnComplete(); 
+                             if (OnComplete != null) OnComplete();
                          });
                     }
-                    
+
                     // Clear thread-local session ID for consistency (even though dedicated runspace is disposed)
                     SessionManager.ClearCurrentSession();
                 }
             });
         }
-        
+
         // Volatile ensures visibility across threads without full lock
         private volatile bool _disposed = false;
-        
+
         public void Cancel()
         {
             _disposed = true;  // Prevent any further UI marshaling
             var dispatcher = _uiDispatcher;
             _uiDispatcher = null;  // Clear dispatcher reference immediately
             IsRunning = false;
-            
+
             // Fire OnCancelled event on UI thread
             var handler = OnCancelled;
             if (handler != null && dispatcher != null)
@@ -919,7 +928,7 @@ namespace PsUi
                 try { dispatcher.BeginInvoke(handler); }
                 catch { /* ignore - dispatcher may be shut down */ }
             }
-            
+
             // Cancel token (synchronized with ExecuteAsync)
             lock (_ctsLock)
             {
@@ -929,7 +938,7 @@ namespace PsUi
                     catch { /* ignore */ }
                 }
             }
-            
+
             // Stop PowerShell asynchronously to avoid blocking the UI thread
             // Avoids deadlock if script is waiting on UI operations
             var ps = _powershell;
@@ -947,11 +956,11 @@ namespace PsUi
         {
             _disposed = true;
             _uiDispatcher = null;
-            
+
             // Dispose managed resources
             if (_cts != null) { try { _cts.Dispose(); } catch (Exception ex) { Debug.WriteLine("AsyncExecutor Dispose CTS Error: " + ex.Message); } _cts = null; }
             if (_powershell != null) { try { _powershell.Dispose(); } catch (Exception ex) { Debug.WriteLine("AsyncExecutor Dispose PS Error: " + ex.Message); } _powershell = null; }
-            
+
             // Null out event handlers to break reference cycles and allow GC
             OnError = null;
             OnWarning = null;
@@ -968,16 +977,16 @@ namespace PsUi
             OnQueued = null;
             OnStarted = null;
             OnFrameworkError = null;
-            
+
             IsRunning = false;
-            
+
             // Suppress finalizer since we cleaned up
             GC.SuppressFinalize(this);
         }
-        
+
         // MarshalToUi, RaiseOn*, Drain* methods moved to AsyncExecutor.Routing.cs
     }
-    
+
     // StreamingHost classes moved to StreamingHost.cs
 
 

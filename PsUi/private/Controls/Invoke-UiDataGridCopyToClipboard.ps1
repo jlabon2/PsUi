@@ -1,7 +1,7 @@
 function Invoke-UiDataGridCopyToClipboard {
     <#
     .SYNOPSIS
-        Copies selected rows (or focused cell) from a DataGrid to the clipboard, honoring column visibility.
+        Selected rows, or the focused cell, onto the clipboard with only the visible columns. False where it fell through.
     #>
     [CmdletBinding()]
     param(
@@ -12,19 +12,25 @@ function Invoke-UiDataGridCopyToClipboard {
     )
 
     # DataGrid property reads (SelectedItems, CurrentCell, Tag, Columns) have UI thread affinity, and Clipboard.SetText is STA only.
-    # A background runspace would otherwise see SelectedItems as an empty enumeration and the function would return early without copying anything.
-    # Dispatch the whole body once instead of piecemeal so one marshal covers all reads + the write.
+    # From a background runspace SelectedItems reads as an empty enumeration, so the function returns early and copies no rows.
+    # The whole body goes over in one Dispatcher.Invoke, so a single hop covers every read and the write.
     $cellMode = [bool]$Cell
     $gridRef  = $DataGrid
 
-    # GetNewClosure drops module private function resolution (same trap as New-ProgressPanel), the row branch silently died in its catch with CommandNotFound.
-    # Carry the functions as references.
+    # The only thing this hands back, since every failure below goes to Write-Debug and stops there.
+    # Hashtable and not a plain variable, since & $work runs in a child scope where $copied = $true would never reach this one.
+    $copied = @{ Value = $false }
+
+    # GetNewClosure drops module private function resolution, so a name looked up inside $work throws CommandNotFound into its own catch.
+    # Carry the functions as references instead.
     $getPaths   = ${function:Get-UiDataGridVisibleColumnPaths}
     $formatRows = ${function:Format-UiDataGridExportRows}
+    $cellValue  = ${function:Get-UiDataGridCellValue}
+    $exportText = ${function:ConvertTo-UiExportText}
 
     $work = {
         if ($cellMode) {
-            # No "selected cell" in row selection mode - CurrentCell tracks the focused one.
+            # Row selection mode has no selected cell, so the focused one comes from CurrentCell.
             $cellInfo = $gridRef.CurrentCell
             if (!$cellInfo.IsValid) { return }
 
@@ -38,20 +44,17 @@ function Invoke-UiDataGridCopyToClipboard {
                         elseif ($col.ClipboardContentBinding -and $col.ClipboardContentBinding.Path) { [string]$col.ClipboardContentBinding.Path.Path }
                         else { $null }
 
+            # The text a row copy writes, so a list cell copies as a, b and a hashtable as its pairs.
             $text = ''
-            if ($bindPath -eq '.') {
-                # Scalar Value column - the item IS the cell. Skipping it copied '' over the user's clipboard.
-                $text = [string]$item
-            }
-            elseif ($bindPath) {
-                try {
-                    $val = $item.$bindPath
-                    if ($null -ne $val) { $text = [string]$val }
-                }
+            if ($bindPath) {
+                try { $text = [string](& $exportText -Value (& $cellValue -Row $item -Path $bindPath)) }
                 catch { Write-Debug "Cell read failed for '$bindPath': $_" }
             }
 
-            try { [System.Windows.Clipboard]::SetText($text) }
+            try {
+                [System.Windows.Clipboard]::SetText($text)
+                $copied.Value = $true
+            }
             catch { Write-Debug "Cell copy failed: $_" }
             return
         }
@@ -65,13 +68,16 @@ function Invoke-UiDataGridCopyToClipboard {
             $projectionArgs = @{ Items = $gridRef.SelectedItems; Sanitize = $sanitize }
             if ($visibleProps -and $visibleProps.Count -gt 0) { $projectionArgs.Properties = $visibleProps }
 
-            # Out-String tacks on a trailing newline. Join drops it.
+            # Out-String tacks on a trailing newline, so this joins the rows instead.
             $text = [string]::Join([Environment]::NewLine, (& $formatRows @projectionArgs | ConvertTo-Csv -NoTypeInformation))
             [System.Windows.Clipboard]::SetText($text)
+            $copied.Value = $true
         }
         catch { Write-Debug "Row copy failed: $_" }
     }.GetNewClosure()
 
     if ($DataGrid.Dispatcher.CheckAccess()) { & $work }
     else { $DataGrid.Dispatcher.Invoke([Action]$work) }
+
+    return $copied.Value
 }

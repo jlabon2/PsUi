@@ -1,12 +1,12 @@
 function Remove-UiListItem {
     <#
     .SYNOPSIS
-        Removes an item from a UiList control.
+        Removes an item from a list or dropdown.
     .DESCRIPTION
         Removes one item: a specific one when -Item is passed, otherwise whatever row
         is currently selected.
     .PARAMETER Variable
-        The variable name of the list control.
+        The -Variable name of the list or dropdown.
     .PARAMETER Item
         The item to remove. If not specified, removes the currently selected item.
     .EXAMPLE
@@ -56,7 +56,7 @@ function Remove-UiListItem {
             }
         }.GetNewClosure()
 
-        if ((Get-UiCollectionKind -Obj $collection) -eq 'PsUiObservable') { & $removeOne }
+        if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { & $removeOne }
         else { Invoke-OnUIThread -ScriptBlock $removeOne }
     }
     else {

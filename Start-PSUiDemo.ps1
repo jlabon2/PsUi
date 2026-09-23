@@ -224,7 +224,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB: Introduction
+    # Introduction tab
     New-UiTab -Header "Welcome" -Content {
         New-UiLabel -Text "Welcome to PsUi" -Style Title -FullWidth
         New-UiLabel -Text "For building UIs in PowerShell without the misery." -Style Note -FullWidth
@@ -249,7 +249,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB: Controls Gallery
+    # Controls gallery tab
     New-UiTab -Header "Controls" -Content {
         New-UiLabel -Text "Controls Gallery" -Style Title -FullWidth
         New-UiLabel -Text "Input controls, labels, cards, grids, and buttons for building forms." -Style Note -FullWidth
@@ -335,10 +335,8 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             # Top-level toggle - controls the advanced settings toggle
             New-UiToggle -Label "Show Configuration Options" -Variable "showConfig"
 
-            # This toggle depends on the one above; unchecked when disabled
             New-UiToggle -Label "Enable Advanced Settings" -Variable "enableAdvanced" -EnabledWhen 'showConfig' -ClearIfDisabled
 
-            # Input enabled only when toggle is checked; cleared when disabled
             New-UiInput -Label "Server URL" -Variable "serverUrl" -Placeholder "https://..." -EnabledWhen 'enableAdvanced' -ClearIfDisabled
 
             # Button enabled only when input has content
@@ -616,7 +614,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 2: Data Output
+    # Data output tab
     New-UiTab -Header "Data Output" -Content {
         New-UiLabel -Text "Data Output and Result Actions" -Style Title -FullWidth
         New-UiLabel -Text "Pipeline objects become interactive DataGrids with filtering, sorting, and custom action buttons." -Style Note -FullWidth
@@ -716,7 +714,9 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     @{ Name = 'Implementation' }
                 )}
             )
-            New-UiTree -Variable 'demoTree' -Items $treeData -Height 150 -ExpandAll
+            New-UiTree -Variable 'demoTree' -Items $treeData -Height 150
+
+            New-UiLabel -Text "Right-click a node for Expand All, Collapse All, Expand, Collapse and Copy." -Style Note -FullWidth
 
             New-UiButton -Text 'Show Selected' -Icon 'Info' -Action {
                 # Tree controls hydrate SelectedHeader/SelectedItem properties
@@ -1054,7 +1054,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 3: Async
+    # Async tab
     New-UiTab -Header "Async" -Content {
         New-UiLabel -Text "Async Execution and Progress" -Style Title -FullWidth
         New-UiLabel -Text "Background threads and progress bars, with lists any thread can add items onto." -Style Note -FullWidth
@@ -1148,6 +1148,32 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             }
         }
 
+        New-UiPanel -Header "Live Dropdown (-ItemsSource)" -ShowSourceButton -Content {
+            New-UiLabel -Text "A dropdown takes the same -ItemsSource a list does. The choices fill in from a background action:" -Style Body
+
+            $fruitChoices = [System.Collections.Generic.List[object]]::new()
+
+            New-UiDropdown -Label "Fruit" -Variable "liveFruit" -ItemsSource $fruitChoices
+
+            New-UiButton -Text "Load Choices" -Icon "Refresh" -NoOutput -Action {
+                # $fruitChoices in here is the wrapped list, not the List[object] declared above
+                $fruitChoices.Clear()
+                foreach ($fruit in 'Apple', 'Pear', 'Plum', 'Fig') {
+                    $fruitChoices.Add($fruit)
+                    Start-Sleep -Milliseconds 250
+                }
+                Write-Status "Four choices loaded from a background action" -Severity Success
+            }
+
+            New-UiButton -Text "Show Pick" -Icon "List" -NoOutput -Action {
+                Write-Status "Picked $liveFruit"
+            }
+
+            New-UiAction -Text "Clear" -Icon "TrashCan" -Action { Clear-UiList -Variable "liveFruit" }
+
+            New-UiLabel -Text "The box stays unselected while the choices land, so -OnChange never fires mid feed. Pick one and Show Pick reads it back through hydration." -Style Note
+        }
+
         New-UiPanel -Header "Cancellation (Stop-UiAsync)" -ShowSourceButton -Content {
             New-UiLabel -Text "Long-running tasks can be cancelled programmatically or via Escape key:" -Style Body
 
@@ -1195,7 +1221,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 4: Host Interception
+    # Host interception tab
     New-UiTab -Header "Host Interception" -Content {
         New-UiLabel -Text "PSHost Interception" -Style Title -FullWidth
         New-UiLabel -Text "Console commands like Read-Host and Get-Credential are automatically redirected to themed GUI dialogs." -Style Note -FullWidth
@@ -1695,7 +1721,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 5: Windows
+    # Windows tab
     New-UiTab -Header "Windows" -Content {
         New-UiLabel -Text "Child Windows" -Style Title -FullWidth
         New-UiLabel -Text "Modal and non-modal windows with variable passing and data binding." -Style Note -FullWidth
@@ -1739,7 +1765,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 6: Standalone Tools
+    # Standalone tools tab
     New-UiTab -Header "Standalone" -Content {
         New-UiLabel -Text "Standalone Output Tools" -Style Title -FullWidth
         New-UiLabel -Text "These tools can run independently or from within a PsUi window." -Style Note -FullWidth
@@ -1871,7 +1897,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 7: New-UiTool
+    # New-UiTool tab
     New-UiTab -Header "UiTool" -Content {
         New-UiLabel -Text "New-UiTool: Auto-Generated GUIs" -Style Title -FullWidth
         New-UiLabel -Text "Transform any PowerShell command into a GUI automatically by introspecting its parameters." -Style Note -FullWidth
@@ -1993,7 +2019,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 8: Advanced
+    # Advanced tab
     New-UiTab -Header "Advanced" -Content {
         New-UiLabel -Text "Advanced Features" -Style Title -FullWidth
         New-UiLabel -Text "WPF properties, auto-captured variables, and power-user features." -Style Note -FullWidth
@@ -2046,7 +2072,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         New-UiPanel -Header "Rich Tooltips and Opacity" -ShowSourceButton -Content {
             New-UiLabel -Text "Create rich multi-line tooltips and control transparency:" -Style Body
 
-            # Build rich tooltip outside of hashtable for PS 5.1 compatibility
+            # Built outside the hashtable, since 5.1 cannot resolve a variable declared in the same literal
             $richTooltip = {
                 $sp = [System.Windows.Controls.StackPanel]::new()
                 $header = [System.Windows.Controls.TextBlock]::new()
@@ -2079,7 +2105,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         New-UiPanel -Header "Gradient Backgrounds" -ShowSourceButton -Content {
             New-UiLabel -Text "Apply linear or radial gradients to any control:" -Style Body
 
-            # Build gradient brushes outside hashtable for PS 5.1 compatibility
+            # Outside the literal for the same reason as the tooltip above
             $linearGradient = {
                 $gradient = [System.Windows.Media.LinearGradientBrush]::new()
                 $gradient.StartPoint = "0,0"
@@ -2297,7 +2323,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
 
     }
 
-    # TAB 9: Data Grid
+    # Data grid tab
     New-UiTab -Header "Data Grid" -Content {
         New-UiLabel -Text "Inline Data Grids" -Style Title -FullWidth
         New-UiLabel -Text "New-UiDataGrid drops a full data grid into your window like any other control." -Style Note -FullWidth
@@ -2489,10 +2515,10 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         }
     }
 
-    # TAB 10: Status Bar
+    # Status bar tab
     New-UiTab -Header "Status Bar" -Content {
         New-UiLabel -Text "Status Bar" -Style Title -FullWidth
-        New-UiLabel -Text "The bar along the bottom of this window is live on every tab. These panels drive it on purpose." -Style Note -FullWidth
+        New-UiLabel -Text "The bar along the bottom of this window is live on every tab. The panels below write to it." -Style Note -FullWidth
         New-UiSeparator -FullWidth
 
         New-UiPanel -Header "Write-Status" -ShowSourceButton -Content {
@@ -2579,7 +2605,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     Get-Item 'C:\this\path\does\not\exist' -ErrorAction Stop
                 }
                 New-UiButton -Text "Write-Information" -Icon "Info" -NoOutput -Action {
-                    # Rides the console badge - the information stream routes through the same path as Write-Host
+                    # Rides the console badge, since the information stream takes the Write-Host route.
                     Write-Information "An information record, caught without a window"
                 }
                 New-UiButton -Text "Write-Verbose" -NoOutput -Action {

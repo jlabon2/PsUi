@@ -1,4 +1,4 @@
-﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 
 # Module surface. Themes, the icon list, the icon font switch, the manifest.
 . (Join-Path $PSScriptRoot '_Setup.ps1')
@@ -54,7 +54,7 @@ Describe 'Icon Font - ModuleContext static API' {
     AfterAll { [PsUi.ModuleContext]::RestoreIconFontState($script:savedIconFontSnap) }
 
     It 'DetectDefaultIconFont picks Fluent when it is installed' {
-        # The method can only return those two names, so asserting it returns one of them cannot fail.
+        # The method can only return those two names, so asserting it returns one of them can't fail.
         $detected = [PsUi.ModuleContext]::DetectDefaultIconFont()
         if ([PsUi.ModuleContext]::IsFontInstalled([PsUi.ModuleContext]::FontNameFluent)) {
             $detected | Should -Be ([PsUi.ModuleContext]::FontNameFluent)
@@ -232,7 +232,7 @@ Describe 'Icon Font - Out-* parameter surface' {
     }
 }
 
-# A control that adds itself to the open panel has to go through Assert-UiSession, or it cannot start an implicit window.
+# Controls that add themselves to the open panel have to go through Assert-UiSession, or they can't start an implicit window.
 Describe 'Controls reach the session through Assert-UiSession' {
     It 'Every control that adds to CurrentParent asks Assert-UiSession for it' {
         # A window maker sets CurrentParent rather than adding to it, and Get-UiSession only mentions it in help.
@@ -277,6 +277,32 @@ Describe 'Module Manifest' {
         $script:manifest.ExportedFunctions.Count | Should -BeGreaterOrEqual 60
     }
 
+    It 'No style function attaches a handler outside the once guard' {
+        $root  = Join-Path $PSScriptRoot '..\PsUi\private\styles'
+        $wrong = foreach ($file in Get-ChildItem $root -Filter '*.ps1') {
+            if ($file.Name -eq 'Add-UiStyleHandler.ps1') { continue }
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$null)
+            $attaches = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and "$($node.Member)" -like 'Add_*'
+            }, $true))
+
+            foreach ($attach in $attaches) {
+                $guarded = $false
+                $scope   = $attach.Parent
+                while ($scope) {
+                    if ($scope -is [System.Management.Automation.Language.CommandAst] -and $scope.GetCommandName() -eq 'Add-UiStyleHandler') {
+                        $guarded = $true
+                        break
+                    }
+                    $scope = $scope.Parent
+                }
+                if (!$guarded) { "$($file.Name):$($attach.Extent.StartLineNumber) $($attach.Member)" }
+            }
+        }
+        $wrong | Should -BeNullOrEmpty
+    }
+
     It 'Exports exactly one cmdlet (New-UiWindow)' {
         $script:manifest.ExportedCmdlets.Keys | Should -Contain 'New-UiWindow'
         $script:manifest.ExportedCmdlets.Count | Should -Be 1
@@ -305,8 +331,9 @@ Describe 'Module Manifest' {
     }
 }
 
-# CI runs both editions now, and this catches the case neither of them would: an API that only the net452 build lacks, on a box nobody tests.
-Describe 'Windows PowerShell guard' {
+# [Math]::Clamp doesn't exist on .NET Framework, so any line reaching for it dies on 5.1.
+# CI only catches the lines its tests actually run, so this scans the source instead.
+Describe '5.1 guard' {
     It 'Never reaches for [Math]::Clamp' {
         $hits = Get-ChildItem (Join-Path $PSScriptRoot '..\PsUi') -Recurse -Include *.ps1, *.psm1 | Select-String -Pattern 'Math\]::Clamp' -List
         @($hits | ForEach-Object { $_.Path }) | Should -BeNullOrEmpty

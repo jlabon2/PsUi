@@ -60,3 +60,41 @@ function Wait-BackgroundAdd {
         if (!$Invocation.Handle.IsCompleted) { [System.Threading.Thread]::Sleep(20) }
     }
 }
+
+# Type.GetInterface by name throws 'Ambiguous match' on a type that use ICollection[T] twice, so we need a type to test with
+if (!('PsUiTest.DoubleCollection' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Collections;
+using System.Collections.Generic;
+namespace PsUiTest {
+    public class DoubleCollection : ICollection<string>, ICollection<int> {
+        private string[] _values = new string[] { "web", "prod" };
+        public int Count { get { return _values.Length; } }
+        public bool IsReadOnly { get { return true; } }
+        public void Add(string v) { } public void Add(int v) { }
+        public void Clear() { }
+        public bool Contains(string v) { return false; } public bool Contains(int v) { return false; }
+        public void CopyTo(string[] a, int i) { } public void CopyTo(int[] a, int i) { }
+        public bool Remove(string v) { return false; } public bool Remove(int v) { return false; }
+        IEnumerator<string> IEnumerable<string>.GetEnumerator() { return ((IEnumerable<string>)_values).GetEnumerator(); }
+        IEnumerator<int> IEnumerable<int>.GetEnumerator() { return new List<int>().GetEnumerator(); }
+        public IEnumerator GetEnumerator() { return _values.GetEnumerator(); }
+    }
+
+    public class CountingSequence : IEnumerable {
+        public static int Passes = 0;
+        public IEnumerator GetEnumerator() {
+            Passes++;
+            return new string[] { "a", "b" }.GetEnumerator();
+        }
+        public override string ToString() { return "CountingSequence"; }
+    }
+
+    // A getter that throws on every row for the search sampler
+    public class ThrowingGetter {
+        public string Name { get; set; }
+        public string Broken { get { throw new System.InvalidOperationException("no"); } }
+    }
+}
+'@
+}

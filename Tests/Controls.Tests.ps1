@@ -198,6 +198,126 @@ Describe 'Control Creation - Selection Controls' {
         $items.Count | Should -Be 0
     }
 
+    It 'New-UiDropdown rejects Items and ItemsSource together' {
+        {
+            New-UiDropdown -Variable 'ddConflict' -Label 'X' -Items @('a') -ItemsSource @('b')
+        } | Should -Throw '*cannot use both*'
+    }
+
+    It 'New-UiDropdown with neither Items nor ItemsSource starts empty' {
+        New-UiDropdown -Variable 'ddEmpty' -Label 'Empty'
+        $coll = $script:session.GetListCollection('ddEmpty')
+        $coll.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        $coll.Count | Should -Be 0
+        ($script:session.GetControl('ddEmpty')).SelectedIndex | Should -Be -1
+    }
+
+    It 'New-UiDropdown -ItemsSource with a plain ObservableCollection wraps and mirrors' {
+        $original = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $original.Add('Apple')
+        New-UiDropdown -Variable 'ddBound' -Label 'Fruit' -ItemsSource $original
+
+        $wrap = $script:session.GetListCollection('ddBound')
+        $wrap.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        [object]::ReferenceEquals($wrap, $original) | Should -BeFalse
+
+        Add-UiListItem -Variable 'ddBound' -Item 'Pear'
+        $wrap.Count     | Should -Be 2
+        $original.Count | Should -Be 2
+        ($script:session.GetControl('ddBound')).Items.Count | Should -Be 2
+    }
+
+    It 'New-UiDropdown -ItemsSource with a fixed size array wraps without a mirror and Add works' {
+        New-UiDropdown -Variable 'ddArray' -Label 'Fruit' -ItemsSource @('Apple', 'Pear')
+        { Add-UiListItem -Variable 'ddArray' -Item 'Plum' } | Should -Not -Throw
+        ($script:session.GetListCollection('ddArray')).Count | Should -Be 3
+    }
+
+    It 'New-UiDropdown -ItemsSource passes an AsyncObservableCollection through by reference' {
+        $async = [PsUi.AsyncObservableCollection[object]]::new()
+        $async.Add('Apple')
+        New-UiDropdown -Variable 'ddPass' -Label 'Fruit' -ItemsSource $async
+        [object]::ReferenceEquals($script:session.GetListCollection('ddPass'), $async) | Should -BeTrue
+        # The dropdown has no CollectionViewSource in front of it, unlike the list and the grid.
+        [object]::ReferenceEquals(($script:session.GetControl('ddPass')).ItemsSource, $async) | Should -BeTrue
+    }
+
+    It 'New-UiDropdown -ItemsSource selects -Default when it is there at build time' {
+        $choices = [System.Collections.Generic.List[object]]::new()
+        $choices.Add('Apple')
+        $choices.Add('Pear')
+        New-UiDropdown -Variable 'ddDefault' -Label 'Fruit' -ItemsSource $choices -Default 'Pear'
+        ($script:session.GetSafeVariable('ddDefault')).SelectedItem | Should -Be 'Pear'
+    }
+
+    It 'New-UiDropdown -Default matches without regard to case and selects the real item' {
+        # -contains ignores case but assigning the string back does not
+        New-UiDropdown -Variable 'ddCase' -Label 'Region' -Items @('East', 'West') -Default 'west'
+        ($script:session.GetSafeVariable('ddCase')).SelectedItem | Should -Be 'West'
+    }
+
+    It 'New-UiDropdown -ItemsSource that starts empty stays unselected after a later add' {
+        $choices = [System.Collections.Generic.List[object]]::new()
+        New-UiDropdown -Variable 'ddLate' -Label 'Fruit' -ItemsSource $choices -Default 'Apple'
+        Add-UiListItem -Variable 'ddLate' -Item 'Apple'
+
+        $control = $script:session.GetControl('ddLate')
+        $control.Items.Count   | Should -Be 1
+        $control.SelectedIndex | Should -Be -1
+    }
+
+    It 'New-UiDropdown -NoBind leaves the script variable alone and still wraps the dropdown side' {
+
+
+        $global:psuiDropdownNoBindProbe = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        try {
+            New-UiDropdown -Variable 'ddNoBind' -Label 'Fruit' -ItemsSource $global:psuiDropdownNoBindProbe -NoBind
+            $global:psuiDropdownNoBindProbe.GetType().FullName | Should -Match '^System\.Collections\.ObjectModel\.ObservableCollection'
+            ($script:session.GetListCollection('ddNoBind')).GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        }
+        finally {
+            Remove-Variable -Name psuiDropdownNoBindProbe -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'New-UiDropdown -ItemsSource with a [ref] repoints the holder Value at the wrap' {
+        $list = [System.Collections.ArrayList]::new()
+        [void]$list.Add('Apple')
+        $holder = [ref]$list
+
+        $warnings = $null
+        New-UiDropdown -Variable 'ddRef' -Label 'Fruit' -ItemsSource $holder -WarningVariable warnings
+
+        $holder.Value.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        [object]::ReferenceEquals($holder.Value, $script:session.GetListCollection('ddRef')) | Should -BeTrue
+
+        ($warnings -join ' ') | Should -Not -Match 'could not repoint'
+
+        $holder.Value.Add('Pear')
+        $list.Count | Should -Be 2
+    }
+
+    It 'New-UiDropdown -NoBind leaves a [ref] pointing at what it pointed at' {
+        $list = [System.Collections.ArrayList]::new()
+        [void]$list.Add('Apple')
+        $holder = [ref]$list
+        New-UiDropdown -Variable 'ddNoBindRef' -Label 'Fruit' -ItemsSource $holder -NoBind
+        $holder.Value.GetType().Name | Should -Be 'ArrayList'
+        ($script:session.GetListCollection('ddNoBindRef')).Count | Should -Be 1
+    }
+
+    It 'New-UiDropdown auto bind repoints a reachable script variable at the wrap' {
+        $global:psuiDropdownBindProbe = [System.Collections.Generic.List[object]]::new()
+        $global:psuiDropdownBindProbe.Add('Apple')
+        try {
+            New-UiDropdown -Variable 'ddAutoBind' -Label 'Fruit' -ItemsSource $global:psuiDropdownBindProbe
+            $global:psuiDropdownBindProbe.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        }
+        finally {
+            Remove-Variable -Name psuiDropdownBindProbe -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'New-UiSlider creates a slider with correct range' {
         New-UiSlider -Variable 'testVolume' -Label 'Volume' -Minimum 0 -Maximum 100 -Default 75
 
@@ -322,6 +442,40 @@ Describe 'Control Creation - Progress Bars' {
         $control.Tag | Should -Be 'mine'
     }
 
+    It 'Set-UiProperties takes a string for FontFamily and CornerRadius' {
+        # The converter fell straight to [Convert]::ChangeType after its own short list, which cannot make either from a string, so both warned and skipped.
+        $warnings = @()
+        $text     = [System.Windows.Controls.TextBlock]::new()
+        $border   = [System.Windows.Controls.Border]::new()
+        InModuleScope PsUi -Parameters @{ Text = $text; Border = $border } {
+            param($Text, $Border)
+            Set-UiProperties -Control $Text   -Properties @{ FontFamily = 'Consolas'; FontSize = 15 }
+            Set-UiProperties -Control $Border -Properties @{ CornerRadius = '4,4,0,0' }
+        } -WarningVariable warnings -WarningAction SilentlyContinue
+
+        $text.FontFamily.Source          | Should -Be 'Consolas'
+        $text.FontSize                   | Should -Be 15
+        $border.CornerRadius.TopLeft     | Should -Be 4
+        $border.CornerRadius.BottomRight | Should -Be 0
+        $warnings.Count                  | Should -Be 0
+    }
+
+    It 'ConvertTo-WpfValue still warns and skips a string no converter takes' {
+        $warnings = @()
+        $made     = InModuleScope PsUi {
+            ConvertTo-WpfValue -Value 'abc' -TargetType ([System.Windows.CornerRadius]) -PropertyName 'CornerRadius'
+        } -WarningVariable warnings -WarningAction SilentlyContinue
+
+        $warnings.Count | Should -Be 1
+        $made           | Should -BeNullOrEmpty
+
+        # ChangeType still gets there first, so a number reads as it always did.
+        InModuleScope PsUi {
+            ConvertTo-WpfValue -Value '42' -TargetType ([int]) -PropertyName 'n' | Should -Be 42
+            (ConvertTo-WpfValue -Value '#FF8800' -TargetType ([System.Windows.Media.Color]) -PropertyName 'c').ToString() | Should -Be '#FFFF8800'
+        }
+    }
+
     It 'New-UiButton takes a width smaller than its own padding' {
         # The ViewBox constraint is the width minus sixteen, and WPF throws outright on a negative Max, so anything under that crashed the build.
         { New-UiButton -Text 'x' -Width 12 -Action { } } | Should -Not -Throw
@@ -411,6 +565,38 @@ Describe 'Control Creation - List Controls' {
         $control.SelectionMode | Should -Be 'Extended'
     }
 
+    It 'a Fill tree or list has a finite height before Loaded' {
+        # Set-UiFillParentHeight seeds 200 to give the first pass a viewport (a virtualizing tree measured at infinite height realises every node and keeps them).
+        New-UiTree -Variable 'fillSeedTree' -Items @(@{ Name = 'root' }) -Fill
+        New-UiList -Variable 'fillSeedList' -Items @('a') -Fill
+        ($script:session.GetControl('fillSeedTree')).Height | Should -Be 200
+        ($script:session.GetControl('fillSeedList')).Height | Should -Be 200
+    }
+
+    It 'the tree style virtualizes' {
+        # Headless has no theme loaded (read the file the way ThemeEngine does), and both have to be on because either alone realises every node.
+        $xamlPath = Join-Path $repoRoot 'PsUi\resources\xaml\styles\CommonStyles.xaml'
+        $stream   = [System.IO.File]::OpenRead($xamlPath)
+        try { $dict = [System.Windows.Markup.XamlReader]::Load($stream) }
+        finally { $stream.Dispose() }
+        $style = $dict['ModernTreeViewStyle']
+        $style | Should -Not -BeNullOrEmpty
+
+        $setters = @{}
+        foreach ($setter in $style.Setters) {
+            if ($setter -isnot [System.Windows.Setter]) { continue }
+            $setters[$setter.Property.Name] = $setter.Value
+        }
+        $setters['IsVirtualizing']     | Should -BeTrue
+        $setters['VirtualizationMode'] | Should -Be 'Standard'
+        $setters['ScrollUnit']         | Should -Be 'Pixel'
+
+        $root   = $setters['Template'].LoadContent()
+        $viewer = @([System.Windows.LogicalTreeHelper]::GetChildren($root)) | Where-Object { $_ -is [System.Windows.Controls.ScrollViewer] } | Select-Object -First 1
+        $viewer | Should -Not -BeNullOrEmpty
+        $viewer.CanContentScroll | Should -BeTrue
+    }
+
     It 'New-UiList rejects Items and ItemsSource together' {
         {
             New-UiList -Variable 'conflicted' -Items @(1, 2) -ItemsSource @(3, 4)
@@ -485,6 +671,126 @@ Describe 'Control Creation - List Controls' {
         ($script:session.GetListCollection('wrapNoBind')).GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
     }
 
+    It 'New-UiList -ItemsSource with a [ref] repoints the holder Value at the wrap' {
+        # A typed parameter unwraps a [ref] on the way in.
+        $list = [System.Collections.ArrayList]::new()
+        [void]$list.Add('one')
+        $holder = [ref]$list
+
+        $warnings = $null
+        New-UiList -Variable 'listRef' -ItemsSource $holder -WarningVariable warnings
+
+        $holder.Value.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+        [object]::ReferenceEquals($holder.Value, $script:session.GetListCollection('listRef')) | Should -BeTrue
+        ($warnings -join ' ') | Should -Not -Match 'could not repoint'
+
+        $holder.Value.Add('two')
+        $list.Count | Should -Be 2
+    }
+
+    It 'New-UiList -NoBind leaves a [ref] pointing at what it pointed at' {
+        $list = [System.Collections.ArrayList]::new()
+        [void]$list.Add('one')
+        $holder = [ref]$list
+        New-UiList -Variable 'listNoBindRef' -ItemsSource $holder -NoBind
+        $holder.Value.GetType().Name | Should -Be 'ArrayList'
+        ($script:session.GetListCollection('listNoBindRef')).Count | Should -Be 1
+    }
+
+    It 'New-UiList warns when a [ref] to a property cannot be repointed' {
+        # Assigning to [ref]$state.List reaches the holder and no further.
+        $state = [pscustomobject]@{ List = [System.Collections.ArrayList]@('one') }
+
+        $warnings = $null
+        New-UiList -Variable 'listRefProp' -ItemsSource ([ref]$state.List) -WarningVariable warnings
+
+        ($warnings -join ' ') | Should -Match 'only a \[ref\] to a variable'
+        $state.List.GetType().Name | Should -Be 'ArrayList'
+    }
+
+    It 'New-UiList stays quiet on a [ref] to an ObservableCollection property' {
+        # The list follows the original wherever it lives (the mirror hooks CollectionChanged).
+        $state = [pscustomobject]@{ List = [System.Collections.ObjectModel.ObservableCollection[object]]::new() }
+        $state.List.Add('one')
+
+        $warnings = $null
+        New-UiList -Variable 'listRefObs' -ItemsSource ([ref]$state.List) -WarningVariable warnings
+
+        ($warnings -join ' ') | Should -Not -Match 'only a \[ref\] to a variable'
+        $state.List.Add('two')
+        ($script:session.GetListCollection('listRefObs')).Count | Should -Be 2
+    }
+
+    It 'New-UiList -NoBind never raises the [ref] warning' {
+        $state = [pscustomobject]@{ List = [System.Collections.ArrayList]@('one') }
+
+        $warnings = $null
+        New-UiList -Variable 'listRefPropNoBind' -ItemsSource ([ref]$state.List) -NoBind -WarningVariable warnings
+
+        ($warnings -join ' ') | Should -Not -Match 'only a \[ref\] to a variable'
+    }
+
+    It 'New-UiList warns when a type constrained variable converts the wrap' {
+        # [ArrayList]$rows converts on assignment, leaving a copy with no mirror, which never reaches the list.
+        [System.Collections.ArrayList]$rows = [System.Collections.ArrayList]@('one')
+
+        $warnings = $null
+        New-UiList -Variable 'listTypedRef' -ItemsSource ([ref]$rows) -WarningVariable warnings
+
+        ($warnings -join ' ') | Should -Match 'type constrained'
+        # The generic advice would point back at the variable that just failed.
+        ($warnings -join ' ') | Should -Not -Match 'could not repoint'
+        $rows.GetType().Name | Should -Be 'ArrayList'
+    }
+
+    It 'New-UiDataGrid warns on the same type constrained variable' {
+        [System.Collections.ArrayList]$gridRows = [System.Collections.ArrayList]@([pscustomobject]@{ A = 1 })
+
+        $warnings = $null
+        New-UiDataGrid -Variable 'gridTypedRef' -ItemsSource ([ref]$gridRows) -WarningVariable warnings | Out-Null
+
+        ($warnings -join ' ') | Should -Match 'type constrained'
+    }
+
+    It 'New-UiDataGrid stays quiet on a [ref] to an ObservableCollection property' {
+        # The grid twin of the list case above. Its own branch had no mirror, so the add never landed and it warned anyway.
+        $state = [pscustomobject]@{ Rows = [System.Collections.ObjectModel.ObservableCollection[object]]::new() }
+        $state.Rows.Add([pscustomobject]@{ A = 1 })
+
+        $warnings = $null
+        New-UiDataGrid -Variable 'gridRefObs' -ItemsSource ([ref]$state.Rows) -WarningVariable warnings | Out-Null
+
+        ($warnings -join ' ') | Should -Not -Match 'only a \[ref\] to a variable'
+        $state.Rows.Add([pscustomobject]@{ A = 2 })
+        @(($script:session.GetControl('gridRefObs')).ItemsSource).Count | Should -Be 2
+    }
+
+    It 'New-UiDataGrid still warns on a [ref] to a plain list property' {
+        $state = [pscustomobject]@{ Rows = [System.Collections.ArrayList]@([pscustomobject]@{ A = 1 }) }
+
+        $warnings = $null
+        New-UiDataGrid -Variable 'gridRefPlain' -ItemsSource ([ref]$state.Rows) -WarningVariable warnings | Out-Null
+
+        ($warnings -join ' ') | Should -Match 'only a \[ref\] to a variable'
+        $state.Rows.GetType().Name | Should -Be 'ArrayList'
+    }
+
+    It 'Test-UiRefWritesThrough separates a variable [ref] from a property one' {
+        InModuleScope PsUi {
+            $plain = 'value'
+            Test-UiRefWritesThrough -Reference ([ref]$plain)              | Should -BeTrue
+
+            $holder = [pscustomobject]@{ Inner = 'value' }
+            Test-UiRefWritesThrough -Reference ([ref]$holder.Inner)       | Should -BeFalse
+
+            $table = @{ Inner = 'value' }
+            Test-UiRefWritesThrough -Reference ([ref]$table.Inner)        | Should -BeFalse
+
+            # Anything that is not a reference at all answers no (no code checks the type before asking).
+            Test-UiRefWritesThrough -Reference ([System.Collections.ArrayList]::new()) | Should -BeFalse
+        }
+    }
+
     It '-NoBind skips the repoint that auto bind performs' {
         # The walk starts two frames up and never sees a Pester It local, so call it from a module function.
         InModuleScope PsUi {
@@ -504,6 +810,14 @@ Describe 'Control Creation - List Controls' {
                 $free  = Invoke-ListResolveProbe -Source $yours -NoBind
                 $free.Repointed.Count | Should -Be 0
                 $free.Collection.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+
+                $inner  = [System.Collections.ArrayList]::new()
+                $holder = [ref]$inner
+                $byRef  = Invoke-ListResolveProbe -Source $holder
+                $byRef.Type            | Should -Be 'Ref'
+                $byRef.NeedsBind       | Should -BeFalse
+                $byRef.Repointed.Count | Should -Be 0
+                $holder.Value.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
             }
             finally { Remove-Item function:Invoke-ListResolveProbe -ErrorAction SilentlyContinue }
         }

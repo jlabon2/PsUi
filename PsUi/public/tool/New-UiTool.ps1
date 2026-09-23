@@ -356,7 +356,7 @@ function New-UiTool {
             New-UiCard -Header "About" -FullWidth -Content {
                 $colors = Get-ThemeColors
                 $formattedText = ConvertTo-FormattedTextBlock -Text $aboutText -FontSize 12 -Foreground $colors.SecondaryText
-                
+
                 # Add to current parent
                 $session = Get-UiSession
                 $parent = $session.CurrentParent
@@ -667,12 +667,15 @@ function New-UiTool {
     }
     elseif ($isChildWindow) {
         # A click handler runs this, already on the host UI thread because New-UiButton's AST scan flipped it to sync.
-        # Default 600x500 is too cramped inside the child window's chrome.
         $childParams = @{
-            Title  = $capturedTitle
-            Width  = if ($capturedWidthExplicit)  { $capturedWidth }  else { 800 }
-            Height = if ($capturedHeightExplicit) { $capturedHeight } else { 600 }
+            Title = $capturedTitle
+            Width = if ($capturedWidthExplicit) { $capturedWidth } else { 800 }
         }
+
+        # A tier field form left a third of the old fixed 600 empty; now it sizes to content unless its explictly set
+        if ($capturedHeightExplicit) { $childParams.Height = $capturedHeight }
+        else { $childParams.SizeToContent = $true }
+
         New-UiChildWindow @childParams -Content $toolContent
     }
     else {

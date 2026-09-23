@@ -1,8 +1,8 @@
-<#
-.SYNOPSIS
-    Initializes parameter controls for New-UiTool dynamically.
-#>
 function Initialize-UiToolParameters {
+    <#
+    .SYNOPSIS
+        Builds one control per parameter for the New-UiTool form.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -132,7 +132,7 @@ function Initialize-UiToolParameters {
         $session = Get-UiSession
         $control = $null
 
-        # ValidateSet → ComboBox
+        # ValidateSet becomes a ComboBox
         if ($param.ValidateSet -and $param.ValidateSet.Count -gt 0) {
             $control = [System.Windows.Controls.ComboBox]::new()
             if (!$param.IsMandatory) {
@@ -156,7 +156,7 @@ function Initialize-UiToolParameters {
             }
             Set-ComboBoxStyle -ComboBox $control
         }
-        # Enum type → ComboBox with enum values
+        # Enum becomes a ComboBox holding its values
         elseif ($param.Type -and $param.Type.IsEnum) {
             $control = [System.Windows.Controls.ComboBox]::new()
             if (!$param.IsMandatory) {
@@ -180,7 +180,7 @@ function Initialize-UiToolParameters {
             }
             Set-ComboBoxStyle -ComboBox $control
         }
-        # Switch → CheckBox
+        # Switch becomes a CheckBox
         elseif ($param.IsSwitch) {
             $control = [System.Windows.Controls.CheckBox]::new()
             $control.Content = $labelText
@@ -196,7 +196,7 @@ function Initialize-UiToolParameters {
             }
             Set-CheckBoxStyle -CheckBox $control
         }
-        # Bool → CheckBox
+        # Bool becomes a CheckBox
         elseif ($param.Type -eq [bool]) {
             $control = [System.Windows.Controls.CheckBox]::new()
             $control.Content = $labelText
@@ -284,13 +284,13 @@ function Initialize-UiToolParameters {
                 $control.ToolTip = "Enter a number between $($param.ValidateRange.MinRange) and $($param.ValidateRange.MaxRange)"
             }
         }
-        # DateTime → DatePicker
+        # DateTime becomes a DatePicker.
         elseif ($param.Type -eq [datetime]) {
             $control = [System.Windows.Controls.DatePicker]::new()
             $control.SelectedDate = if ($param.DefaultValue) { $param.DefaultValue } else { [datetime]::Today }
             Set-DatePickerStyle -DatePicker $control
         }
-        # Default → TextBox
+        # Everything else becomes a TextBox
         else {
             $control = [System.Windows.Controls.TextBox]::new()
             Set-TextBoxStyle -TextBox $control
@@ -311,7 +311,7 @@ function Initialize-UiToolParameters {
             }
 
             if ($param.Type -eq [System.Management.Automation.PSCredential]) {
-                # PSCredential → Use New-UiCredential helper
+                # PSCredential goes through New-UiCredential
                 # Create the credential control directly in the target panel
                 $credContainer = [System.Windows.Controls.StackPanel]::new()
                 $credContainer.Orientation = 'Vertical'
@@ -358,7 +358,6 @@ function Initialize-UiToolParameters {
                 $controlAlreadyRegistered = $true
                 $control = $credContainer
 
-                # Wire up change events for mandatory credential validation
                 if ($param.IsMandatory) {
                     $userBox.Add_TextChanged({ Update-UiToolRunButtonState })
                     $passBox.Add_PasswordChanged({ Update-UiToolRunButtonState })
@@ -368,7 +367,7 @@ function Initialize-UiToolParameters {
                 # Use password input with peek button
                 $peekResult = New-PasswordInputWithPeek
                 $control    = $peekResult.Container
-                
+
                 # Register the PasswordBox for value extraction, not the wrapper grid
                 $session.AddControlSafe($varName, $peekResult.PasswordBox)
                 $controlAlreadyRegistered = $true
@@ -379,6 +378,9 @@ function Initialize-UiToolParameters {
                 $control.MinHeight = 60
                 $control.VerticalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Auto
                 $control.VerticalContentAlignment = 'Top'
+
+                # The style call above ran while this was still a single line and handed the wheel to the page, so take it back now that it scrolls itself.
+                Set-UiWheelRouting -Control $control -Mode Capture
             }
         }
 
@@ -397,7 +399,7 @@ function Initialize-UiToolParameters {
             $needsGroupPicker  = $InputHelpers.GroupPicker -contains $param.Name
             $needsMemberPicker = $InputHelpers.MemberPicker -contains $param.Name
 
-            # Computer picker requires domain membership; OU picker prompts for server if needed
+            # The computer picker needs domain membership, and the OU picker prompts for a server when it needs one.
             $needsComputerPicker = $false
             $needsOUPicker       = $InputHelpers.OUPicker -contains $param.Name
             if ($InputHelpers.ComputerPicker -contains $param.Name) {
@@ -410,7 +412,7 @@ function Initialize-UiToolParameters {
 
             # Only add helper to TextBox controls
             if (($needsFilePicker -or $needsFolderPicker -or $needsComputerPicker -or $needsUserPicker -or $needsGroupPicker -or $needsMemberPicker -or $needsOUPicker -or $needsFilterBuilder) -and $control -is [System.Windows.Controls.TextBox]) {
-                # Create a wrapper grid: [TextBox][Button]
+                # Grid holding the TextBox and the Button side by side
                 $wrapperGrid = [System.Windows.Controls.Grid]::new()
                 $wrapperGrid.Margin = $control.Margin
                 $control.Margin = [System.Windows.Thickness]::new(0)
@@ -537,10 +539,9 @@ function Initialize-UiToolParameters {
                 $addTarget.Children.Add($control) | Out-Null
             }
 
-            # Wire up change events for mandatory validation
             if ($param.IsMandatory) {
                 $actualControl = $control
-                
+
                 # For wrapper grids (SecureString peek), find the actual input control
                 if ($control -is [System.Windows.Controls.Grid]) {
                     foreach ($child in $control.Children) {

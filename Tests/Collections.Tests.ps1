@@ -223,7 +223,7 @@ Describe 'AsyncObservableCollection - adds from another thread' {
 
 }
 
-Describe 'New-UiList - cross thread mutation' {
+Describe 'New-UiList - a background add reaches the box and the original' {
     BeforeAll {
         $script:xtSessionId = [PsUi.SessionManager]::CreateSession()
         [PsUi.SessionManager]::SetCurrentSession($script:xtSessionId)
@@ -261,5 +261,63 @@ Describe 'New-UiList - cross thread mutation' {
 
         $wrap.Count     | Should -Be 2
         $original.Count | Should -Be 2
+    }
+}
+
+Describe 'New-UiDropdown - a background add reaches the box and the original' {
+    BeforeAll {
+        $script:ddSessionId = [PsUi.SessionManager]::CreateSession()
+        [PsUi.SessionManager]::SetCurrentSession($script:ddSessionId)
+        $script:ddSession = [PsUi.SessionManager]::Current
+        $script:ddSession.CurrentParent = [System.Windows.Controls.StackPanel]::new()
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:ddSessionId)
+    }
+
+    It 'a background add against an -Items dropdown lands in the registered collection' {
+        New-UiDropdown -Label 'Fruit' -Variable 'ddxtItems' -Items @('Apple', 'Pear') -WarningAction SilentlyContinue
+        $coll = $script:ddSession.GetListCollection('ddxtItems')
+
+        $bg = Start-BackgroundAdd -Wrapper $coll -Item 'Plum'
+        Wait-BackgroundAdd -Invocation $bg
+        (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+        $coll.Count | Should -Be 3
+        $coll[2]    | Should -Be 'Plum'
+    }
+
+    It 'a background add against a wrapped -ItemsSource reaches wrap, original and the ComboBox' {
+        $original = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        $original.Add('Apple')
+        New-UiDropdown -Label 'Fruit' -Variable 'ddxtBound' -ItemsSource $original -WarningAction SilentlyContinue
+        $wrap = $script:ddSession.GetListCollection('ddxtBound')
+
+        $bg = Start-BackgroundAdd -Wrapper $wrap -Item 'Pear'
+        Wait-BackgroundAdd -Invocation $bg
+        (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+        $wrap.Count     | Should -Be 2
+        $original.Count | Should -Be 2
+        ($script:ddSession.GetControl('ddxtBound')).Items.Count | Should -Be 2
+    }
+
+    It 'a background add through the repointed script variable reaches the dropdown' {
+        # Global because the repoint walk cannot reach a Pester local
+        $global:psuiDropdownXtProbe = [System.Collections.Generic.List[object]]::new()
+        try {
+            New-UiDropdown -Label 'Fruit' -Variable 'ddxtProbe' -ItemsSource $global:psuiDropdownXtProbe -WarningAction SilentlyContinue
+            $global:psuiDropdownXtProbe.GetType().FullName | Should -Match '^PsUi\.AsyncObservableCollection'
+
+            $bg = Start-BackgroundAdd -Wrapper $global:psuiDropdownXtProbe -Item 'Apple'
+            Wait-BackgroundAdd -Invocation $bg
+            (Complete-BackgroundAdd -Invocation $bg) | Should -BeTrue
+
+            ($script:ddSession.GetControl('ddxtProbe')).Items.Count | Should -Be 1
+        }
+        finally {
+            Remove-Variable -Name psuiDropdownXtProbe -Scope Global -ErrorAction SilentlyContinue
+        }
     }
 }

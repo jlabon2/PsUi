@@ -35,7 +35,7 @@ function Add-DataGridColumns {
     $itemTypeName = $FirstItem.PSObject.TypeNames[0]
     if (!$itemTypeName) { $itemTypeName = $FirstItem.GetType().FullName }
 
-    # Fallback defaults for the two types PowerShell most often dumps into a grid.
+    # Fallback defaults for the two types PS most often dumps into a grid.
     if (!$hasDefaultSet -and $itemTypeName -match '(^|\.)Process$') {
         $defaultProps.AddRange(@('ProcessName', 'Id', 'CPU', 'Handles', 'WorkingSet64'))
         $hasDefaultSet = $true
@@ -48,6 +48,7 @@ function Add-DataGridColumns {
     # Create array display converters
     $arrayConverter = [PsUi.ArrayDisplayConverter]::new()
     $tooltipConverter = [PsUi.ArrayTooltipConverter]::new()
+    $expandableConverter = [PsUi.IsExpandableConverter]::new()
 
     # Collect column adds into a single layout pass.
     # Can't use try/catch/finally with the begininit() call outside the pipeline (a -NoAsync button runs as a WPF event, not pipeline), and a finally block's exit NREs.
@@ -60,7 +61,7 @@ function Add-DataGridColumns {
     }
 
     if ($FirstItem -is [string] -or $FirstItem -is [System.ValueType]) {
-        # Bare scalars show as zero columns. Strings are worse and only show their length. One 'Value' column bound to the item covers both. Header sort still works, the empty path compares items.
+        # Plain scalars show as zero columns and strings only show their length, so one 'Value' column bound to the item covers both. Header sort still works, since the empty path compares the items themselves.
         $col = [System.Windows.Controls.DataGridTextColumn]::new()
         $col.Header       = 'Value'
         $col.Binding      = [System.Windows.Data.Binding]::new('.')
@@ -77,14 +78,13 @@ function Add-DataGridColumns {
 
             [void]$allProps.Add($name)
 
-            # Aliases bind to the actual .NET property, not the PowerShell alias
+            # Aliases bind to the actual .NET property, not the PS alias
             $bindPath = if ($prop -is [System.Management.Automation.PSAliasProperty]) { $prop.ReferencedMemberName } else { $name }
 
             # Arrays get click to expand template columns instead of plain text
-            $typeName2 = $prop.TypeNameOfValue
-            $isArrayType = $typeName2 -and ($typeName2.EndsWith('[]') -or
-                           ($typeName2 -match 'Collection|List|Array|IEnumerable' -and
-                           $typeName2 -notmatch 'String'))
+            # No String exclusion here, since one throws out List[string] along with the string and FileInfo.Target then renders as a raw List`1[System.String]. A plain System.String never matches the pattern below anyway.
+            $typeName2   = $prop.TypeNameOfValue
+            $isArrayType = $typeName2 -and ($typeName2.EndsWith('[]') -or $typeName2 -match 'Collection|List|Array|IEnumerable')
 
             if ($isArrayType) {
                 # Create template column for arrays with click to expand
@@ -100,13 +100,22 @@ function Add-DataGridColumns {
                 $binding.Converter = $arrayConverter
                 $textBlockFactory.SetBinding([System.Windows.Controls.TextBlock]::TextProperty, $binding)
 
-                # Foreground goes through a style so the selection color swapsm otherwise the link color disappears into the selection highlight.
-                $textBlockFactory.SetValue([System.Windows.Controls.TextBlock]::CursorProperty, [System.Windows.Input.Cursors]::Hand)
-                $textBlockFactory.SetValue([System.Windows.Controls.TextBlock]::FontStyleProperty, [System.Windows.FontStyles]::Italic)
-
+                # The link look rides a trigger on the value, so an empty list or a one pass reader reads as plain text and offers no click.
+                # Add-ArrayCellPopupHandler reads the italic to tell a list cell from the rest.
                 # LinkBrush is a DynamicResource (Set-ActiveTheme sets it). ConvertTo-UiBrush freezes the color when built.
+                # Foreground goes through the style so the selection color swaps, otherwise the link color disappears into the selection highlight.
+                $linkBinding           = [System.Windows.Data.Binding]::new($bindPath)
+                $linkBinding.Mode      = 'OneWay'
+                $linkBinding.Converter = $expandableConverter
+                $linkTrigger           = [System.Windows.DataTrigger]::new()
+                $linkTrigger.Binding   = $linkBinding
+                $linkTrigger.Value     = $true
+                [void]$linkTrigger.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::ForegroundProperty, [System.Windows.DynamicResourceExtension]::new('LinkBrush')))
+                [void]$linkTrigger.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::CursorProperty, [System.Windows.Input.Cursors]::Hand))
+                [void]$linkTrigger.Setters.Add([System.Windows.Setter]::new([System.Windows.Controls.TextBlock]::FontStyleProperty, [System.Windows.FontStyles]::Italic))
+
                 $arrLinkStyle = [System.Windows.Style]::new([System.Windows.Controls.TextBlock])
-                [void]$arrLinkStyle.Setters.Add([System.Windows.Setter]::new( [System.Windows.Controls.TextBlock]::ForegroundProperty, [System.Windows.DynamicResourceExtension]::new('LinkBrush')))
+                [void]$arrLinkStyle.Triggers.Add($linkTrigger)
                 [void]$arrLinkStyle.Triggers.Add((New-SelectedRowForegroundTrigger))
 
                 $textBlockFactory.SetValue([System.Windows.Controls.TextBlock]::StyleProperty, $arrLinkStyle)
@@ -123,7 +132,7 @@ function Add-DataGridColumns {
                 $cellTemplate.VisualTree = $textBlockFactory
                 $col.CellTemplate = $cellTemplate
 
-                # No SortMemberPath on purpose (sorting arrays throws on mixed IComparable, but copy/export resolve paths through Get-UiDataGridVisibleColumnPaths
+                # No SortMemberPath, since sorting arrays throws on mixed IComparable. Copy and export resolve the path through this binding instead.
                 $col.ClipboardContentBinding = [System.Windows.Data.Binding]::new($bindPath)
 
                 $headerMinWidth = [Math]::Max(80, ($name.Length * 7) + 30)
@@ -146,18 +155,14 @@ function Add-DataGridColumns {
             $col.IsReadOnly = $true
 
             # Hide columns outside the default set when one exists
-            if ($hasDefaultSet -and $defaultProps -notcontains $name) {
-                $col.Visibility = [System.Windows.Visibility]::Collapsed
-            }
+            if ($hasDefaultSet -and $defaultProps -notcontains $name) { $col.Visibility = [System.Windows.Visibility]::Collapsed }
 
             $DataGrid.Columns.Add($col)
         }
     }
 
     # If no default set, all properties are default.
-    if (!$hasDefaultSet) {
-        $defaultProps = [System.Collections.Generic.List[object]]::new($allProps)
-    }
+    if (!$hasDefaultSet) { $defaultProps = [System.Collections.Generic.List[object]]::new($allProps) }
 
     # Add Action Status column if requested. Binds to the _ActionStatus hidden property added by the AsyncExecutor, which inturn is updated by actions attached to the items using -ResultAction.
     if ($IncludeActionStatus) {

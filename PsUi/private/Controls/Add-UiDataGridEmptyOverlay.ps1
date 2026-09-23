@@ -77,9 +77,9 @@ function Add-UiDataGridEmptyOverlay {
     $sync = {
         $isEmpty = ($DataGrid.Items.Count -eq 0)
         $vis = if ($isEmpty) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
-        
+
         if ($iconBlock) { $iconBlock.Visibility = $vis }
-        
+
         $messageBlock.Visibility = $vis
         $DataGrid.IsEnabled = !$isEmpty
 
@@ -116,7 +116,7 @@ function Add-UiDataGridEmptyOverlay {
         & $attach
     }.GetNewClosure())
 
-    # ItemsSource swap at runtime: AddValueChanged hooks the DependencyProperty descriptor and fires whenever the property's value changes. Reeval visibility and rebind the collectionchanged sub to the new view 
+    # ItemsSource swap at runtime: AddValueChanged hooks the DependencyProperty descriptor and fires whenever the property's value changes. Reeval visibility and rebind the collectionchanged sub to the new view
     #
     # DPD.AddValueChanged stores the handler in a static internal dictionary that strong refs the DataGrid- good ol classic WPF leak. Subscribe AND its matching RemoveValueChanged BOTH live inside Add_Loaded so a never realized grid (unrealized tab) doesn't subscribe in the first place. Per grid hashtable flag means a window wide guard can't shadow sibling grids.
     $itemsSourcePropDesc = [System.ComponentModel.DependencyPropertyDescriptor]::FromProperty(
@@ -128,10 +128,22 @@ function Add-UiDataGridEmptyOverlay {
         & $attach
     }.GetNewClosure()
 
+    # Set-DataGridStyle puts HeadersVisibility back to Column as a local value on every restyle, and no other event fires for it.
+    # ThemeEngine raises ThemeChanged before it refreshes the elements.
+    # At any priority below Render the headers get one frame on screen before the resync hides them again.
+    $themeChangedHandler = [System.Action[string]]{
+        param($themeName)
+        # ThemeEngine calls every subscriber inside one try, so a throw here would stop the ones after it.
+        trap { Write-Debug "Overlay theme resync failed: $_"; continue }
+        $null = $DataGrid.Dispatcher.BeginInvoke([Action]$sync, [System.Windows.Threading.DispatcherPriority]::Render)
+    }.GetNewClosure()
+
     # Closed handler defined at function body. PS nested .GetNewClosure() doesn't propagate vars that the parent scope only reached via its own outer capture... building this handler inside Add_Loaded would leave $DataGrid / $itemsSourcePropDesc / etc. null at Closed time, so the cleanup silently does nothing and the DPD strong ref leaks anyway (the exact bug the comment above tries to prevent). Lifted out so the function params get captured directly.
     $onWindowClosed = {
         try { $itemsSourcePropDesc.RemoveValueChanged($DataGrid, $itemsSourceChangedHandler) }
         catch { Write-Debug "EmptyOverlay DPD detach failed: $_" }
+        try { [PsUi.ThemeEngine]::remove_ThemeChanged($themeChangedHandler) }
+        catch { Write-Debug "EmptyOverlay theme detach failed: $_" }
         if ($subState.View) {
             try { $subState.View.remove_CollectionChanged($syncHandler) } catch { }
             $subState.View = $null
@@ -147,6 +159,7 @@ function Add-UiDataGridEmptyOverlay {
         $initHooked.Value = $true
 
         $itemsSourcePropDesc.AddValueChanged($DataGrid, $itemsSourceChangedHandler)
+        [PsUi.ThemeEngine]::add_ThemeChanged($themeChangedHandler)
         $window.Add_Closed($onWindowClosed)
     }.GetNewClosure())
 
@@ -157,6 +170,10 @@ function Add-UiDataGridEmptyOverlay {
             $subState.View = $null
         }
     }.GetNewClosure())
+
+    # The results filter swaps this text when a search empties the grid.
+    # Resources and not Tag, since Set-UiProperties refuses a Tag on a control that already has one.
+    $wrapper.Resources['__EmptyOverlay'] = @{ MessageBlock = $messageBlock; DefaultMessage = $Message }
 
     return $wrapper
 }

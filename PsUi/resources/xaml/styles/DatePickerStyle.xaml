@@ -3,10 +3,10 @@
 
     <ControlTemplate x:Key="CalendarPreviousButtonTemplate" TargetType="Button">
         <Border Background="Transparent" Width="30" Height="30">
-            <Path Data="M 8,5 L 2,11 L 8,17" 
-                  Stroke="{TemplateBinding Foreground}" 
-                  StrokeThickness="2" 
-                  VerticalAlignment="Center" 
+            <Path Data="M 8,5 L 2,11 L 8,17"
+                  Stroke="{TemplateBinding Foreground}"
+                  StrokeThickness="2"
+                  VerticalAlignment="Center"
                   HorizontalAlignment="Center"
                   SnapsToDevicePixels="True"/>
         </Border>
@@ -14,10 +14,10 @@
 
     <ControlTemplate x:Key="CalendarNextButtonTemplate" TargetType="Button">
         <Border Background="Transparent" Width="30" Height="30">
-            <Path Data="M 2,5 L 8,11 L 2,17" 
-                  Stroke="{TemplateBinding Foreground}" 
-                  StrokeThickness="2" 
-                  VerticalAlignment="Center" 
+            <Path Data="M 2,5 L 8,11 L 2,17"
+                  Stroke="{TemplateBinding Foreground}"
+                  StrokeThickness="2"
+                  VerticalAlignment="Center"
                   HorizontalAlignment="Center"
                   SnapsToDevicePixels="True"/>
         </Border>
@@ -25,7 +25,7 @@
 
     <ControlTemplate x:Key="CalendarHeaderButtonTemplate" TargetType="Button">
         <Border Background="Transparent" Padding="8,4,8,4" CornerRadius="4">
-            <ContentPresenter VerticalAlignment="Center" 
+            <ContentPresenter VerticalAlignment="Center"
                               HorizontalAlignment="Center"
                               TextElement.FontWeight="SemiBold"
                               TextElement.FontSize="14"
@@ -139,7 +139,7 @@
                                        Text="{Binding}"/>
                         </DataTemplate>
                     </ControlTemplate.Resources>
-                    
+
                     <Border Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
@@ -149,7 +149,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            
+
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
                                     <VisualState x:Name="Normal"/>
@@ -160,7 +160,7 @@
                                     </VisualState>
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
-                            
+
                             <!-- Header with navigation -->
                             <Grid Grid.Row="0" Margin="8,8,8,4">
                                 <Grid.ColumnDefinitions>
@@ -168,7 +168,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                
+
                                 <Button x:Name="PART_PreviousButton"
                                         Grid.Column="0"
                                         Focusable="False"
@@ -179,10 +179,10 @@
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                <Path Data="M 10,4 L 4,10 L 10,16" 
-                                                      Stroke="{DynamicResource ControlForegroundBrush}" 
-                                                      StrokeThickness="2" 
-                                                      VerticalAlignment="Center" 
+                                                <Path Data="M 10,4 L 4,10 L 10,16"
+                                                      Stroke="{DynamicResource ControlForegroundBrush}"
+                                                      StrokeThickness="2"
+                                                      VerticalAlignment="Center"
                                                       HorizontalAlignment="Center"/>
                                             </Border>
                                             <ControlTemplate.Triggers>
@@ -193,7 +193,7 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                 </Button>
-                                
+
                                 <Button x:Name="PART_HeaderButton"
                                         Grid.Column="1"
                                         Focusable="False"
@@ -204,7 +204,7 @@
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border x:Name="bg" Background="Transparent" CornerRadius="4" Padding="12,4">
-                                                <ContentPresenter HorizontalAlignment="Center" 
+                                                <ContentPresenter HorizontalAlignment="Center"
                                                                   VerticalAlignment="Center"
                                                                   TextBlock.FontWeight="SemiBold"
                                                                   TextBlock.FontSize="14"
@@ -213,7 +213,7 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                 </Button>
-                                
+
                                 <Button x:Name="PART_NextButton"
                                         Grid.Column="2"
                                         Focusable="False"
@@ -224,10 +224,10 @@
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                <Path Data="M 4,4 L 10,10 L 4,16" 
-                                                      Stroke="{DynamicResource ControlForegroundBrush}" 
-                                                      StrokeThickness="2" 
-                                                      VerticalAlignment="Center" 
+                                                <Path Data="M 4,4 L 10,10 L 4,16"
+                                                      Stroke="{DynamicResource ControlForegroundBrush}"
+                                                      StrokeThickness="2"
+                                                      VerticalAlignment="Center"
                                                       HorizontalAlignment="Center"/>
                                             </Border>
                                             <ControlTemplate.Triggers>
@@ -239,7 +239,7 @@
                                     </Button.Template>
                                 </Button>
                             </Grid>
-                            
+
                             <!-- Calendar grids -->
                             <Grid Grid.Row="1" Margin="8,0,8,8">
                                 <Grid x:Name="PART_MonthView" Visibility="Visible">
@@ -262,7 +262,7 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                 </Grid>
-                                
+
                                 <Grid x:Name="PART_YearView" Visibility="Hidden">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="*"/>
@@ -289,7 +289,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
-        
+
         <!-- CalendarItemStyle sets colors but keeps default template for proper view switching -->
         <Setter Property="CalendarItemStyle" Value="{DynamicResource ModernCalendarItemStyle}"/>
         <Setter Property="CalendarDayButtonStyle" Value="{DynamicResource ModernCalendarDayButtonStyle}"/>
@@ -297,6 +297,7 @@
     </Style>
 
     <Style x:Key="ModernDatePickerStyle" TargetType="DatePicker">
+        <Setter Property="Height" Value="28"/>
         <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
@@ -306,7 +307,7 @@
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Padding" Value="6,0,6,0"/>
         <Setter Property="CalendarStyle" Value="{DynamicResource ModernCalendarStyle}"/>
-        
+
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DatePicker">
@@ -321,7 +322,7 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            
+
                             <DatePickerTextBox x:Name="PART_TextBox"
                                                Grid.Column="0"
                                                Foreground="{TemplateBinding Foreground}"
@@ -365,7 +366,7 @@
                                     </Style>
                                 </DatePickerTextBox.Style>
                             </DatePickerTextBox>
-                            
+
                             <ToggleButton x:Name="PART_Button"
                                           Grid.Column="1"
                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
@@ -388,9 +389,9 @@
                                     </ControlTemplate>
                                 </ToggleButton.Template>
                             </ToggleButton>
-                            
-                            <Popup x:Name="PART_Popup" 
-                                   AllowsTransparency="True" 
+
+                            <Popup x:Name="PART_Popup"
+                                   AllowsTransparency="True"
                                    Placement="Bottom"
                                    StaysOpen="False">
                                 <Border Background="{DynamicResource ControlBackgroundBrush}"
@@ -402,14 +403,14 @@
                                     <Border.Effect>
                                         <DropShadowEffect Color="Black" Direction="270" ShadowDepth="4" BlurRadius="12" Opacity="0.3"/>
                                     </Border.Effect>
-                                    
+
                                     <Calendar x:Name="PART_Calendar"
                                               Style="{DynamicResource ModernCalendarStyle}"/>
                                 </Border>
                             </Popup>
                         </Grid>
                     </Border>
-                    
+
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -426,5 +427,5 @@
             </Setter.Value>
         </Setter>
     </Style>
-    
+
 </ResourceDictionary>
