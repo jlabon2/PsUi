@@ -15,7 +15,9 @@ function Add-MultiTypeFilterControls {
         [System.Windows.Controls.StackPanel]$FilterPanel,
 
         [Parameter(Mandatory)]
-        [System.Windows.Controls.DockPanel]$Toolbar2
+        [System.Windows.Controls.DockPanel]$Toolbar2,
+
+        [Nullable[Guid]]$SessionId
     )
 
     $colButton = [System.Windows.Controls.Button]@{
@@ -63,6 +65,7 @@ function Add-MultiTypeFilterControls {
                     }
                 }.GetNewClosure()
                 ItemsProvider      = { $gridForProvider.Tag.UnfilteredItems }.GetNewClosure()
+                SessionId          = $SessionId
             }
             $popup = New-ColumnVisibilityPopup @popupArgs
             $currentGrid.Tag.ColumnPopup = $popup
@@ -180,13 +183,13 @@ function Add-MultiTypeFilterControls {
         $tag.Timer = $timer
 
         $timer.Add_Tick({
-            try { & $this.Tag.Tag.RunFilter $this.Tag }
+            # 5.1 skips a finally in here
+            $this.Stop()
+            $fb = $this.Tag
+            $fb.Tag.Timer = $null
+
+            try { & $fb.Tag.RunFilter $fb }
             catch { Write-Debug "Filter failed: $_" }
-            finally {
-                $this.Stop()
-                $fb = $this.Tag
-                $fb.Tag.Timer = $null
-            }
         })
 
         $timer.Start()

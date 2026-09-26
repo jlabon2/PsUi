@@ -3,8 +3,9 @@ function Clear-UiStatus {
     .SYNOPSIS
         Resets a status bar to its initial state.
     .DESCRIPTION
-        Clears the status text, cancels any pending severity auto-reset, drops the tint back to Info,
-        and zeros the embedded progress bar (if any).
+        Puts the status text back to what the bar started with (its -DefaultText, or the first
+        label in its -Content), cancels any pending severity auto-reset, drops the tint back to
+        Info, and zeros the embedded progress bar (if any).
         Safe to call from any thread.
     .PARAMETER Variable
         The variable name the status bar was registered under. When omitted, the active status bar is 
@@ -22,20 +23,18 @@ function Clear-UiStatus {
     $session = Get-UiSession
     if (!$session) { return }
 
-    Invoke-OnUIThread {
-        $bar = Resolve-UiStatusBar -Variable $Variable
-        if (!$bar) {
-            $hint = if ($Variable) { "no control registered as '$Variable'" } else { "no status bar registered in this session" }
-            Write-Warning "Clear-UiStatus: $hint"
-            return
-        }
+    $outcome = Invoke-OnUIThread -ArgumentList $session, $Variable -ScriptBlock {
+        param($session, $Variable)
+
+        $bar = Resolve-UiStatusBar -Session $session -Variable $Variable
+        if (!$bar) { return 'NoBar' }
 
         $meta = if ($bar.Tag -is [hashtable]) { $bar.Tag } else { @{} }
 
         # Cancel any pending severity auto-reset before clearing the tint
         if ($meta.SeverityTimer) { $meta.SeverityTimer.Stop() }
 
-        if ($meta.StatusText) { $meta.StatusText.Text = ''; $meta.StatusText.ToolTip = $null }
+        if ($meta.StatusText) { $meta.StatusText.Text = "$($meta.InitialText)"; $meta.StatusText.ToolTip = $null }
 
         # Drop the bar tint and severity icon back to Info
         $meta.Severity = 'Info'
@@ -64,5 +63,10 @@ function Clear-UiStatus {
                 catch { Write-Debug "Clear-UiStatus: Set-ProgressBarStyle failed: $_" }
             }
         }
+    }
+
+    if ($outcome -eq 'NoBar') {
+        $hint = if ($Variable) { "no control registered as '$Variable'" } else { "no status bar registered in this session" }
+        Write-Warning "Clear-UiStatus: $hint"
     }
 }

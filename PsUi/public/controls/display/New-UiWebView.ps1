@@ -49,12 +49,11 @@ function New-UiWebView {
         New-UiWebView -Uri $authUrl -OnNavigated {
             param($url)
             if ($url -match 'code=([^&]+)') {
-                $session = Get-UiSession
-                $session.Variables['authCode'] = $Matches[1]
-                $session.Window.Close()
+                Set-UiCapturedVariable -Name 'authCode' -Value $Matches[1]
+                Close-UiWindow
             }
         }
-        # OAuth callback capture. The code lands in the session store
+        # OAuth callback capture. With New-UiWindow -ExportOnClose, $authCode comes back to the script
     #>
     [CmdletBinding(DefaultParameterSetName = 'Uri')]
     param(
@@ -163,6 +162,10 @@ function New-UiWebView {
     [string]$capturedHtml          = $Html
     $capturedOnNavigating          = $OnNavigating
     $capturedOnNavigated           = $OnNavigated
+    $capturedSessionId             = $session.SessionId
+    $capturedPushSession           = ${function:Push-UiSession}
+    $capturedPopSession            = ${function:Pop-UiSession}
+    $capturedRunCallback           = ${function:Invoke-UiCallback}
 
     # Defer settings and navigation until CoreWebView2 is ready
     $webView.add_CoreWebView2InitializationCompleted({
@@ -180,6 +183,10 @@ function New-UiWebView {
         # Copy to locals before building the inner handlers. A nested GetNewClosure captures only the immediate scope, never this handler's own closure, so the captured* variables arrive as nulls when the event fires.
         $localOnNavigating = $capturedOnNavigating
         $localOnNavigated  = $capturedOnNavigated
+        $localSessionId    = $capturedSessionId
+        $localPushSession  = $capturedPushSession
+        $localPopSession   = $capturedPopSession
+        $localRunCallback  = $capturedRunCallback
 
         if ($localOnNavigating) {
             $wv.CoreWebView2.add_NavigationStarting({
@@ -188,9 +195,16 @@ function New-UiWebView {
                 # trap, not try/catch/finally. Off the pipeline a finally NREs
                 # $result is set first so the cancel test below still reads something after a trap resumes past the call.
                 trap { Write-Warning "New-UiWebView OnNavigating error: $_"; continue }
-                $result = @()
-                $navUrl = $navArgs.Uri
-                $result = @(& $localOnNavigating $navUrl)
+                $result       = @()
+                $navUrl       = $navArgs.Uri
+                $sessionToken = & $localPushSession -SessionId $localSessionId
+                $callback     = @{
+                    ScriptBlock  = $localOnNavigating
+                    ArgumentList = (, $navUrl)
+                    Label        = 'New-UiWebView OnNavigating'
+                }
+                $result = @(& $localRunCallback @callback)
+                & $localPopSession -Token $sessionToken
 
                 $verdict = if ($result.Count) { $result[-1] } else { $null }
                 if ($verdict -is [bool] -and !$verdict) {
@@ -205,8 +219,15 @@ function New-UiWebView {
 
                 # Same trap as OnNavigating
                 trap { Write-Warning "New-UiWebView OnNavigated error: $_"; continue }
-                $navUrl = $navSender.Source
-                & $localOnNavigated $navUrl
+                $navUrl       = $navSender.Source
+                $sessionToken = & $localPushSession -SessionId $localSessionId
+                $callback     = @{
+                    ScriptBlock  = $localOnNavigated
+                    ArgumentList = (, $navUrl)
+                    Label        = 'New-UiWebView OnNavigated'
+                }
+                $null = & $localRunCallback @callback
+                & $localPopSession -Token $sessionToken
             }.GetNewClosure())
         }
         

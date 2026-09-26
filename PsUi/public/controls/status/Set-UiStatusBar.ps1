@@ -81,15 +81,20 @@
     if ($PSBoundParameters.ContainsKey('Timeout')) {  $effectiveTimeout = $Timeout }
     elseif ($PSBoundParameters.ContainsKey('Severity')) {  $effectiveTimeout = 5 }
 
-    $boundKeys = $PSBoundParameters.Keys
+    $boundKeys = @($PSBoundParameters.Keys)
+    $arguments = @(
+        $session, $Variable, $boundKeys, $Text, $Progress, $Increment,
+        $Severity, $indeterminateValue, $effectiveTimeout
+    )
 
-    Invoke-OnUIThread {
-        $bar = Resolve-UiStatusBar -Variable $Variable
-        if (!$bar) {
-            $hint = if ($Variable) { "no control registered as '$Variable'" } else { "no status bar registered in this session" }
-            Write-Warning "Set-UiStatusBar: $hint"
-            return
-        }
+    $outcome = Invoke-OnUIThread -ArgumentList $arguments -ScriptBlock {
+        param(
+            $session, $Variable, $boundKeys, $Text, $Progress, $Increment,
+            $Severity, $indeterminateValue, $effectiveTimeout
+        )
+
+        $bar = Resolve-UiStatusBar -Session $session -Variable $Variable
+        if (!$bar) { return 'NoBar' }
 
         $meta      = if ($bar.Tag -is [hashtable]) { $bar.Tag } else { @{} }
         $textBlock = $meta.StatusText
@@ -104,14 +109,12 @@
             catch { Write-Verbose "Set-UiStatusBar ledger entry failed: $_" }
         }
 
-        # Warn when caller passed progress but the bar has no embedded progress bar
+        # Reported back so the verbose msgs reach the calling script
         $wantsProgress = ($boundKeys -contains 'Progress') -or ($boundKeys -contains 'Increment') -or ($boundKeys -contains 'Indeterminate')
-        if ($wantsProgress -and !$progBar) {
-            Write-Verbose "Set-UiStatusBar: -Progress/-Increment/-Indeterminate set but no embedded bar. Re-create the status bar with -AutoProgress."
-        }
+        if ($wantsProgress -and !$progBar) { 'NoProgressBar' }
 
         if ($progBar) {
-            # Show the bar when the caller is actively driving progress
+            # Any progress value brings the bar back
             if ($wantsProgress -and $progBar.Visibility -ne [System.Windows.Visibility]::Visible) {
                 $progBar.Visibility = [System.Windows.Visibility]::Visible
             }
@@ -148,16 +151,10 @@
             }
         }
 
-        # Apply severity tint and sync the embedded progress bar's fill
+        # Only the bar background takes the severity, since the same brush on the embedded fill hides it against the bar
         if ($boundKeys -contains 'Severity') {
             $meta.Severity = $Severity
             Set-StatusBarSeverityVisual -Bar $bar -Severity $Severity
-
-            if ($progBar -and $progBar.Tag -is [hashtable]) {
-                $progBar.Tag.Severity = $Severity
-                $progBar.Tag.BrushTag = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault
-                Set-ProgressBarStyle -ProgressBar $progBar
-            }
 
             if ($effectiveTimeout -gt 0 -and $meta.SeverityTimer) {
                 $meta.SeverityTimer.Stop()
@@ -168,5 +165,13 @@
         }
 
         $bar.Tag = $meta
+    }
+
+    switch ($outcome) {
+        'NoBar' {
+            $hint = if ($Variable) { "no control registered as '$Variable'" } else { "no status bar registered in this session" }
+            Write-Warning "Set-UiStatusBar: $hint"
+        }
+        'NoProgressBar' { Write-Verbose "Set-UiStatusBar: -Progress/-Increment/-Indeterminate set but no embedded bar. Re-create the status bar with -AutoProgress." }
     }
 }

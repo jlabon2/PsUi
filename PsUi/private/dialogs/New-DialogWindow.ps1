@@ -68,9 +68,7 @@ function New-DialogWindow {
 
     $null = Set-WindowOwner -Window $window
 
-    # Unique AppUserModelID separates from PowerShell in taskbar
-    $appId = "PsUi.$AppIdSuffix." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+    [PsUi.WindowManager]::SetWindowAppId($window, "PsUi.$AppIdSuffix")
 
     # Only the PowerShell view passes one. Everything else sizes to its content.
     if ($Height -gt 0) { $window.Height = $Height }

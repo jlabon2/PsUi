@@ -184,8 +184,10 @@ function Invoke-UiAsync {
 
     Write-Debug "Injecting $($__varsToInject.Count) variable(s), $($__functionsToInject.Count) function(s)"
 
-    # Capture session ID for restore on the UI thread when OnComplete fires
     $capturedSessionId = [PsUi.SessionManager]::CurrentSessionId
+    $pushSession       = ${function:Push-UiSession}
+    $popSession        = ${function:Pop-UiSession}
+    $invokeCallback    = ${function:Invoke-UiCallback}
 
     $state = [hashtable]::Synchronized(@{
         Results       = [System.Collections.Generic.List[psobject]]::new()
@@ -246,20 +248,33 @@ function Invoke-UiAsync {
     $__executor.add_OnComplete({
         trap { Write-Warning "Invoke-UiAsync OnComplete error: $_"; continue }
 
-        # Restore session context on UI thread so Set-UiValue and other functions work
-        if ($state.SessionId -ne [Guid]::Empty) {
-            [PsUi.SessionManager]::SetCurrentSession($state.SessionId)
-        }
+        # OnError and OnComplete run under the window that started the run
+        $sessionToken = & $pushSession -SessionId $state.SessionId
 
+        # Its own trap, or a throw from OnError warns under the OnComplete label
         if ($state.Errors.Count -gt 0 -and $state.OnError) {
-            & $state.OnError ($state.Errors -join "`n`n")
+            & {
+                trap { Write-Warning "Invoke-UiAsync OnError error: $_"; continue }
+                $callback = @{
+                    ScriptBlock  = $state.OnError
+                    ArgumentList = (, ($state.Errors -join "`n`n"))
+                    Label        = 'Invoke-UiAsync OnError'
+                }
+                $null = & $invokeCallback @callback
+            }
         }
 
         # Not an elseif... one Write-Error would route the whole run to OnError and throw the pipeline output away, including the results from every row that worked.
         if ($state.OnComplete) {
-            if ($state.Results.Count -eq 0)     { & $state.OnComplete $null }
-            elseif ($state.Results.Count -eq 1) { & $state.OnComplete $state.Results[0] }
-            else                                { & $state.OnComplete @($state.Results) }
+            if ($state.Results.Count -eq 0)     { $handedOver = $null }
+            elseif ($state.Results.Count -eq 1) { $handedOver = $state.Results[0] }
+            else                                { $handedOver = @($state.Results) }
+            $callback = @{
+                ScriptBlock  = $state.OnComplete
+                ArgumentList = (, $handedOver)
+                Label        = 'Invoke-UiAsync OnComplete'
+            }
+            $null = & $invokeCallback @callback
         }
 
         # Drop OnHost before Dispose. Redundant with Dispose nulling its own handlers, and it stays because the add/remove pairing reads clearer than leaning on a Dispose side effect.
@@ -271,6 +286,8 @@ function Invoke-UiAsync {
             $state.Executor.Dispose()
             if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $state.Executor)) { $execSession.ActiveExecutor = $null }
         }
+
+        & $popSession -Token $sessionToken
     }.GetNewClosure())
 
     # Cancel() fires OnCancelled, not OnComplete, so the disposer above never runs on a Stop-UiAsync / AutoCancel cancel. The AsyncExecutor (its CTS + handler delegates) would sit rooted in ActiveExecutor until GC. Same teardown New-UiButton's cancel path does.

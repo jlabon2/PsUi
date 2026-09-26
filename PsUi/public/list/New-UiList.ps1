@@ -35,6 +35,7 @@ function New-UiList {
     .PARAMETER AllowAdd
         Adds a "+" button to the toolbar that opens an input dialog for manually
         adding items to the list. Useful when items can't be auto-discovered.
+        The new item comes up selected. With -MultiSelect it joins the current selection.
     .PARAMETER AddPrompt
         Custom prompt text for the add item dialog. Defaults to "Enter item to add:".
     .PARAMETER Height
@@ -399,20 +400,34 @@ function New-UiList {
                 PromptText  = $AddPrompt
                 CountLabel  = $countLabel
                 ListView    = $listBox
+                SessionId   = $session.SessionId
+                PushSession = ${function:Push-UiSession}
+                PopSession  = ${function:Pop-UiSession}
             }
             $addBtn.Add_Click({
-                $result = Show-UiInputDialog -Title 'Add Item' -Prompt $addState.PromptText
-                if (![string]::IsNullOrWhiteSpace($result)) {
-                    [void]$addState.Collection.Add($result)
+                trap { Write-Debug "New-UiList add button: $_"; continue }
 
-                    # Auto-select the newly added item (keeps existing selections)
-                    $addState.ListView.SelectedItems.Add($result)
+                # Still $null if the dialog throws, which skips the add below
+                $result       = $null
+                $sessionToken = & $addState.PushSession -SessionId $addState.SessionId
+                $result       = Show-UiInputDialog -Title 'Add Item' -Prompt $addState.PromptText
+                & $addState.PopSession -Token $sessionToken
+                if ([string]::IsNullOrWhiteSpace($result)) { return }
 
-                    if ($addState.CountLabel) {
-                        $selected = $addState.ListView.SelectedItems.Count
-                        $total    = $addState.ListView.Items.Count
-                        $addState.CountLabel.Text = "($selected/$total)"
-                    }
+                # Top level because an ObservableCollection[int] source throws after the row is in and the trap's continue would skip the rest of an if
+                [void]$addState.Collection.Add($result)
+
+                # SelectedItem picks the first equal item, the older copy of a repeated name, and the index only holds while the new row is the last one showing
+                $listView = $addState.ListView
+                $last     = $listView.Items.Count - 1
+                if ($listView.SelectionMode -ne 'Single') { [void]$listView.SelectedItems.Add($result) }
+                elseif ($last -ge 0 -and $listView.Items[$last] -ceq $result) { $listView.SelectedIndex = $last }
+                else { $listView.SelectedItem = $result }
+
+                if ($addState.CountLabel) {
+                    $selected = $listView.SelectedItems.Count
+                    $total    = $listView.Items.Count
+                    $addState.CountLabel.Text = "($selected/$total)"
                 }
             }.GetNewClosure())
         }

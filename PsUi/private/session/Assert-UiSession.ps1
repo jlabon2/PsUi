@@ -19,7 +19,7 @@ function Assert-UiSession {
         $callerCmdlet = (Get-Variable -Scope 1 -Name PSCmdlet -ErrorAction SilentlyContinue).Value
         $ending       = $false
         if ($callerCmdlet) {
-            $ending = Invoke-UiImplicitWindow -CallerName $CallerName -CallerState $callerCmdlet.SessionState
+            $ending = Invoke-UiImplicitWindow -CallerName $CallerName -CallerState $callerCmdlet.SessionState -CallerCmdlet $callerCmdlet
         }
 
         # Window popped up and the user closed it. A script file exits clean, but a block typed at a prompt has nothing to exit, so its pipeline stops instead.

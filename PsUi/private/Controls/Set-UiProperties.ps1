@@ -20,6 +20,12 @@ function Set-UiProperties {
         [void]$Properties.Remove('Tag')
     }
 
+    # Set-UiRowAlignment leaves a control where the user put it
+    $placesItself = $Properties.ContainsKey('VerticalAlignment') -or $Properties.ContainsKey('Margin')
+    if ($Control -is [System.Windows.FrameworkElement] -and $placesItself) {
+        $Control.Resources['__PsUiPlacedByUser'] = $true
+    }
+
     foreach ($propName in $Properties.Keys) {
         try {
             $propValue = $Properties[$propName]

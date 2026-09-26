@@ -315,4 +315,37 @@ InModuleScope PsUi {
             Invoke-StoreProbe -Bag (Remove-UiStoreShadow -Variables @{ lastRun = 'STALE' } -AutoNames @()) | Should -Be 'seen=STALE'
         }
     }
+
+    Describe 'Close-UiWindow' {
+        BeforeAll {
+            $script:cwId          = [PsUi.SessionManager]::CreateSession()
+            $script:cwSession     = [PsUi.SessionManager]::GetSession($script:cwId)
+            $script:cwSavedId     = [PsUi.SessionManager]::CurrentSessionId
+            $script:cwHadGlobal   = Test-Path variable:Global:__PsUiSessionId
+            $script:cwPriorGlobal = $Global:__PsUiSessionId
+            [PsUi.SessionManager]::SetCurrentSession($script:cwId)
+            $Global:__PsUiSessionId = $script:cwId.ToString()
+        }
+
+        AfterAll {
+            [PsUi.SessionManager]::DisposeSession($script:cwId)
+            [PsUi.SessionManager]::SetCurrentSession($script:cwSavedId)
+            if ($script:cwHadGlobal) { $Global:__PsUiSessionId = $script:cwPriorGlobal }
+            else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+            Remove-Variable -Name cwId, cwSession, cwSavedId, cwHadGlobal, cwPriorGlobal -Scope Script -ErrorAction SilentlyContinue
+        }
+
+        It 'Holds a close from -Content until the window has rendered' {
+            $state  = @{ Closed = $false }
+            $window = [System.Windows.Window]::new()
+            $window.Add_Closed({ $state.Closed = $true }.GetNewClosure())
+            $script:cwSession.Window = $window
+
+            Close-UiWindow
+            $state.Closed | Should -BeFalse
+
+            [System.Windows.Window].GetMethod('OnContentRendered', [System.Reflection.BindingFlags]'Instance,NonPublic').Invoke($window, @([EventArgs]::Empty))
+            $state.Closed | Should -BeTrue
+        }
+    }
 }

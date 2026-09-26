@@ -42,7 +42,6 @@ function Write-Status {
     if ($PSBoundParameters.ContainsKey('Timeout'))  { $params.Timeout  = $Timeout }
     if ($PSBoundParameters.ContainsKey('Bar'))       { $params.Variable = $Bar }
 
-    # Forward unconditionally - Set-UiStatusBar resolves on the UI thread and warns if no bar
-    # exists. Safer than probing WPF controls from a background thread for a fallback path.
+    # Set-UiStatusBar looks the bar up on the UI thread and warns when there isn't one, which saves probing WPF controls from a background thread
     Set-UiStatusBar @params
 }

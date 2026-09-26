@@ -21,8 +21,14 @@
         [switch]$NoAsync,
 
         # Multi row fan out (RowContextMenu acting on a selection). Skips the per target Remove+Insert workaround. Concurrent runspaces racing the shared SourceCollection were the cause of the ~20% mutation drop. Items.Refresh alone is race free. The visual fidelity tradeoff (custom binding cells lag one Items.Refresh behind) is acceptable next to losing the mutation entirely.
-        [switch]$FanOut
+        [switch]$FanOut,
+
+        # The grid window's session
+        [Nullable[Guid]]$SessionId
     )
+
+    # Hydration, the store check, the background run and the status bar all read the thread's session, so the grid's goes in before any of them
+    $sessionToken = Push-UiSession -SessionId $SessionId
 
     $useAsync = !$NoAsync
 
@@ -92,17 +98,24 @@
     # ForEach-Object binds $_ directly from the parameter. Wrapping the action in another scriptblock loses $_ across scope / session state boundaries, leaving the user's action with $_ as $null.
     # One bad row shouldn't sour the rest of a selection. Failures collect and surface once at the end and grid actions have no output panel, so a silent Write-Debug meant the user never learned the click did nothing.
     if (!$useAsync) {
-        $rowFailures = [System.Collections.Generic.List[string]]::new()
+        $rowFailures = [System.Collections.Generic.List[object]]::new()
+
+        # The redirect goes on a block around ForEach-Object, which ignores a 2>&1 of its own for what its -Process block writes
+        $runRow = { param($row, $rowAction) $row | ForEach-Object -Process $rowAction }
         foreach ($actionTarget in @($Item)) {
-            try { $actionTarget | ForEach-Object -Process $Action }
+            try {
+                $null = Invoke-UiCallback -ScriptBlock $runRow -ArgumentList $actionTarget, $Action -ErrorList $rowFailures
+            }
             catch { [void]$rowFailures.Add($_.Exception.Message) }
         }
         & $refresh
         if ($rowFailures.Count -gt 0) {
             Write-Debug "Invoke-UiAction sync failed: $($rowFailures -join '; ')"
-            try { Show-UiMessageDialog -Title 'Action Error' -Message ($rowFailures -join [Environment]::NewLine) -Icon Error }
+            $listed = Format-UiErrorList -Errors $rowFailures
+            try { Show-UiMessageDialog -Title 'Action Error' -Message $listed -Icon Error }
             catch { Write-Debug "Action error dialog failed: $_" }
         }
+        Pop-UiSession -Token $sessionToken
         return
     }
 
@@ -182,6 +195,8 @@
         catch { Write-Debug "Invoke-UiAction host route failed: $_" }
     }.GetNewClosure()
 
+    $errorsToBar = [bool]($hostSession -and (Test-StatusBarIntercept -Session $hostSession))
+
     $asyncArgs = @{
         ScriptBlock   = $wrapped
         Variables     = $harvested
@@ -190,8 +205,8 @@
         OnError       = {
             param($errInfo)
             Write-Debug "Invoke-UiAction async failed: $errInfo"
-            # No output panel on the grid action path, so a dialog is the only place the failure can land (same as New-UiButton's NoOutput error dialog).
-            if ($errInfo -and $appDispatcher -and !$appDispatcher.HasShutdownStarted) {
+            # No output panel on the grid action path, so a failure goes in a dialog unless the wiring at the bottom hands it to an -Intercept bar
+            if ($errInfo -and !$errorsToBar -and $appDispatcher -and !$appDispatcher.HasShutdownStarted) {
                 $errorMsg = [string]$errInfo
                 try {
                     $appDispatcher.Invoke([Action]{
@@ -210,4 +225,6 @@
     # Hooks after ExecuteAsync because Invoke-UiAsync owns the AsyncExecutor's creation. The sub tick gap is fine. Routed events fire a tick later anyway.
     $statusSession = [PsUi.SessionManager]::Current
     if ($statusSession -and $asyncHandle -and $asyncHandle.Executor) { Add-StatusBarAutoWiring -Executor $asyncHandle.Executor -Session $statusSession }
+
+    Pop-UiSession -Token $sessionToken
 }

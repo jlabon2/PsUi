@@ -38,6 +38,11 @@
 
     $tpl = [System.Windows.DataTemplate]::new()
 
+    $gridSession   = Get-UiSession
+    $gridSessionId = if ($gridSession) { $gridSession.SessionId } else { $null }
+    $pushSession   = ${function:Push-UiSession}
+    $popSession    = ${function:Pop-UiSession}
+
     switch ($CellType) {
 
         'Button' {
@@ -107,7 +112,7 @@
                     $grid = [System.Windows.Media.VisualTreeHelper]::GetParent($grid)
                 }
 
-                Invoke-UiAction -Action $cellAction -Item $row -RefreshTarget $grid -NoAsync:$cellNoAsync
+                Invoke-UiAction -Action $cellAction -Item $row -RefreshTarget $grid -NoAsync:$cellNoAsync -SessionId $gridSessionId
             }.GetNewClosure()
 
             $factory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]$clickHandler)
@@ -182,8 +187,10 @@
                 $vars = [System.Collections.Generic.List[psvariable]]::new()
                 $vars.Add([psvariable]::new('_', $row))
                 $vars.Add([psvariable]::new('row', $row))
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { [void]$onChange.InvokeWithContext($null, $vars, @($row, $newValue)) }
                 catch { Write-Debug "Toggle OnChange failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure()
 
             $factory.AddHandler([System.Windows.Controls.CheckBox]::ClickEvent, [System.Windows.RoutedEventHandler]$changeHandler)
@@ -251,7 +258,7 @@
                         $grid = [System.Windows.Media.VisualTreeHelper]::GetParent($grid)
                     }
 
-                    Invoke-UiAction -Action $linkAction -Item $row -RefreshTarget $grid -NoAsync:$linkNoAsync
+                    Invoke-UiAction -Action $linkAction -Item $row -RefreshTarget $grid -NoAsync:$linkNoAsync -SessionId $gridSessionId
                     return
                 }
                 if (!$linkUrl) { return }

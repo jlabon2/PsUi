@@ -94,7 +94,11 @@ function New-UiLink {
         ScopeNames    = $scopeNames
         CapturedFuncs = $capturedFuncs
         LinkedModules = $resolvedModules
+        SessionId     = $session.SessionId
     }
+
+    $pushSession = ${function:Push-UiSession}
+    $popSession  = ${function:Pop-UiSession}
 
     # Click runs the action async or opens the URL in the browser
     $link.Add_MouseLeftButtonUp({
@@ -110,9 +114,12 @@ function New-UiLink {
             $data.Started = $false
 
             Write-Debug "New-UiLink: Executing custom action via AsyncExecutor"
-            $executor = [PsUi.AsyncExecutor]::new()
+
+            # The AsyncExecutor reads the thread's session in its constructor
+            $sessionToken          = & $pushSession -SessionId $data.SessionId
+            $executor              = [PsUi.AsyncExecutor]::new()
             $executor.UiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
-            
+
             # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
             $linkSession = [PsUi.SessionManager]::Current
             if ($linkSession) {
@@ -164,6 +171,7 @@ function New-UiLink {
                 $data.CapturedFuncs,
                 [string[]]@($data.LinkedModules | Where-Object { $_ })
             )
+            & $popSession -Token $sessionToken
             Write-Debug "New-UiLink: ExecuteAsync called"
         }
         elseif ($data.Url) {

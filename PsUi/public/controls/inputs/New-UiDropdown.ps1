@@ -202,7 +202,8 @@ function New-UiDropdown {
         # Store the OnChange callback in Tag so the event handler can reach it
         if ($OnChange) {
             if (!$combo.Tag -or $combo.Tag -isnot [hashtable]) { $combo.Tag = @{} }
-            $combo.Tag['OnChange'] = $OnChange
+            $combo.Tag['OnChange']  = $OnChange
+            $combo.Tag['SessionId'] = $session.SessionId
 
             $combo.Add_SelectionChanged({
                 param($sender, $e)
@@ -210,8 +211,15 @@ function New-UiDropdown {
                 if (!$tag -or !$tag.OnChange) { return }
 
                 $selectedValue = $sender.SelectedItem
-                try { & $tag.OnChange $selectedValue }
+                $sessionToken  = Push-UiSession -SessionId $tag.SessionId
+                $callback      = @{
+                    ScriptBlock  = $tag.OnChange
+                    ArgumentList = (, $selectedValue)
+                    Label        = 'OnChange callback'
+                }
+                try { $null = Invoke-UiCallback @callback }
                 catch { Write-Warning "OnChange callback error: $_" }
+                Pop-UiSession -Token $sessionToken
             })
         }
 

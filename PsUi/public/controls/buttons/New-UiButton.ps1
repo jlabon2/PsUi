@@ -38,7 +38,9 @@
     .PARAMETER NoAsync
         Execute synchronously on the UI thread (blocks UI). Auto-set when the action
         spawns a window so it renders on the host's UI thread; pass -NoAsync:$false
-        to override.
+        to override. Errors the action writes, a command's stderr included, show
+        in one dialog when it finishes. After ten, the dialog counts the rest instead of
+        listing them.
     .PARAMETER NoWait
         Execute async with output window, but don't block the parent window.
         Other buttons remain clickable while this action runs. The clicked button
@@ -98,18 +100,16 @@
         When specified, inputs using -SubmitButton with this name will trigger
         the button's click event when Enter is pressed.
     .PARAMETER ValidateScript
-        A ScriptBlock that runs synchronously before the actual action runs.
-        Attached code should generate an array of strings if validation fails, or return
-        nothing if it passes. Strings ('errors') reach the user in a 'Please fix the
-        following issues' dialog. Throwing also blocks. It runs before control variable
-        hydration, so it does NOT see $controlName variables. For checks that need live
-        control values, do them at the top of the -Action instead.
+        Runs synchronously before the action. Return strings to block it and list them in a
+        'Please fix the following issues' dialog, or nothing to let it run. A throw blocks too,
+        and a written error only warns. It runs before hydration, so it can't see control
+        variables. Check those at the top of -Action instead.
     .PARAMETER WPFProperties
         Hashtable of WPF properties to apply to the button.
     .EXAMPLE
         New-UiButton -Text "Save" -Icon "Save" -Accent -Action { Save-Data }
     .EXAMPLE
-        New-UiButton -Text "Run Query" -Action { Get-Process | Select-Object Name, Id, WS } -HideEmptyOutput
+        New-UiButton -Text "Run Query" -Action { Get-Process } -HideEmptyOutput
     .EXAMPLE
         New-UiButton -Text "Deploy" -File "C:\Scripts\Deploy.ps1" -ArgumentList @{ Environment = 'Prod' }
     .EXAMPLE
@@ -377,6 +377,7 @@
         Action          = $Action
         Parameters      = $Parameters
         WindowRef       = $session.Window
+        SessionId       = $session.SessionId
         Text            = $displayTitle
         NoAsync         = $NoAsync
         NoWait          = $NoWait
@@ -411,6 +412,9 @@
         Write-Debug "Click handler fired, Action is null: $($null -eq $ctx.Action)"
         $btn = $this
 
+        # The thread's current session is whichever window set it last (like an open child), so the click runs under the one that built the button
+        $sessionToken = Push-UiSession -SessionId $ctx.SessionId
+
         $originalContent = $btn.Content
 
         # Capture current button size before swapping content to spinner
@@ -422,17 +426,19 @@
         # Run pre-validation script synchronously if provided
         if ($ctx.ValidateScript) {
             try {
-                $validationErrors = & $ctx.ValidateScript
+                $validationErrors = Invoke-UiCallback -ScriptBlock $ctx.ValidateScript -Label 'ValidateScript'
                 if ($validationErrors -and $validationErrors.Count -gt 0) {
                     # Use [char]0x2022 for bullet point (PS 5.1 compatible, unlike `u{2022})
                     $bullet = [char]0x2022
                     $errorMessage = "Please fix the following issues:`n`n" + (($validationErrors | ForEach-Object { "  $bullet $_" }) -join "`n")
                     Show-UiMessageDialog -Title 'Validation Error' -Message $errorMessage -Icon Warning -Buttons OK | Out-Null
+                    Pop-UiSession -Token $sessionToken
                     return
                 }
             }
             catch {
                 Show-UiMessageDialog -Title 'Validation Error' -Message "Validation failed: $_" -Icon Error -Buttons OK | Out-Null
+                Pop-UiSession -Token $sessionToken
                 return
             }
         }
@@ -446,18 +452,25 @@
         $btn.Content = $spinner
         $btn.IsEnabled = $false
 
+        $actionErrors = [System.Collections.Generic.List[object]]::new()
+
         try {
             $forceSynchronous = $ctx.NoAsync
 
-            if ($forceSynchronous -eq $true) {
-                $splat         = $ctx.Parameters
-                $result        = if ($ctx.Parameters) { & $ctx.Action @splat } else { & $ctx.Action }
+            if ($forceSynchronous -eq $true -or !$ctx.IsCSharpLoaded) {
+                if ($forceSynchronous -ne $true) { Write-Warning "Async unavailable. Running synchronously." }
+                $null = Invoke-UiCallback -ScriptBlock $ctx.Action -ArgumentList $ctx.Parameters -ErrorList $actionErrors
                 $btn.Content   = $originalContent
                 $btn.MinWidth  = $originalMinWidth
                 $btn.MinHeight = $originalMinHeight
                 $btn.IsEnabled = $true
+
+                if ($actionErrors.Count) {
+                    $listed = Format-UiErrorList -Errors $actionErrors
+                    Show-UiMessageDialog -Title "Error: $($ctx.Text)" -Message $listed -Icon Error -Buttons OK | Out-Null
+                }
             }
-            elseif ($ctx.IsCSharpLoaded) {
+            else {
                 $executor = [PsUi.AsyncExecutor]::new()
 
                 # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
@@ -572,21 +585,35 @@
                         & $restoreAndDispose 'OnComplete'
                     }.GetNewClosure())
 
+                    # An -Intercept bar already badges each error. No dialog needed.
+                    $errorsToBar = [bool]($execSession -and (Test-StatusBarIntercept -Session $execSession))
+
+                    # OnComplete follows every error once a thread picks the run up so a tear down here would dispose it halfway through on a plain Write-Error
+                    $runState = @{ Started = $false }
+                    $executor.add_OnStarted({ $runState.Started = $true }.GetNewClosure())
+
+                    # OnError comes in after the click has returned
+                    $errorSessionId = $ctx.SessionId
+                    $pushSession    = ${function:Push-UiSession}
+                    $popSession     = ${function:Pop-UiSession}
+
                     $executor.add_OnError({
                         param($errorRecord)
-                        # Show error dialog since NoOutput mode has no console to display errors
-                        if ($errorRecord) {
+                        # No console here so without a bar the error goes in a dialog
+                        if ($errorRecord -and !$errorsToBar) {
                             try {
                                 if (!$buttonToRestore.Dispatcher.HasShutdownStarted) {
                                     $errorMsg = $errorRecord.ToString()
                                     $buttonToRestore.Dispatcher.Invoke([Action]{
+                                        $errorToken = & $pushSession -SessionId $errorSessionId
                                         Show-UiMessageDialog -Title 'Action Error' -Message $errorMsg -Icon Error
+                                        & $popSession -Token $errorToken
                                     })
                                 }
                             }
                             catch { Write-Debug "OnError dialog skipped (window closed): $_" }
                         }
-                        & $restoreAndDispose 'OnError'
+                        if (!$runState.Started) { & $restoreAndDispose 'OnError' }
                     }.GetNewClosure())
 
                     $executor.add_OnCancelled({
@@ -606,6 +633,7 @@
                         $ctx.CapturedFuncs,
                         [string[]]@($ctx.LinkedModules | Where-Object { $_ })
                     )
+                    Pop-UiSession -Token $sessionToken
                     return
                 }
                 else {
@@ -642,6 +670,7 @@
                                 $buttonToRestore.MinHeight = $minHeightToRestore
                                 $buttonToRestore.IsEnabled = $true
                             }.GetNewClosure())
+                            Pop-UiSession -Token $sessionToken
                             return
                         }
                     }
@@ -662,17 +691,6 @@
                 $btn.MinHeight = $originalMinHeight
                 $btn.IsEnabled = $true
             }
-            else {
-                Write-Warning "Async unavailable. Running synchronously."
-
-                # Same splat as the forced sync path above
-                $splat         = $ctx.Parameters
-                $result        = if ($ctx.Parameters) { & $ctx.Action @splat } else { & $ctx.Action }
-                $btn.Content   = $originalContent
-                $btn.MinWidth  = $originalMinWidth
-                $btn.MinHeight = $originalMinHeight
-                $btn.IsEnabled = $true
-            }
         }
         catch {
             $btn.Content = $originalContent
@@ -684,9 +702,11 @@
             Write-Debug "Action error: $($_.Exception.GetType().Name) - $($_.Exception.Message)"
             Write-Debug "Stack: $($_.ScriptStackTrace)"
 
-            # Show error dialog for sync execution errors
-            Show-UiMessageDialog -Title "Error: $($ctx.Text)" -Message $_.Exception.Message -Icon Error -Buttons OK | Out-Null
+            # Any errors the action wrote before it stopped go first
+            $message = Format-UiErrorList -Errors $actionErrors -Trailing $_.Exception.Message
+            Show-UiMessageDialog -Title "Error: $($ctx.Text)" -Message $message -Icon Error -Buttons OK | Out-Null
         }
+        Pop-UiSession -Token $sessionToken
     })
 
     # Apply custom WPF properties if specified

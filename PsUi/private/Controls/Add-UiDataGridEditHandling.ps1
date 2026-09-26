@@ -35,6 +35,11 @@ function Add-UiDataGridEditHandling {
 
     $rowChanges = [System.Collections.Generic.Dictionary[object, System.Collections.Generic.List[string]]]::new()
 
+    $gridSession   = Get-UiSession
+    $gridSessionId = if ($gridSession) { $gridSession.SessionId } else { $null }
+    $pushSession   = ${function:Push-UiSession}
+    $popSession    = ${function:Pop-UiSession}
+
     # Preedit snapshots keyed by property name (one cell edits at a time). ComboBox and glyph checkbox editors write the row the moment the user picks (PropertyChanged), so a row read at CellEditEnding compared new against new and the edit vanished... OnCellEdit and the writethrough both saw no change, and a failing Validator couldn't block what had already landed....
     $preEdit = @{}
 
@@ -58,7 +63,8 @@ function Add-UiDataGridEditHandling {
         $editVal = $column.Editable
         if ($editVal -is [bool]) { return }
 
-        $can = $false
+        $can          = $false
+        $sessionToken = & $pushSession -SessionId $gridSessionId
         try {
             # ForEach-Object binds $_ to the row. & $editVal $row leaves $_ unset and the natural `{ $_.IsAdmin }` form silently returns falsy.
             if ($editVal -is [scriptblock]) { $can = [bool]($row | ForEach-Object $editVal) }
@@ -68,6 +74,7 @@ function Add-UiDataGridEditHandling {
             Write-Debug "Editable check for '$colHeader' threw: $_"
             $can = $false
         }
+        & $popSession -Token $sessionToken
         if (!$can) { $eventArgs.Cancel = $true }
     }.GetNewClosure())
 
@@ -135,13 +142,15 @@ function Add-UiDataGridEditHandling {
         if ($column -and $column.Validator) {
             # Validator gets the raw editor value (string from TextBox, bool from CheckBox, etc).
             # Coercion happens during binding writeback, which hasn't fired yet. If the validator needs the typed value, coerce inside it.
-            $ok = $false
+            $ok           = $false
+            $sessionToken = & $pushSession -SessionId $gridSessionId
             try { $ok = [bool](& $column.Validator $newValue $row) }
             catch {
                 # Write-Error inside a UI callback has nowhere to go and just crashes. Use Write-Debug.
                 Write-Debug "Validator for '$colHeader' threw: $($_.Exception.Message)"
                 $ok = $false
             }
+            & $popSession -Token $sessionToken
             if (!$ok) {
                 # PropertyChanged editors already wrote the row - restore the snapshot so a failing Validator actually blocks the edit instead of blessing it after the fact.
                 try { $row.$propName = $oldValue } catch { Write-Debug "Validator rollback for '$propName' failed: $_" }
@@ -170,10 +179,15 @@ function Add-UiDataGridEditHandling {
             $deferredNew     = $newValue
             $deferredOld     = $oldValue
             $deferredHandler = $OnCellEdit
+            $deferredSession = $gridSessionId
+            $deferredPush    = $pushSession
+            $deferredPop     = $popSession
 
             $deferred = {
+                $sessionToken = & $deferredPush -SessionId $deferredSession
                 try { & $deferredHandler $deferredRow $deferredCol $deferredNew $deferredOld }
                 catch { Write-Debug "OnCellEdit failed: $($_.Exception.Message)" }
+                & $deferredPop -Token $sessionToken
             }.GetNewClosure()
 
             [void]$sender.Dispatcher.BeginInvoke([Action]$deferred, [System.Windows.Threading.DispatcherPriority]::Background)
@@ -265,9 +279,14 @@ function Add-UiDataGridEditHandling {
             $deferredRow      = $row
             $deferredCols     = $changedCols
             $deferredRowHand  = $OnRowEdit
+            $deferredSession  = $gridSessionId
+            $deferredPush     = $pushSession
+            $deferredPop      = $popSession
             $deferredRowSb    = {
+                $sessionToken = & $deferredPush -SessionId $deferredSession
                 try { & $deferredRowHand $deferredRow $deferredCols }
                 catch { Write-Debug "OnRowEdit failed: $($_.Exception.Message)" }
+                & $deferredPop -Token $sessionToken
             }.GetNewClosure()
             [void]$sender.Dispatcher.BeginInvoke([Action]$deferredRowSb, [System.Windows.Threading.DispatcherPriority]::Background)
         }

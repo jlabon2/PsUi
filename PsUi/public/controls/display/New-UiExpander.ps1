@@ -109,7 +109,7 @@ function New-UiExpander {
     [void]$headerPanel.Children.Add($headerText)
     [void]$outerStack.Children.Add($headerPanel)
 
-    # Content area - hidden by default unless IsExpanded
+    # Content area
     $contentPanel = [System.Windows.Controls.StackPanel]@{
         Margin     = [System.Windows.Thickness]::new(12, 0, 12, 10)
         Visibility = if ($IsExpanded) { 'Visible' } else { 'Collapsed' }
@@ -148,11 +148,21 @@ function New-UiExpander {
 
     Add-UiControlToParent -Control $container -Parent $parent
 
-    # Execute content scriptblock with inner panel as parent context
+    # New-UiStatusBar reads the depth to keep a bar in here
     $previousParent = $session.CurrentParent
     $session.CurrentParent = $contentPanel
+    $script:TabOrExpanderDepth = [int]$script:TabOrExpanderDepth + 1
+
+    # 5.1 NREs on a finally from a -NoAsync click or a row details template
     try { & $Content }
-    finally { $session.CurrentParent = $previousParent }
+    catch {
+        $session.CurrentParent = $previousParent
+        $script:TabOrExpanderDepth--
+        throw
+    }
+
+    $session.CurrentParent = $previousParent
+    $script:TabOrExpanderDepth--
 
     if ($WPFProperties) {
         Set-UiProperties -Control $container -Properties $WPFProperties

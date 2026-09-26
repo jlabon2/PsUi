@@ -18,9 +18,12 @@
         return and the result will always be empty.
 
         Every window owns a separate session. A child window from New-UiChildWindow gets its
-        own, and cannot see the parent's controls. A non-modal child also stays the current
-        session on that thread until it closes, so read $session = Get-UiSession before opening
-        one rather than after. -Modal is fine, since ShowDialog blocks until the parent is back.
+        own, and cannot see the parent's controls. Every control's actions run against the
+        session of the window that built it so a parent button still finds the parent while a
+        child is open. Inside the -NoAsync action that opens a nonmodal child, though, the
+        child is the current session from then on, so read $session = Get-UiSession before
+        opening one rather than after. -Modal is fine, since ShowDialog blocks until the parent
+        is back.
 
         The returned PsUI.SessionContext object exposes numerous members. These are the members worth knowing:
 
@@ -138,7 +141,8 @@
 
         Hands a value from one action to another. Hydrated variables reset with each run, so
         anything that has to persist goes through the captured store. New-UiButton -Capture fills
-        the same store from a parameter. This is for a name or value -Capture cannot reach.
+        the same store from a parameter. This is for a name or value -Capture cannot reach, and
+        Set-UiCapturedVariable -Name 'lastRun' -Value (Get-Date) does the same in one call.
 
         The store stays with the window. It reaches the calling script only when the window was
         opened with New-UiWindow -ExportOnClose, and a script that let PsUi build the window ends

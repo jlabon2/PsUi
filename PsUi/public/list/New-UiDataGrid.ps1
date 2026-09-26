@@ -74,9 +74,8 @@ function New-UiDataGrid {
     .PARAMETER Fill
         Grow to the rest of the window's available height, lifting the -Height cap. The grid
         claims whatever space the window has left below it and resizes with the window. Use
-        when the DataGrid is the dominant content. Two -Fill grids in the same panel split
-        unevenly (first one claims, second gets leftovers). For an even split, wrap them in
-        New-UiGrid -Rows '*,*' -Fill so the row layout handles the split natively.
+        when the DataGrid is the dominant content. Several -Fill controls in one window split
+        the leftover height evenly, each held to its own -MinFillHeight and -MaxFillHeight.
     .PARAMETER MaxFillHeight
         Cap on -Fill growth in pixels. Defaults to no cap. Useful on 4K / multi-monitor setups
         where unbounded fill looks too tall.
@@ -87,9 +86,9 @@ function New-UiDataGrid {
         Single (one row), Extended (Ctrl/Shift multi-select, default), or None (rows still
         highlight on click but OnSelectionChanged won't fire).
     .PARAMETER DefaultPropertiesOnly
-        Respect $item.PSStandardMembers.DefaultDisplayPropertySet, hiding non-default props
-        initially. Hidden ones come back via the column-picker. Off by default for embedded
-        grids - showing everything is usually what makes sense there.
+        Show only the object's default display properties, in the set's order, and hide the
+        rest behind the column picker. Files show Mode, LastWriteTime, Length and Name, and
+        folders the same without Length. Without it every column shows with the defaults first.
     .PARAMETER HideEmptyColumns
         Hide columns where every value is null or empty.
     .PARAMETER NoArrayPopup
@@ -100,8 +99,10 @@ function New-UiDataGrid {
         Skip the protective wrap done on input objects. Faster on big clean datasets, but one
         throwing property getter takes the whole grid down.
     .PARAMETER Editable
-        Make the whole grid editable. Text cells get a themed editor and write back to the
-        underlying property. Per-column Editable=$false in a column hashtable wins.
+        Make the whole grid editable. Text cells write back to the property, and Editable = $false
+        on a column wins. A property without a setter, or marked [ReadOnly], stays read-only.
+        Edits reach the objects you passed in, -Items grids included, so editing a file's
+        timestamps changes the file on disk.
     .PARAMETER OnCellEdit
         Runs after a cell edit commits. Usage: param($row, $columnName, $newValue, $oldValue)
         $newValue is the editor's raw value (string from TextBox, bool from CheckBox, date from
@@ -228,7 +229,7 @@ function New-UiDataGrid {
         }
     .EXAMPLE
         # Editable grid with mixed cell types
-        New-UiDataGrid -Variable svc -Items (Get-Service | Select Name, Status, StartType) -Editable -Columns {
+        New-UiDataGrid -Variable svc -Items (Get-Service) -Editable -Columns {
             New-UiColumn Name -ReadOnly
             New-UiColumn Status -Editable $true
             New-UiColumn StartType -Editable $true -EditorType ComboBox -Choices 'Automatic', 'Manual', 'Disabled'
@@ -305,6 +306,9 @@ function New-UiDataGrid {
         built from the first row with readable properties. Once columns exist, additional
         properties on later rows won't add columns. Pass -Columns explicitly for grids whose
         schema isn't uniform across rows.
+
+        Plain .NET objects in an -ItemsSource list don't carry what PowerShell adds, such as
+        PSPath, Mode or a process's CPU, so those columns start hidden.
     #>
     [CmdletBinding()]
     param(
@@ -680,14 +684,15 @@ function New-UiDataGrid {
         $colInfo = Build-UiDataGridColumns @colBuildParams
 
         # Prerender flood guard. Threshold and clause come from Get-UiGridFloodWarning, shared with the column picker's $confirmFlood (New-ColumnVisibilityPopup.ps1) so the two can't drift.
-        # Suppressed when -DefaultPropertiesOnly is on or -Columns was handpicked. PSCustomObject input has no DefaultDisplayPropertySet ($defaultCount = 0), so the dialog drops the "Load defaults" option and offers cancel only.
+        # Off under -DefaultPropertiesOnly or handpicked -Columns. Without a default set every column counts as a default, and the dialog offers "Cancel load" or "Continue".
         $flood         = Get-UiGridFloodWarning
         $cellThreshold = $flood.CellThreshold
-        $allCount      = [int]$colInfo.AllProperties.Count
         $defaultCount  = [int]$colInfo.DefaultProperties.Count
         $rowCount      = [int]$collection.Count
-        $cellCount     = $rowCount * $allCount
-        $hasDefaults   = ($defaultCount -gt 0 -and $defaultCount -lt $allCount)
+
+        $allCount    = [int]$colInfo.AllProperties.Count - [int]$colInfo.PsOnlyProperties.Count
+        $cellCount   = $rowCount * $allCount
+        $hasDefaults = ($defaultCount -gt 0 -and $defaultCount -lt $allCount)
 
         if ($cellCount -gt $cellThreshold -and
             !$DefaultPropertiesOnly -and
@@ -778,8 +783,8 @@ function New-UiDataGrid {
                         if ($localState.DataGrid.Columns.Count -gt 0) { return }
 
                         Write-Debug "New-UiDataGrid: seeding columns from first arrived row"
-                        $items = [System.Collections.Generic.List[object]]::new()
-                        foreach ($entry in $localState.Collection) { [void]$items.Add($entry) }
+                        # List[object] unwraps each row, the column build checks for it
+                        $items = @($localState.Collection)
                         if ($items.Count -eq 0) { return }
 
                         # Detach ItemsSource for the whole surgery. Building columns on a LIVE grid corrupts the ItemContainerGenerator's change bookkeeping ("ItemsControl is inconsistent with its items source" on every layout pass after), and DeferRefresh is no answer - Build's BeginInit/EndInit refreshes the ItemCollection, which throws on a defer pending view.
@@ -898,13 +903,19 @@ function New-UiDataGrid {
         if (!$NoDictionaryPopup) { Add-DictionaryValuePopupHandler -DataGrid $dataGrid }
         if ($Editable) { Add-UiDataGridEditHandling -Grid $dataGrid -Columns $Columns -OnCellEdit $OnCellEdit -OnRowEdit $OnRowEdit }
 
+        $gridSessionId = $session.SessionId
+        $pushSession   = ${function:Push-UiSession}
+        $popSession    = ${function:Pop-UiSession}
+
         if ($OnSelectionChanged -and $SelectionMode -ne 'None') {
             $selHandler = $OnSelectionChanged
             $dataGrid.Add_SelectionChanged({
                 param($sender, $eventArgs)
-                $selected = @($sender.SelectedItems)
+                $selected     = @($sender.SelectedItems)
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { & $selHandler $selected }
                 catch { Write-Debug "OnSelectionChanged failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure())
         }
 
@@ -914,8 +925,10 @@ function New-UiDataGrid {
                 param($sender, $eventArgs)
                 $row = $sender.SelectedItem
                 if ($null -eq $row) { return }
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { & $dblHandler $row }
                 catch { Write-Debug "OnDoubleClick failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure())
         }
 

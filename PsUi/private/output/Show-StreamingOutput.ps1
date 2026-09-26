@@ -138,6 +138,12 @@ function Show-StreamingOutput {
 
     # Esc cancels the running async action - confirms first so a stray keystroke doesn't kill work.
     $executorRef = $Executor
+
+    # -NoWait keeps this window up after the click's session went back
+    $ownerSessionId = if ($currentSession) { $currentSession.SessionId } else { $null }
+    $pushSession    = ${function:Push-UiSession}
+    $popSession     = ${function:Pop-UiSession}
+
     $window.add_PreviewKeyDown({
         param($sender, $eventArgs)
         if ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape) {
@@ -149,11 +155,16 @@ function Show-StreamingOutput {
                 $capturedWindow   = $window
                 $capturedExec     = $executorRef
                 $capturedWasPin   = $wasPinned
+                $capturedOwner    = $ownerSessionId
+                $capturedPush     = $pushSession
+                $capturedPop      = $popSession
                 $unpinTimer          = [System.Windows.Threading.DispatcherTimer]::new()
                 $unpinTimer.Interval = [TimeSpan]::FromMilliseconds(50)
                 $unpinTimer.Add_Tick({
                     $this.Stop()
-                    $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
+                    $sessionToken = & $capturedPush -SessionId $capturedOwner
+                    $confirm      = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
+                    & $capturedPop -Token $sessionToken
                     if ($capturedWasPin) { $capturedWindow.Topmost = $true }
 
                     if ($confirm -and $capturedExec.IsRunning) {
@@ -346,6 +357,7 @@ function Show-StreamingOutput {
         HighlightRunMatches  = $highlightRunMatches
         ConsoleTextBox       = $consoleTextBox
         AutoScrollCheckbox   = $autoScrollCheckbox
+        OwnerSessionId       = $ownerSessionId
     }
 
     # Drops the spinner overlay once content arrives. One shot via $state.LoadingHidden.
@@ -408,6 +420,55 @@ function Show-StreamingOutput {
             $warningsTabState.Tab.Header = if ($warningCount.Value -gt 0) { "Warnings ($($warningCount.Value))" } else { "Warnings" }
         }
     }.GetNewClosure())
+
+    $streamEchoes = @{
+        Error   = @{ Prefix = '[ERROR] ';   Brush = [System.Windows.Media.Brushes]::IndianRed }
+        Warning = @{ Prefix = '[WARNING] '; Brush = [System.Windows.Media.Brushes]::DarkGoldenrod }
+        Verbose = @{ Prefix = '[VERBOSE] '; Brush = [System.Windows.Media.Brushes]::Gray }
+    }
+
+    # Returns how many host lines it wrote
+    $drainConsole = {
+        param([int]$MaxLines, [switch]$LeaveTabs)
+        $records = $Executor.DrainHostQueue($MaxLines)
+        if ($records.Count -eq 0) { return 0 }
+
+        $hostLines = 0
+        foreach ($record in $records) {
+            $echo = if ($record.Stream) { $streamEchoes[$record.Stream] }
+            if ($echo) {
+                [void](& $appendConsoleText ($echo.Prefix + $record.Message) $echo.Brush $null -SkipScroll -State $appendState)
+                continue
+            }
+            [void](Add-OutputLine -Record $record -AppendFunc $appendConsoleText -ColorMap $consoleColorMap -RawColorMap $rawColorMap -State $appendState -SkipScroll)
+            $hostLines++
+        }
+
+        if ($hostLines -gt 0 -and !$LeaveTabs) {
+            if ($HideUntilContent) { & $revealWindow }
+            & $hideLoading
+            if ($consoleTab.Visibility -ne 'Visible') {
+                $consoleTab.Visibility   = 'Visible'
+                $tabControl.SelectedItem = $consoleTab
+            }
+        }
+
+        # OnComplete counts the final drain's host lines itself
+        $unread = if ($LeaveTabs) { $records.Count - $hostLines } else { $records.Count }
+        if ($unread -gt 0 -and $tabControl.SelectedItem -ne $consoleTab) {
+            $tabNotifications.Console.UnreadCount += $unread
+            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
+        }
+
+        # One scroll per batch
+        if ($autoScrollCheckbox.IsChecked) {
+            $state.IsAutoScrolling = $true
+            $consoleTextBox.ScrollToEnd()
+            $state.IsAutoScrolling = $false
+        }
+
+        $hostLines
+    }.GetNewClosure()
 
     # .Count, not truthiness - Match() returns an empty but truthy collection when the member is missing.
     if ($Executor.PSObject.Properties.Match('UiDispatcher').Count -gt 0) {
@@ -491,38 +552,10 @@ function Show-StreamingOutput {
             }
         }
 
-        $records = $Executor.DrainHostQueue(100)
-        $hadHost = $null -ne $records -and $records.Count -gt 0
+        [void](& $drainConsole 100)
 
         # Both queues are empty and the run is done, so there is no more to poll.
-        if (!$hadPipeline -and !$hadHost -and $state.ExecutorDone) {
-            $state.HostQueueTimer.Stop()
-            return
-        }
-        if (!$hadHost) { return }
-
-        if ($HideUntilContent) { & $revealWindow }
-        & $hideLoading
-        if ($consoleTab.Visibility -ne 'Visible') {
-            $consoleTab.Visibility   = 'Visible'
-            $tabControl.SelectedItem = $consoleTab
-        }
-
-        foreach ($record in $records) {
-            [void](Add-OutputLine -Record $record -AppendFunc $appendConsoleText -ColorMap $consoleColorMap -RawColorMap $rawColorMap -State $appendState -SkipScroll)
-        }
-
-        # One scroll at the end of the batch, not per record.
-        if ($autoScrollCheckbox.IsChecked) {
-            $state.IsAutoScrolling = $true
-            $consoleTextBox.ScrollToEnd()
-            $state.IsAutoScrolling = $false
-        }
-
-        if ($tabControl.SelectedItem -ne $consoleTab) {
-            $tabNotifications.Console.UnreadCount += $records.Count
-            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-        }
+        if (!$hadPipeline -and $Executor.HostQueueCount -eq 0 -and $state.ExecutorDone) { $state.HostQueueTimer.Stop() }
     }.GetNewClosure())
 
     $state.HostQueueTimer.Start()
@@ -610,20 +643,11 @@ function Show-StreamingOutput {
             [void]$errorsTabState.List.Add($displayRecord)
             $errorsTabState.TotalErrors = [int]$errorsTabState.TotalErrors + 1
 
-            # Echo to the console tab too - red text so it stands out from regular output.
-            $displayMessage = if ($errorRecord.Message) { $errorRecord.Message } else { $errorRecord.ToString() }
-            & $appendConsoleText "[ERROR] $displayMessage" ([System.Windows.Media.Brushes]::IndianRed) $null -State $appendState
-
             if ($tabControl.SelectedItem -ne $errorsTabState.Tab) {
                 $tabNotifications.Errors.UnreadCount++
                 $errorsTabState.Tab.Header = "Errors ($([int]$errorsTabState.TotalErrors)) +$($tabNotifications.Errors.UnreadCount)"
             }
             else { $errorsTabState.Tab.Header = "Errors ($([int]$errorsTabState.TotalErrors))" }
-
-            if ($tabControl.SelectedItem -ne $consoleTab) {
-                $tabNotifications.Console.UnreadCount++
-                $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-            }
         }
         catch {
             # Eat any failure in the error handler itself - the handler crashing the window is worse than losing the diagnostic.
@@ -651,32 +675,19 @@ function Show-StreamingOutput {
             }
         }
 
-        # Warnings also stream to Console below, so the tab needs to be visible regardless.
+        # The warning's echo goes to the Console as well, so that tab shows regardless
         if ($consoleTab.Visibility -ne 'Visible') { $consoleTab.Visibility = 'Visible' }
 
         $warningCount.Value++
         $warningRun = [System.Windows.Documents.Run]::new("$warningMessage`n")
         [void]$warningsTabState.Paragraph.Inlines.Add($warningRun)
         $warningsTabState.TextBox.ScrollToEnd()
-        & $appendConsoleText "[WARNING] $warningMessage" ([System.Windows.Media.Brushes]::DarkGoldenrod) $null -State $appendState
 
         if ($tabControl.SelectedItem -ne $warningsTabState.Tab) {
             $tabNotifications.Warnings.UnreadCount++
             $warningsTabState.Tab.Header = "Warnings ($($warningCount.Value)) +$($tabNotifications.Warnings.UnreadCount)"
         }
         else { $warningsTabState.Tab.Header = "Warnings ($($warningCount.Value))" }
-
-        if ($tabControl.SelectedItem -ne $consoleTab) {
-            $tabNotifications.Console.UnreadCount++
-            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-        }
-    }.GetNewClosure())
-
-    $Executor.add_OnVerbose({
-        param($verboseMessage)
-        if ($state.IsCancelled) { return }
-        if ([string]::IsNullOrWhiteSpace($verboseMessage)) { return }
-        & $appendConsoleText "[VERBOSE] $verboseMessage" ([System.Windows.Media.Brushes]::Gray) $null -State $appendState
     }.GetNewClosure())
 
     # OnDebug goes straight to the real console, not the UI. For diagnosing the async machinery itself, where touching the UI would just hide the bug.
@@ -809,9 +820,9 @@ function Show-StreamingOutput {
         OutputData          = $outputData
         OutputDataByType    = $outputDataByType
         ConsoleColorMap     = $consoleColorMap
-        RawColorMap         = $rawColorMap
         AppendConsoleText   = $appendConsoleText
         AppendState         = $appendState
+        DrainConsole        = $drainConsole
         ConsoleParagraph    = $consoleParagraph
         ConsoleTextBox      = $consoleTextBox
         ConsoleTab          = $consoleTab
@@ -903,7 +914,9 @@ function Show-StreamingOutput {
             $wasPinned = $window.Topmost
             if ($wasPinned) { $window.Topmost = $false }
 
-            $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "A task is still running. Cancel and close?"
+            $sessionToken = & $pushSession -SessionId $ownerSessionId
+            $confirm      = Show-UiConfirmDialog -Title "Cancel Operation" -Message "A task is still running. Cancel and close?"
+            & $popSession -Token $sessionToken
             if (!$confirm) {
                 if ($wasPinned) { $window.Topmost = $true }
                 $eventArgs.Cancel = $true

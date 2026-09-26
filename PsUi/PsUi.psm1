@@ -143,6 +143,8 @@ $asyncPublicFuncs = @(
     'Write-Status'
     'Invoke-UiAsync'
     'Get-UiSession'
+    'Set-UiCapturedVariable'
+    'Close-UiWindow'
     'Update-UiChart'
 )
 

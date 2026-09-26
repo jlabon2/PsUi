@@ -64,9 +64,7 @@ function New-UiChildWindow {
         New-UiButton -Text "Show Monitor" -NoAsync -Action {
             New-UiChildWindow -Title 'Status Monitor' -Width 300 -Height 200 -Content {
                 New-UiLabel -Text 'Monitoring...'
-                New-UiButton -Text "Close" -NoAsync -Action {
-                    (Get-UiSession).Window.Close()
-                }
+                New-UiButton -Text "Close" -NoAsync -Action { Close-UiWindow }
             }
         }
     .EXAMPLE
@@ -80,6 +78,10 @@ function New-UiChildWindow {
                 }
             }
         }
+    .NOTES
+        Closing a child closes the windows it owns first and an output window still running asks
+        before it closes. A Closing handler of your own that cancels keeps them all open only if
+        it was attached before the child was shown.
     #>
     [CmdletBinding()]
     param(
@@ -149,7 +151,7 @@ function New-UiChildWindow {
         }
     }
 
-    # Save the parent session ID so it can be restored after the child window closes
+    # The session this child takes the thread from, and hands it back to
     $parentSessionId = [PsUi.SessionManager]::CurrentSessionId
 
     $session = Initialize-UiSession
@@ -187,6 +189,9 @@ function New-UiChildWindow {
         Opacity               = 0
     }
 
+    # Straight from a console there's no Application to hold the styles
+    if (![System.Windows.Application]::Current) { [PsUi.ThemeEngine]::ApplyStandaloneTheme($window, $colors) }
+
     # Two field forms leave most of a fixed height window empty, so the height comes off the content unless one is passed.
     # Capped to the parent's monitor, since SystemParameters.WorkArea is the primary screen only and a tall window on a shorter second screen runs off the bottom.
     if ($SizeToContent) {
@@ -195,9 +200,7 @@ function New-UiChildWindow {
         $window.SizeToContent = 'Height'
     }
 
-    # Unique AppUserModelID, so the window gets its own taskbar button rather than stacking under PS
-    $appId = "PsUi.ChildWindow." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+    [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.ChildWindow')
 
     # Create custom window icon (inherit parent's custom logo if set)
     $childWindowIcon = $null
@@ -315,13 +318,17 @@ function New-UiChildWindow {
     }
 
     $titleText = [System.Windows.Controls.TextBlock]@{
-        Text              = $Title
         FontSize          = 13
         FontWeight        = 'SemiBold'
         Foreground        = ConvertTo-UiBrush $colors.HeaderForeground
         VerticalAlignment = 'Center'
         Margin            = [System.Windows.Thickness]::new($titleTextLeftMargin, 0, 0, 0)
     }
+
+    # Lets (Get-UiSession).Window.Title set from an action retitle the drawn title bar too
+    $titleBinding        = [System.Windows.Data.Binding]::new('Title')
+    $titleBinding.Source = $window
+    [void]$titleText.SetBinding([System.Windows.Controls.TextBlock]::TextProperty, $titleBinding)
     [void]$titleGrid.Children.Add($titleText)
 
     # Close button with red hover effect
@@ -437,21 +444,29 @@ catch { Write-Verbose "[New-UiChildWindow] Variable capture failed: $_" }
 
 try {
     Write-Debug "Executing content block"
+
+    # Inside a window the block comes from New-UiWindow's generated text without a file, so Invoke-UiContent takes the file and line from the window's session
+    $parentSession = [PsUi.SessionManager]::GetSession($parentSessionId)
+    if ($parentSession -and !$session.CallerScriptName) {
+        $session.CallerScriptName = $parentSession.CallerScriptName
+        $session.CallerScriptLine = $parentSession.CallerScriptLine
+    }
     Invoke-UiContent -Content $Content -CallerName 'New-UiChildWindow'
 }
 catch {
-
-    Write-Error $_
     # The window never got shown, so the Add_Closed restore below was never attached. Undo the child session and hand the parent back by hand - Clear-UiSession would leave the calling script on a fresh empty session and every later Get-UiSession on this thread would miss the parent.
     if ($childSessionId -ne [Guid]::Empty) {
         [PsUi.SessionManager]::DisposeSession($childSessionId)
     }
 
-    if ($parentSessionId -ne [Guid]::Empty) {
+    if ($parentSessionId -ne [Guid]::Empty -and [PsUi.SessionManager]::GetSession($parentSessionId)) {
         [PsUi.SessionManager]::SetCurrentSession($parentSessionId)
         $Global:__PsUiSessionId = $parentSessionId.ToString()
     }
+    else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
 
+    # After the cleanup, since it throws under Stop. Write-Error $_ rewraps it on 5.1 with a new error id.
+    $PSCmdlet.WriteError($_)
     return $null
 }
 
@@ -490,32 +505,126 @@ $window.Add_Loaded({
 }.GetNewClosure())
 
     if ($OnClosed) {
+        $invokeCallback = ${function:Invoke-UiCallback}
+
         # trap, not try/catch/finally. Off the pipeline a finally NREs, and this handler runs after the window is already gone, so a throw here is silent and kills the rest of the teardown.
         $window.Add_Closed({
             trap { Write-Warning "New-UiChildWindow OnClosed error: $_"; continue }
-            & $OnClosed
+            $null = & $invokeCallback -ScriptBlock $OnClosed -Label 'New-UiChildWindow OnClosed'
         }.GetNewClosure())
     }
 
-    # Cleanup child session and restore parent session when window closes
+    # ShowDialog never returns once its owner is gone
+    $closedAlong    = [System.Collections.Generic.List[object]]::new()
+    $closingHandler = [System.ComponentModel.CancelEventHandler]{
+        param($sender, $eventArgs)
+
+        # The script's own unsaved changes guard already said no
+        if ($eventArgs.Cancel) { return }
+
+        foreach ($owned in @($sender.OwnedWindows)) {
+            # Close() throws on a window that's already closing, so trap and continue
+            & {
+                trap { Write-Debug "Closing an owned window: $_"; continue }
+                $owned.Close()
+            }
+
+            # Still up means it said No or it's still asking
+            if ($owned.IsVisible) {
+                $eventArgs.Cancel = $true
+                break
+            }
+            $closedAlong.Add($owned)
+        }
+    }.GetNewClosure()
+    $window.Add_Closing($closingHandler)
+
+    # Added again from inside Show(), behind any guard the script put on the -PassThru window
+    $window.Add_Loaded({
+        $this.Remove_Closing($closingHandler)
+        $this.Add_Closing($closingHandler)
+    }.GetNewClosure())
+
+    # Nearest opener first
+    if (!$script:_childSessionOpeners) { $script:_childSessionOpeners = @{} }
+    $openerMap = $script:_childSessionOpeners
+    $openers   = [System.Collections.Generic.List[Guid]]::new()
+    if ($parentSessionId -ne [Guid]::Empty) {
+        $openers.Add($parentSessionId)
+        if ($openerMap[$parentSessionId]) { $openers.AddRange($openerMap[$parentSessionId]) }
+    }
+    $openerMap[$childSessionId] = $openers
+
     $capturedParent = $Parent
     $window.Add_Closed({
-        # Dispose the child window's session
-        if ($childSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($childSessionId) }
+        # Leave the thread alone while a later child holds it
+        $holdsThread = [PsUi.SessionManager]::CurrentSessionId -eq $childSessionId -or $Global:__PsUiSessionId -eq $childSessionId.ToString()
 
-        # Restore the parent window's session as current (both ThreadStatic and global variable)
-        if ($parentSessionId -ne [Guid]::Empty) {
-            [PsUi.SessionManager]::SetCurrentSession($parentSessionId)
-            $Global:__PsUiSessionId = $parentSessionId.ToString()
+        # Still ours if it sits on an Out-Datagrid this window took down
+        $threadSession = [PsUi.SessionManager]::Current
+        if ($threadSession -and $threadSession.Window -and $closedAlong.Contains($threadSession.Window)) { $holdsThread = $true }
+
+        if ($childSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($childSessionId) }
+        [void]$openerMap.Remove($childSessionId)
+
+        if ($holdsThread) {
+            # The opener can be gone already when -Parent pointed past it
+            $landing = $null
+            foreach ($openerId in $openers) {
+                if ([PsUi.SessionManager]::GetSession($openerId)) {
+                    $landing = $openerId
+                    break
+                }
+            }
+
+            # The implicit window check reads a dead id in the global as a window still open
+            if ($landing) {
+                [PsUi.SessionManager]::SetCurrentSession($landing)
+                $Global:__PsUiSessionId = $landing.ToString()
+            }
+            else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
         }
 
-        # Activate the parent window so it comes back to the foreground
-        if ($capturedParent) { $capturedParent.Activate() }
+        # Activate throws on a closed or unshown parent
+        if ($capturedParent -and $capturedParent.IsVisible) { $capturedParent.Activate() }
+    }.GetNewClosure())
+
+    # New-UiWindow's key listener never sees this window's hotkeys
+    $hotkeyInvoker = ${function:Invoke-UiHotkeyAction}
+    $window.Add_PreviewKeyDown({
+        param($sender, $eventArgs)
+        if ($eventArgs.Handled) { return }
+
+        $keySession = [PsUi.SessionManager]::GetSession($childSessionId)
+        if (!$keySession -or @($keySession.GetRegisteredHotkeys()).Count -eq 0) { return }
+
+        # Plain keys in an editable box are typing, except F1 to F24
+        $modifiers = [System.Windows.Input.Keyboard]::Modifiers
+        $key       = if ($eventArgs.Key -eq 'System') { $eventArgs.SystemKey } else { $eventArgs.Key }
+        $target    = $eventArgs.OriginalSource
+        $isTyping  = ($target -is [System.Windows.Controls.Primitives.TextBoxBase] -and !$target.IsReadOnly) -or $target -is [System.Windows.Controls.PasswordBox]
+        $isFnKey   = $key -ge [System.Windows.Input.Key]::F1 -and $key -le [System.Windows.Input.Key]::F24
+        if ($isTyping -and !$isFnKey -and !($modifiers -band ([System.Windows.Input.ModifierKeys]::Control -bor [System.Windows.Input.ModifierKeys]::Alt))) { return }
+
+        $combo = [System.Collections.Generic.List[string]]::new()
+        if ($modifiers -band [System.Windows.Input.ModifierKeys]::Control) { $combo.Add('Ctrl') }
+        if ($modifiers -band [System.Windows.Input.ModifierKeys]::Alt) { $combo.Add('Alt') }
+        if ($modifiers -band [System.Windows.Input.ModifierKeys]::Shift) { $combo.Add('Shift') }
+        $combo.Add("$key")
+
+        $hotkeyContext = $keySession.GetHotkeyAction($combo -join '+')
+        if (!$hotkeyContext) { return }
+
+        $eventArgs.Handled = $true
+        & $hotkeyInvoker -Context $hotkeyContext
     }.GetNewClosure())
 
     if ($WPFProperties) {  Set-UiProperties -Control $window -Properties $WPFProperties }
 
     if ($PassThru) {  return $window }
-    elseif ($Modal) { return $window.ShowDialog() }
+    elseif ($Modal) {
+        # Until ShowDialog returns, the child's handlers write to the opener's error stream, and a -NoAsync opener would list their errors in its own dialog
+        return Invoke-UiCallback -ScriptBlock { $window.ShowDialog() } -Label 'New-UiChildWindow'
+    }
     else { [void]$window.Show() }
 }

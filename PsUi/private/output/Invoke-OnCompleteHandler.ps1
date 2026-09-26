@@ -16,9 +16,9 @@ function Invoke-OnCompleteHandler {
     $outputData          = $Context.OutputData
     $outputDataByType    = $Context.OutputDataByType
     $consoleColorMap     = $Context.ConsoleColorMap
-    $rawColorMap         = $Context.RawColorMap
     $appendConsoleText   = $Context.AppendConsoleText
     $appendState         = $Context.AppendState
+    $drainConsole        = $Context.DrainConsole
     $consoleParagraph    = $Context.ConsoleParagraph
     $consoleTextBox      = $Context.ConsoleTextBox
     $consoleTab          = $Context.ConsoleTab
@@ -112,14 +112,9 @@ function Invoke-OnCompleteHandler {
         # Drain remaining host queue items
         $hostRecordsDrained = 0
         while ($Executor.HostQueueCount -gt 0) {
-            $records = $Executor.DrainHostQueue(500)
-            if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Drained " + $records.Count + " host records") }
-            if ($null -eq $records -or $records.Count -eq 0) { break }
-
-            foreach ($record in $records) {
-                $hadContent = Add-OutputLine -Record $record -AppendFunc $appendConsoleText -ColorMap $consoleColorMap -RawColorMap $rawColorMap -State $appendState -SkipScroll
-                if ($hadContent) { $hostRecordsDrained++ }
-            }
+            $drained = & $drainConsole 500 -LeaveTabs
+            if ($state.DebugEnabled) { [Console]::WriteLine("[DEBUG] Drained " + $drained + " host records") }
+            $hostRecordsDrained += $drained
         }
 
         # Make Console tab visible if any host records drained
@@ -416,7 +411,14 @@ function Invoke-OnCompleteHandler {
                 }
 
                 # Add filter box and column visibility button
-                [void](Add-MultiTypeFilterControls -SubTabControl $subTabControl -RightToolbar $rightToolbar -FilterPanel $filterPanel -Toolbar2 $toolbar2)
+                $filterArgs = @{
+                    SubTabControl = $subTabControl
+                    RightToolbar  = $rightToolbar
+                    FilterPanel   = $filterPanel
+                    Toolbar2      = $toolbar2
+                    SessionId     = $state.OwnerSessionId
+                }
+                [void](Add-MultiTypeFilterControls @filterArgs)
 
                 # Attach action buttons using the helper
                 if ($ResultActions -and $ResultActions.Count -gt 0) {

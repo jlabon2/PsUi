@@ -46,9 +46,7 @@ function New-OutputWindow {
         [PsUi.WindowManager]::CenterOnParent($window, $ParentWindow)
     }
 
-    # Unique AppUserModelID, so the window gets its own taskbar button rather than stacking under PS
-    $appId = "PsUi.OutputWindow." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+    [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.OutputWindow')
 
     # Hook WM_GETMINMAXINFO to enable proper maximize behavior (respects taskbar)
     [PsUi.WindowManager]::EnableBorderlessMaximize($window)

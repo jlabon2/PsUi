@@ -47,11 +47,14 @@ function Add-ResultActionClickHandlers {
     $capturedModules           = $Captures.Modules
     $capturedDropdownPopup     = $DropdownPopup
 
-    # Capture the Input Dialog command so the closure can still reach it.
+    # The closure can't see these by name so they're captured
     $capturedShowInput = Get-Command Show-UiInputDialog -ErrorAction SilentlyContinue
+    $pushSession       = ${function:Push-UiSession}
+    $popSession        = ${function:Pop-UiSession}
 
     foreach ($actionButton in $ActionButtons) {
         $actionButton.Add_Click({
+            $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
             try {
                 # Close dropdown popup if this is a menu item click
                 if ($capturedDropdownPopup -and $capturedDropdownPopup.IsOpen) {
@@ -75,6 +78,7 @@ function Add-ResultActionClickHandlers {
 
                 if ($selected.Count -eq 0) {
                     Show-UiMessageDialog -Message "Please select one or more items first." -Title "No Selection" -Icon "Info"
+                    & $popSession -Token $sessionToken
                     return
                 }
 
@@ -85,6 +89,7 @@ function Add-ResultActionClickHandlers {
                     $result = Show-UiConfirmDialog -Title "Confirm Action" -Message $msg -ConfirmText "Yes" -CancelText "No"
                     if (!$result) {
                         if ($capturedState.DebugEnabled) { [Console]::WriteLine("[DEBUG]   User cancelled") }
+                        & $popSession -Token $sessionToken
                         return
                     }
                 }
@@ -100,23 +105,28 @@ function Add-ResultActionClickHandlers {
                 # Input provider for Read-Host
                 $actionExecutor.InputProvider = {
                     param($PromptText)
+                    $typed        = ''
+                    $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
                     try {
                         $msg = if (![string]::IsNullOrWhiteSpace($PromptText)) { $PromptText } else { "The running action is requesting input." }
 
                         if ($capturedShowInput) {
-                            return & $capturedShowInput -Title "Action Input Required" -Prompt $msg
+                            $typed = & $capturedShowInput -Title "Action Input Required" -Prompt $msg
                         }
-                        return Show-UiInputDialog -Title "Action Input Required" -Prompt $msg
+                        else {
+                            $typed = Show-UiInputDialog -Title "Action Input Required" -Prompt $msg
+                        }
                     }
-                    catch {
-                        return ""
-                    }
+                    catch { $typed = '' }
+                    & $popSession -Token $sessionToken
+                    return $typed
                 }
 
                 # Secure input provider for Read-Host -AsSecureString
                 $actionExecutor.SecureInputProvider = {
                     param($PromptText)
-                    $secureInput = $null
+                    $secureInput  = $null
+                    $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
                     try {
                         $msg = if (![string]::IsNullOrWhiteSpace($PromptText)) { $PromptText } else { "The running action is requesting a password." }
 
@@ -127,9 +137,8 @@ function Add-ResultActionClickHandlers {
                             $secureInput = Show-UiInputDialog -Title "Secure Input Required" -Prompt $msg -Password
                         }
                     }
-                    catch {
-                        return [System.Security.SecureString]::new()
-                    }
+                    catch { $secureInput = $null }
+                    & $popSession -Token $sessionToken
 
                     if ($secureInput) {
                         if ($secureInput -is [System.Security.SecureString]) { return $secureInput }
@@ -141,19 +150,34 @@ function Add-ResultActionClickHandlers {
                 # Choice Provider for -Confirm prompts
                 $actionExecutor.ChoiceProvider = {
                     param($Caption, $Message, $Choices, $DefaultChoice)
-                    return Show-UiChoiceDialog -Caption $Caption -Message $Message -Choices $Choices -DefaultChoice $DefaultChoice
+                    trap { continue }
+                    $picked       = $DefaultChoice
+                    $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
+                    $picked       = Show-UiChoiceDialog -Caption $Caption -Message $Message -Choices $Choices -DefaultChoice $DefaultChoice
+                    & $popSession -Token $sessionToken
+                    return $picked
                 }
 
                 # Credential Provider for Get-Credential
                 $actionExecutor.CredentialProvider = {
                     param($Caption, $Message, $UserName, $TargetName)
-                    return Show-UiCredentialDialog -Caption $Caption -Message $Message -UserName $UserName -TargetName $TargetName
+                    trap { continue }
+                    $credential   = $null
+                    $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
+                    $credential   = Show-UiCredentialDialog -Caption $Caption -Message $Message -UserName $UserName -TargetName $TargetName
+                    & $popSession -Token $sessionToken
+                    return $credential
                 }
 
                 # Prompt Provider for multi-field prompts
                 $actionExecutor.PromptProvider = {
                     param($Caption, $Message, $Descriptions)
-                    return Show-UiPromptDialog -Caption $Caption -Message $Message -Descriptions $Descriptions
+                    trap { continue }
+                    $answers      = [System.Collections.Generic.Dictionary[string, psobject]]::new()
+                    $sessionToken = & $pushSession -SessionId $capturedState.OwnerSessionId
+                    $answers      = Show-UiPromptDialog -Caption $Caption -Message $Message -Descriptions $Descriptions
+                    & $popSession -Token $sessionToken
+                    return $answers
                 }
 
                 # ReadKey Provider - handles "Press any key" patterns
@@ -412,9 +436,14 @@ function Add-ResultActionClickHandlers {
                 }
 
                 $actionExecutor.ExecuteAsync($actionScript, $actionParams, $capturedVarValues, $capturedFuncDefs, $capturedModules)
+                & $popSession -Token $sessionToken
             }
             catch {
-                Show-UiMessageDialog -Message "Error: $($_.Exception.Message)" -Title "Error" -Icon "Error"
+                # Guarded so the pop still runs when the dialogs themselves throw
+                $errorText = $_.Exception.Message
+                try { Show-UiMessageDialog -Message "Error: $errorText" -Title "Error" -Icon "Error" }
+                catch { Write-Debug "Result action error dialog failed: $_" }
+                & $popSession -Token $sessionToken
             }
         }.GetNewClosure())
     }

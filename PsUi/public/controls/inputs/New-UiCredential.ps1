@@ -79,7 +79,9 @@ function New-UiCredential {
 
     $container = [System.Windows.Controls.StackPanel]::new()
     $container.Orientation = 'Vertical'
-    $container.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+
+    # Has to stay with with New-UiInput's margin or the block sits 4px left of the inputs around it
+    $container.Margin = [System.Windows.Thickness]::new(4, 4, 4, 8)
 
     if ($Label) {
         $groupLabel = [System.Windows.Controls.TextBlock]::new()
@@ -164,14 +166,15 @@ function New-UiCredential {
 
     # Enter on the password field triggers the submit button
     if ($SubmitButton) {
-        $btnName = $SubmitButton
+        $btnName        = $SubmitButton
+        $ownerSessionId = $session.SessionId
         $passBox.Add_KeyDown({
             param($sender, $keyArgs)
             if ($keyArgs.Key -eq [System.Windows.Input.Key]::Return) {
                 # Only trigger if password has content
                 if ([string]::IsNullOrWhiteSpace($sender.Password)) { return }
-                
-                $sess = [PsUi.SessionManager]::Current
+
+                $sess = [PsUi.SessionManager]::GetSession($ownerSessionId)
                 if (!$sess) { return }
                 
                 # Look up registered button and trigger its click

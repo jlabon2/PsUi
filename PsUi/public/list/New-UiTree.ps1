@@ -587,45 +587,45 @@ function New-UiTree {
                 & $wireBoxes $tree.Items
 
                 # Seed initial parent state. If -Checked prechecked anything, walk ancestors and recompute their binary state. Loop, not recursion, to mirror the runtime cascade.
+                # Off the pipeline 5.1 won't reach a finally. If the pass throws, the tree never gets added and nobody reads the flag.
                 $treeMeta.CascadeInProgress = $true
-                try {
-                    # Collect every TVI that starts checked.
-                    $allNodes = [System.Collections.Generic.Stack[object]]::new()
-                    foreach ($root in $tree.Items) { $allNodes.Push($root) }
-                    $checkedTvis = [System.Collections.Generic.List[object]]::new()
-                    while ($allNodes.Count -gt 0) {
-                        $n = $allNodes.Pop()
-                        foreach ($c in $n.Items) { $allNodes.Push($c) }
-                        $ncb = & $getHeaderCheckBox $n
-                        if ($ncb -and $ncb.IsChecked -eq $true) { [void]$checkedTvis.Add($n) }
-                    }
 
-                    # For each checked node, ascend and refresh parent binary state.
-                    foreach ($cnode in $checkedTvis) {
-                        $node = $cnode
-                        while ($true) {
-                            $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
-                            if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
-                            $parentCb = & $getHeaderCheckBox $parentTvi
-                            if (!$parentCb) { break }
+                # Every TVI that starts checked
+                $allNodes = [System.Collections.Generic.Stack[object]]::new()
+                foreach ($root in $tree.Items) { $allNodes.Push($root) }
+                $checkedTvis = [System.Collections.Generic.List[object]]::new()
+                while ($allNodes.Count -gt 0) {
+                    $n = $allNodes.Pop()
+                    foreach ($c in $n.Items) { $allNodes.Push($c) }
+                    $ncb = & $getHeaderCheckBox $n
+                    if ($ncb -and $ncb.IsChecked -eq $true) { [void]$checkedTvis.Add($n) }
+                }
 
-                            # Counter names avoid the plain word 'checked', since the function has a [scriptblock]$Checked param and PS is case insensitive.
-                            # `$checked = 0` inherits the [scriptblock] constraint and throws at compile time.
-                            $allCheckedOrNone = $true
-                            $anyEnabled       = $false
-                            foreach ($sib in $parentTvi.Items) {
-                                $sibCb = & $getHeaderCheckBox $sib
-                                if (!$sibCb -or !$sibCb.IsEnabled) { continue }
-                                $anyEnabled = $true
-                                if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
-                            }
-                            if (!$anyEnabled) { break }
-                            $parentCb.IsChecked = $allCheckedOrNone
-                            $node = $parentTvi
+                # Walk up from each checked one
+                foreach ($cnode in $checkedTvis) {
+                    $node = $cnode
+                    while ($true) {
+                        $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
+                        if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
+                        $parentCb = & $getHeaderCheckBox $parentTvi
+                        if (!$parentCb) { break }
+
+                        # Counter names avoid the plain word 'checked', since the function has a [scriptblock]$Checked param and PS is case insensitive.
+                        # `$checked = 0` inherits the [scriptblock] constraint and throws
+                        $allCheckedOrNone = $true
+                        $anyEnabled       = $false
+                        foreach ($sib in $parentTvi.Items) {
+                            $sibCb = & $getHeaderCheckBox $sib
+                            if (!$sibCb -or !$sibCb.IsEnabled) { continue }
+                            $anyEnabled = $true
+                            if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
                         }
+                        if (!$anyEnabled) { break }
+                        $parentCb.IsChecked = $allCheckedOrNone
+                        $node = $parentTvi
                     }
                 }
-                finally { $treeMeta.CascadeInProgress = $false }
+                $treeMeta.CascadeInProgress = $false
             }
         }
 

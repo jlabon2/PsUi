@@ -55,14 +55,16 @@ function New-UiChart {
         New-UiChart -Type Pie -Data ([ordered]@{ "A" = 60; "B" = 40 }) -Width 300 -Height 250
     .EXAMPLE
         # Pipeline data with custom properties
-        Get-Process | Where-Object Company | Group-Object Company | Sort-Object Count -Descending |
-            Select-Object -First 5 | New-UiChart -Type Pie -LabelProperty Name -ValueProperty Count
+        $vendors = Get-Process | Where-Object Company | Group-Object Company | Sort-Object Count -Descending
+        $vendors[0..4] | New-UiChart -Type Pie -LabelProperty Name -ValueProperty Count
     .EXAMPLE
         # Empty chart updated by a button action
         New-UiChart -Type Bar -Variable 'diskChart' -Title 'Disk Usage'
         New-UiButton -Text 'Scan' -Action {
-            $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
-                Select-Object @{N='Label';E={$_.DeviceID}}, @{N='Value';E={[math]::Round($_.FreeSpace/1GB)}}
+            $disks = [ordered]@{}
+            foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3") {
+                $disks[$disk.DeviceID] = [math]::Round($disk.FreeSpace / 1GB)
+            }
             Update-UiChart -Variable 'diskChart' -Data $disks
         }
     .EXAMPLE

@@ -5,7 +5,7 @@ All changes to PsUi will be documented in this file.
 ## [1.1.1] - 2026-09-16
 
 
-Controls now get built even if `New-UiWindow` isn't called, and `Get-UiSession` is now exported. Functions that stand in for the parameters that used to only take hashtables, plus the attached property path in `-WPFProperties` finally working. The Pester suite split into one file per area and stands at 622 tests. Fixes across buttons, charts, links, the tool window and the threadsafe lists, all listed below.
+Controls now get built even if `New-UiWindow` isn't directly called. `Get-UiSession` is now exported. Functions that stand in for the parameters that used to only take hashtables, plus the attached property path in `-WPFProperties` finally working. The Pester suite split into one file per area and stands at 625 tests. Several fixes across buttons, charts, links, the tool window and the threadsafe lists.
 
 Two critical fixes:
  1) Installing from the gallery led to windows with no PsUi commands exported into them
@@ -37,6 +37,8 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 #### Other
 
 - **Get-UiSession** is now exported. It always worked inside a window and now resolves everywhere.
+- **Close-UiWindow**: closes, by default, the window the code is being called from. `-Window Parent` closes the one that opened it and `-Window Main` closes everything. `-Prompt` asks first. From a background action it waits for the action to end, so what `-Capture` collects still reaches `-ExportOnClose`.
+- **Set-UiCapturedVariable**: `Set-UiCapturedVariable -Name 'lastRun' -Value (Get-Date)` is a prettier way to do what `(Get-UiSession).SetCapturedVariable()` does, and it refuses a name no action could receive.
 - **`New-UiDropdown -ItemsSource` and `-NoBind`**: now can use a live list similar to what datagrids already use, so `$choices.Add()` from a background action is added seemlessly. `-Items` is no longer mandatory.
 - **`-ScrollWheel` on `New-UiList`, `New-UiTree` and `New-UiDataGrid`**: three options now for scrollwheel behavior. `Page` scrolls the window, `Edge` scrolls the rows until the end of the control, and `Capture` holds the wheel on the control while you hover it.
 - **`New-UiTree` rightclick menu**: Expand All, Collapse All, Expand, Collapse and Copy, plus Check and Uncheck All Below on a treelist where checkboxes are added. `-NoContextMenu` skips.
@@ -53,7 +55,11 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **Returning one object from a button action lists it as one row**: it used to open a Name/Value listing with no filter box as a hashtable would.
 - **The Error Details panel uses PsUi's own expander**: it was the last raw WPF `Expander` in the module, drawing the stock circled arrow beside PsUi's own. Its detail text reads in the theme's error color now too.
 - **Copy flashes a tick when something reaches the clipboard**: the grid toolbar's Copy button gave no visual indicator is had been run.
-- **Pester tests**: split out of one file into eleven, one per area, at 622 in total, with a good chunk of them tightened up.
+- **Labeled controls line up with the controls beside them**: a button beside a labeled input sat halfway between its caption and its box. It lines up with the box now wherever the two share a row, the way `New-UiGrid` rows already did. A `VerticalAlignment` or `Margin` passed through `-WPFProperties` stays as given.
+- **Datagrids start with the object's default columns**: object types now lead with their default set in its own order, and files with Mode, LastWriteTime, Length and Name the way the console lists them. `-DefaultPropertiesOnly` and Out-Datagrid's Load defaults use that order, and so do the output window's grids.
+- **A nonterminating error in `-Content` doesn't kill the window**: `Get-ChildItem` on a missing folder or a `Write-Error` kept `New-UiWindow` from opening, and only the first error showed. Each one prints now with its file and line, and the window still opens. If a PsUi control fails to build the window still stops, unless `SilentlyContinue` is set, which leaves that control out. A `throw` or `-ErrorAction Stop` stops it either way, and so does a PsUi command called with an invalid parameter.
+- **Values that print over several lines show their first line in a grid**: a `FileVersionInfo` cell made its row ~240px tall. The cell reads the first line and an ellipsis.
+- **Pester tests**: split out of one file into eleven, one per area, at 625 in total, with a good chunk of them tightened up.
 
 ### Fixed
 
@@ -137,6 +143,30 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **The array popup listed nested hashtables and lists by type name**: each line uses the cell's own text, and both popup headers use the tooltip's count.
 - **The search index did not evaluate the last rows**: 40 of 347 went unsampled. The sample runs first to last.
 - **`Build-PsUi.ps1` wiped `lib/` before it built, so one locked file left the module half deleted**: each file is replaced on its own now, and a held one keeps its old copy and is named at the end.
+- **Controls in a window ran against an open child window**: with a nonmodal `New-UiChildWindow` up, the parent's buttons, links, handlers, grid events and prompts all found the child, so `Write-Status` wrote to the child's bar and Stop canceled the child's job. Every control runs under the window that built it now.
+- **A second child window closed along with the first**: it was owned by the first child instead of the window that opened it.
+- **Closing one child window with another open handed the thread back to the parent**: and a child that outlived its opener left `Get-UiSession` returning `$null`. The thread only moves when the closing child held it.
+- **`Invoke-UiAsync` left the thread on the session it ran under**: `-OnComplete` and `-OnError` ran against whichever child held it, and it never went back.
+- **`Register-UiHotkey` keys didn't fire inside a child window**: only the main window listened for them.
+- **F5 and the other F keys didn't fire while a text box had focus**: `Register-UiHotkey` skips keys without Ctrl or Alt while an input box is focused, and the F keys were included. F1 to F24 fire from a text box now. Escape and the letter keys still don't.
+- **`Set-UiValue`, `Write-Status`, `Update-UiChart` and the other helpers lost their errors on the UI thread**: the action never got them. They show in the output window or the Action Error dialog now, and a throw there stops the action.
+- **A `-NoAsync` action stopped dead at a failed line and showed no error**: a `Set-UiValue` the control refused ended the click. The error shows in a dialog now and the action carries on, and `Set-UiValue` says what it refused ('loud' isn't a value the slider 'volume' takes).
+- **Errors from panel header actions, `-OnClosed`, `-OnComplete`, `-OnError`, web view navigation and `-ValidateScript` only reached `$Error`**: each one shows now, the way a `-NoAsync` button's do.
+- **A long run of errors pushed the Action Error dialog off the screen**: it lists the first ten and counts the rest, and any message taller than the screen stops at the edge and scrolls.
+- **A status bar inside `New-UiExpander` docked to the window**: it stays in the expander and hides when the expander collapses, and `Write-Status` without a name reaches the window's own bar.
+- **The label over an `-AutoProgress` bar repeated the status text**: it shows the activity, or stays empty.
+- **The status bar's message popup hung past the right edge of the window**: its right edge lines up with the bar's.
+- **`New-UiExpander` and `New-UiRadioGroup` broke a child window opened from a `-NoAsync` button on 5.1**: the whole child failed. The same 5.1 bug stopped a `-NoAsync` action at `Write-UiHostDirect` with the console left recolored, and made the output window's filter box throw on every pass.
+- **`New-UiTool` on a function a `-NoAsync` action defined failed on 5.1**: the form never opened and the action stopped. It opens now, and cleans up its temporary copy of the function.
+- **`New-UiTool` on a .ps1 of functions failed on every Run**: 'Missing function body in function declaration', and an apostrophe in the path broke it before that. Run dot sources the file and calls the function now, and Help reads the comment help inside it. A file that runs code outside its functions is refused before anything runs.
+- **Two `-Fill` grids on a page didn't share the height**: the upper one took all of it. Every `-Fill` control on a page splits the leftover height evenly and splits it again on resize.
+- **`-Fill` controls ran past the right edge of their parent**: the width left out the control's own margins.
+- **`-Editable` grids over plain objects threw before the window opened**: readonly members like `Process.Id` and `FileInfo.Length` stay readonly now, and so does a service's `DisplayName` on 5.1.
+- **Handles came up blank on plain `Process` rows**: so did an explicit column typed in a different case from its property. Both bind to the member's real name.
+- **The column picker's boxes drove the wrong columns when a header differed from its property**: each box drives its own column now, HandleCount and SessionId included.
+- **The + button on a single select `New-UiList` threw after adding**: the new name was left unselected. It selects the name it just added, even one the list already had.
+- **`Show-UiGlyphBrowser` let long icon names run past their tiles**: they end in an ellipsis, and the heading says which icon font is active.
+- **After a long session new windows lost their taskbar icon, and copying stopped working in every app**: every window registered its own taskbar id, which Windows keeps until you sign out or reboot, and the table they share filled up. Each kind of window reuses one id now, so open windows of one kind share a taskbar button. Super edge case.
 
 ## [1.1.0] - 2026-08-08
 

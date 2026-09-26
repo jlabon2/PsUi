@@ -228,6 +228,7 @@ function New-UiTab {
     $tabItem.Content = $tabScrollViewer
     $oldParent = $session.CurrentParent
     $session.CurrentParent = $contentPanel
+    $script:TabOrExpanderDepth = [int]$script:TabOrExpanderDepth + 1
     Write-Debug "Entering content block"
 
     # Execute content - restore parent outside try/finally for PS 5.1 closure compatibility
@@ -237,12 +238,17 @@ function New-UiTab {
     catch {
         # Restore parent before re-throwing
         $session.CurrentParent = $oldParent
+        $script:TabOrExpanderDepth--
         throw
     }
 
     # Restore parent after successful content execution
     $session.CurrentParent = $oldParent
+    $script:TabOrExpanderDepth--
     Write-Debug "Content block complete"
+
+    # Tab content only sits in rows under a Responsive layout, which New-UiWindow has to set (but New-UiChildWindow gets by default)
+    Set-UiRowAlignment -Panel $contentPanel
 
     # Apply custom WPF properties if specified
     if ($WPFProperties) { Set-UiProperties -Control $tabItem -Properties $WPFProperties }

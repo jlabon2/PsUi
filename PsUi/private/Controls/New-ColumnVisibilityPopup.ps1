@@ -13,7 +13,10 @@ function New-ColumnVisibilityPopup {
         [Parameter(Mandatory)]
         [scriptblock]$PropertiesProvider,
 
-        [scriptblock]$ItemsProvider
+        [scriptblock]$ItemsProvider,
+
+        # The output window builds this on its first Columns click after the click that opened it let go of the session
+        [Nullable[Guid]]$SessionId
     )
 
     # Sized to match toolbar icon buttons (32x28, 6px gap).
@@ -153,10 +156,17 @@ function New-ColumnVisibilityPopup {
     $flood              = Get-UiGridFloodWarning
     $cellCountThreshold = $flood.CellThreshold
     $floodClause        = $flood.Clause
+
+    $gridSessionId = if ($null -ne $SessionId) { $SessionId } else { (Get-UiSession).SessionId }
+    $pushSession   = ${function:Push-UiSession}
+    $popSession    = ${function:Pop-UiSession}
+
     $confirmFlood = {
         param([int]$cols, [int]$rows)
         $cellCount = $cols * $rows
         if ($cellCount -le $cellCountThreshold) { return $true }
+        $answer       = $true
+        $sessionToken = & $pushSession -SessionId $gridSessionId
         try {
             $msg = ("This will show {0} columns across {1} rows. $floodClause " +
                     "Use 'Default' for a smaller starting set, or flip columns on one at a time.") -f $cols, $rows
@@ -166,12 +176,11 @@ function New-ColumnVisibilityPopup {
                 ConfirmText = 'Show all'
                 CancelText  = 'Cancel'
             }
-            return [bool](Show-UiConfirmDialog @dialogArgs)
+            $answer = [bool](Show-UiConfirmDialog @dialogArgs)
         }
-        catch {
-            Write-Debug "Flood confirm dialog failed: $_"
-            return $true
-        }
+        catch { Write-Debug "Flood confirm dialog failed: $_" }
+        & $popSession -Token $sessionToken
+        return $answer
     }.GetNewClosure()
 
     $getRowCount = {
@@ -188,6 +197,11 @@ function New-ColumnVisibilityPopup {
     # SortMemberPath holds the property the column sorts by so it wins. Header is the fallback for pathless columns.
     $findColumn = {
         param($propertyName)
+
+        # Handles on a live Process row sorts on HandleCount as well
+        foreach ($col in $DataGrid.Columns) {
+            if ($col.SortMemberPath -eq $propertyName -and $col.Header -eq $propertyName) { return $col }
+        }
         foreach ($col in $DataGrid.Columns) {
             if ($col.SortMemberPath -eq $propertyName) { return $col }
         }

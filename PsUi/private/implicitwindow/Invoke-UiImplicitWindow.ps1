@@ -12,7 +12,9 @@
         [string]$CallerName,
 
         [Parameter(Mandatory)]
-        [System.Management.Automation.SessionState]$CallerState
+        [System.Management.Automation.SessionState]$CallerState,
+
+        [System.Management.Automation.PSCmdlet]$CallerCmdlet
     )
 
     # A PsUi background thread reports no session too, and a window holds a pool thread on Join.
@@ -58,10 +60,50 @@
     # A created block leaves that empty, and the error comes out saying script.
     $tokens = $null
     $errors = $null
-    $call   = 'New-UiWindow -Title $args[0] -Content $args[1]'
+    $call   = 'New-UiWindow -Title $args[0] -Content $args[1] 2>&1 | & $args[2]'
     $parsed = [System.Management.Automation.Language.Parser]::ParseInput($call, $span.ScriptName, [ref]$tokens, [ref]$errors)
 
-    $null = $ExecutionContext.InvokeCommand.InvokeScript($CallerState, $parsed.GetScriptBlock(), $title, $content)
+    # InvokeScript drops New-UiWindow's error stream into $Error, ergo the 2>&1
+    $writer = $PSCmdlet
+    if ($CallerCmdlet) { $writer = $CallerCmdlet }
+    $relay = {
+        process {
+            if ($_ -isnot [System.Management.Automation.ErrorRecord]) { return }
+
+            # The redirect already put it in $Error once
+            $global:Error.Remove($_)
+            $writer.WriteError($_)
+        }
+    }.GetNewClosure()
+
+    # InvokeScript hands a stopped window back as a MethodInvocationException
+    try {
+        $null = $ExecutionContext.InvokeCommand.InvokeScript($CallerState, $parsed.GetScriptBlock(), $title, $content, $relay)
+    }
+    catch [System.Management.Automation.MethodInvocationException] {
+        $inner = $_.Exception.InnerException
+        if ($inner -isnot [System.Management.Automation.IContainsErrorRecord]) { throw }
+
+        # Every wrap on the way out left its own rec in $Error
+        $source = $inner.ErrorRecord
+        $chain  = [System.Collections.Generic.HashSet[object]]::new()
+        for ($link = $_.Exception; $link; $link = $link.InnerException) { $null = $chain.Add($link) }
+        if ($source.Exception) { $null = $chain.Add($source.Exception) }
+        $stale = @($global:Error | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] -and $chain.Contains($_.Exception) })
+        foreach ($record in $stale) { $global:Error.Remove($record) }
+
+        # New-UiWindow's name from the id, need to add the cotnrol name
+        $errorId   = $source.FullyQualifiedErrorId.Split(',')[0]
+        $exception = [System.Exception]::new($source.ToString(), $source.Exception)
+        $failure   = [System.Management.Automation.ErrorRecord]::new($exception, $errorId, $source.CategoryInfo.Category, $source.TargetObject)
+
+        $stamp = [System.Management.Automation.ErrorRecord].GetMethod('SetInvocationInfo', [System.Reflection.BindingFlags]'Instance, NonPublic')
+        if ($stamp) { $null = $stamp.Invoke($failure, @($writer.MyInvocation)) }
+
+        # The control's -ErrorAction SilentlyContinue gets this far and would silent the throw
+        $ErrorActionPreference = 'Stop'
+        throw $failure
+    }
 
     # exit ends the nearest running script file with code 0 and leaves the console it ran from alone.
     # With no script file anywhere on the stack, a module function called at a prompt, exit would take the console with it, so that one gets its pipeline stopped instead.

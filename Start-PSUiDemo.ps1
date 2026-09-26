@@ -75,11 +75,15 @@ function Search-FileSystem {
             $file.Length -ge $minBytes -and
             ($Type -eq 'All' -or ($typePatterns[$Type] | Where-Object { $file.Name -like $_ }))
         } |
-        Select-Object Name,
-            @{N='SizeKB';   E={[math]::Round($_.Length / 1KB, 1)}},
-            @{N='Modified'; E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm')}},
-            @{N='Type';     E={$_.Extension.TrimStart('.').ToUpper()}},
-            FullName
+        ForEach-Object {
+            [pscustomobject]@{
+                Name     = $_.Name
+                SizeKB   = [math]::Round($_.Length / 1KB, 1)
+                Modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+                Type     = $_.Extension.TrimStart('.').ToUpper()
+                FullName = $_.FullName
+            }
+        }
 }
 
 function Test-ConnectionStatus {
@@ -572,7 +576,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 # Get-PsUiIconList takes a wildcard, Get-PsUiIcon hands back the raw glyph for one name.
                 # That glyph is a private use codepoint, so it only draws on a control already using the icon font. Printed into a dialog it comes out as an empty box, so the codepoint goes in instead and Show-UiGlyphBrowser covers the looking.
                 $iconNames = @(Get-PsUiIconList -Filter 'Cloud*')
-                $sample    = $iconNames | Select-Object -First 8 | ForEach-Object { "{0,-16} U+{1:X4}" -f $_, [int][char](Get-PsUiIcon $_) }
+                $sample    = $iconNames[0..7] | ForEach-Object { "{0,-16} U+{1:X4}" -f $_, [int][char](Get-PsUiIcon $_) }
                 $summary   = "{0} names match, {1} in the catalog. Show-UiGlyphBrowser draws them." -f $iconNames.Count, (Get-PsUiIconList).Count
                 Show-UiMessageDialog -Title "Get-PsUiIconList -Filter 'Cloud*'" -Message (($sample -join "`n") + "`n`n" + $summary)
             }
@@ -1775,13 +1779,11 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             New-UiLabel -Text "A better Out-GridView with filtering, export, copy, and -PassThru support." -Style Body
 
             New-UiActionCard -Header "View Processes" -Icon "Gear" -Accent -ButtonText "View" -Description "Display processes in a filterable grid" -Action {
-                Get-Process | Select-Object Name, Id, CPU, WorkingSet, StartTime |
-                    Out-Datagrid -TitleText "Running Processes" -IsFilterable
+                Get-Process | Out-Datagrid -TitleText "Running Processes" -IsFilterable
             }
 
             New-UiButtonCard -Header "Select Services" -Icon "Services" -ButtonText "Select" -HideEmptyOutput -Description "Pick services to restart (PassThru demo)" -Action {
-                $selected = Get-Service | Select-Object Name, DisplayName, Status, StartType |
-                    Out-Datagrid -TitleText "Select Services" -IsFilterable -PassThru
+                $selected = Get-Service | Out-Datagrid -TitleText "Select Services" -IsFilterable -PassThru
 
                 if ($selected) {
                     $count = $selected.Count
@@ -1798,11 +1800,15 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
 
             New-UiActionCard -Header "View Drives" -Icon "HardDrive" -ButtonText "View" -Description "Filesystem drives with usage stats" -Action {
                 Get-PSDrive -PSProvider FileSystem | Where-Object Used |
-                    Select-Object Name,
-                        @{N='UsedGB' ;E={[math]::Round($_.Used/1GB,1)}},
-                        @{N='FreeGB' ;E={[math]::Round($_.Free/1GB,1)}},
-                        @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}},
-                        DisplayRoot |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Name        = $_.Name
+                            UsedGB      = [math]::Round($_.Used / 1GB, 1)
+                            FreeGB      = [math]::Round($_.Free / 1GB, 1)
+                            TotalGB     = [math]::Round(($_.Used + $_.Free) / 1GB, 1)
+                            DisplayRoot = $_.DisplayRoot
+                        }
+                    } |
                     Out-Datagrid -TitleText "Filesystem Drives" -IsFilterable
             }
         }
@@ -1815,7 +1821,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                     'Write-Host "OS: $($info.OsVersion)"'
                     ''
                     'Get-Process | Where-Object CPU -gt 100 |'
-                    '    Select-Object Name, CPU |'
+                    '    Sort-Object CPU -Descending |'
                     '    Format-Table'
                 )
                 $sample = $sampleLines -join "`n"
@@ -2204,7 +2210,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
             $demoModulePath = $ModulePath
             if (!$demoModulePath -or !(Test-Path $demoModulePath)) {
                 # Get-Module answers with two, since the psm1 loads the backend DLL under that name. An installed copy sits in a version folder that Import-Module refuses on its own, so the manifest name goes back on the end.
-                $loadedPsUi     = Get-Module PsUi | Where-Object { $_.ModuleType -eq 'Script' } | Select-Object -First 1
+                $loadedPsUi     = @(Get-Module PsUi | Where-Object { $_.ModuleType -eq 'Script' })[0]
                 $demoModulePath = Join-Path $loadedPsUi.ModuleBase 'PsUi.psd1'
             }
 
@@ -2332,7 +2338,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         New-UiPanel -Header "Basics" -ShowSourceButton -Content {
             New-UiLabel -Text "Columns come from the first row. Sort, filter, copy, export, and the column picker are all on by default:" -Style Body -FullWidth
 
-            New-UiDataGrid -Variable "gridServices" -Items (Get-Service | Select-Object Name, DisplayName, Status, StartType) -Height 200 -DefaultSort "Name"
+            New-UiDataGrid -Variable "gridServices" -Items (Get-Service) -DefaultPropertiesOnly -Height 200 -DefaultSort "Name"
 
             New-UiButton -Text "Show Selected" -Icon "Info" -Action {
                 # The grid's -Variable hands the action its selected rows, not the control
@@ -2404,12 +2410,15 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
         New-UiPanel -Header "Row Coloring, Row Details, Frozen Columns" -ShowSourceButton -Content {
             New-UiLabel -Text "-RowBackground colors rows as they scroll into view, -RowDetailsTemplate builds a panel under the clicked row, -FrozenColumns pins the left edge:" -Style Body -FullWidth
 
-            $driveRows = Get-PSDrive -PSProvider FileSystem | Where-Object Used |
-                Select-Object Name,
-                    @{N='UsedGB'     ;E={[math]::Round($_.Used/1GB,1)}},
-                    @{N='FreeGB'     ;E={[math]::Round($_.Free/1GB,1)}},
-                    @{N='PercentUsed';E={[math]::Round(($_.Used / ($_.Used + $_.Free)) * 100, 0)}},
-                    DisplayRoot
+            $driveRows = Get-PSDrive -PSProvider FileSystem | Where-Object Used | ForEach-Object {
+                [pscustomobject]@{
+                    Name        = $_.Name
+                    UsedGB      = [math]::Round($_.Used / 1GB, 1)
+                    FreeGB      = [math]::Round($_.Free / 1GB, 1)
+                    PercentUsed = [math]::Round(($_.Used / ($_.Used + $_.Free)) * 100, 0)
+                    DisplayRoot = $_.DisplayRoot
+                }
+            }
 
             New-UiDataGrid -Variable "gridDrives" -Items $driveRows -Height 200 -FrozenColumns 1 -RowBackground {
                     if ($_.PercentUsed -ge 90) { '#33FF6B6B' }
@@ -2500,10 +2509,10 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 New-UiChildWindow -Title "Processes (-Fill)" -Width 820 -Height 600 -Content {
                     New-UiLabel -Text "Resize this window. The grid grows, the button and the bar stay where they are." -Style Note -FullWidth
 
-                    New-UiDataGrid -Variable "fillGrid" -Items (Get-Process | Select-Object Name, Id, WorkingSet, CPU) -Fill -MinFillHeight 120 -DefaultSort "Name"
+                    New-UiDataGrid -Variable "fillGrid" -Items (Get-Process) -DefaultPropertiesOnly -Fill -MinFillHeight 120 -DefaultSort "Name"
 
                     New-UiButton -Text "Refresh" -Icon "Sync" -NoOutput -Action {
-                        Set-UiDataGridItems -Variable "fillGrid" -Items (Get-Process | Select-Object Name, Id, WorkingSet, CPU)
+                        Set-UiDataGridItems -Variable "fillGrid" -Items (Get-Process)
                         Write-Status "Process list refreshed" -Severity Success
                     }
 
@@ -2511,7 +2520,7 @@ New-UiWindow -Title "PsUi - Feature Showcase" -LayoutMode Responsive -Theme Dark
                 }
             }
 
-            New-UiLabel -Text "-MaxFillHeight caps the growth on a tall monitor, -MinFillHeight keeps a floor when a sibling turns greedy. Two -Fill controls in one panel split unevenly; wrap them in New-UiGrid -Rows '*,*' -Fill for an even split." -Style Note -FullWidth
+            New-UiLabel -Text "-MaxFillHeight caps the growth on a tall monitor, -MinFillHeight keeps a floor when a sibling turns greedy. Two -Fill controls in one window split the leftover height evenly." -Style Note -FullWidth
         }
     }
 

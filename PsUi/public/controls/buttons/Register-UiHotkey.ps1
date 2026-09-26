@@ -4,9 +4,9 @@ function Register-UiHotkey {
         Registers a keyboard shortcut to trigger an action.
     .DESCRIPTION
         Binds a key combination (like Ctrl+S or F5) to a ScriptBlock.
-        The shortcut works anywhere in the window, with one carve-out: plain keys
-        (no Ctrl or Alt in the combination) don't fire while an editable text box
-        has focus, so typing never triggers them.
+        The shortcut works anywhere in the window,, except that plain keys
+        (no Ctrl or Alt in the combination) other than F1 to F24 don't fire while
+        an editable text box has focus, so typing never triggers them.
         Actions run asynchronously by default.
     .PARAMETER Key
         Key combination string. Format: "[Ctrl+][Alt+][Shift+]Key"
@@ -20,8 +20,7 @@ function Register-UiHotkey {
     .EXAMPLE
         Register-UiHotkey -Key 'Ctrl+S' -Action { Save-CurrentDocument }
     .EXAMPLE
-        Register-UiHotkey -Key 'Escape' -Action { (Get-UiSession).Window.Close() } -NoAsync
-        # Closing the window is UI work, so -NoAsync
+        Register-UiHotkey -Key 'Escape' -Action { Close-UiWindow } -NoAsync
     .EXAMPLE
         Register-UiHotkey -Key 'F5' -Action { Invoke-Refresh } -NoAsync
     #>
@@ -46,8 +45,9 @@ function Register-UiHotkey {
 
     # Wrap action for async/sync dispach
     $hotkeyContext = @{
-        Action  = $Action
-        NoAsync = $NoAsync.IsPresent
+        Action    = $Action
+        NoAsync   = $NoAsync.IsPresent
+        SessionId = $session.SessionId
     }
 
     $session.RegisterHotkey($normalizedKey, $hotkeyContext)

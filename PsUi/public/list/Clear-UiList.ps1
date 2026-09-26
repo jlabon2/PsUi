@@ -29,5 +29,5 @@ function Clear-UiList {
     Write-Debug "Removing $($collection.Count) items"
 
     if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { $collection.Clear() }
-    else { Invoke-OnUIThread -ScriptBlock { $collection.Clear() }.GetNewClosure() }
+    else { Invoke-OnUIThread -ArgumentList (, $collection) -ScriptBlock { param($list) $list.Clear() } }
 }

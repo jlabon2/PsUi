@@ -6,6 +6,9 @@ function New-UiGrid {
         Provides a declarative Grid control that auto-flows children into cells.
         Column sizing uses the short syntax below. FormLayout unwraps label+control
         pairs into two columns. AutoLayout stacks one control per row.
+
+        Controls beside a labeled input line up with its box, so a Browse button sits
+        level with the field it fills.
     .PARAMETER Columns
         Column definitions in flexible formats:
         - Integer: Number of equal-width columns (e.g., 3)
@@ -72,8 +75,12 @@ function New-UiGrid {
         New-UiGrid -Columns 'Auto, *, 100' -Content {
             New-UiGlyph -Name 'Folder' -Size 20
             New-UiInput -Label 'Target folder' -Variable targetFolder
-            New-UiButton -Text 'Browse' -Action { Show-UiFilePicker }
+            New-UiButton -Text 'Browse' -NoAsync -Action {
+                $picked = Show-UiFolderPicker -Title 'Target folder'
+                if ($picked) { Set-UiValue -Variable 'targetFolder' -Value $picked }
+            }
         }
+        # The picker is a dialog, hence -NoAsync. Set-UiValue drops the pick into the box.
     .EXAMPLE
         # Star row takes the leftover height, Auto row hugs the buttons at the bottom
         New-UiGrid -Columns 2 -Rows '*, Auto' -Fill -Content {
@@ -232,7 +239,7 @@ function New-UiGrid {
         $script:GridContext = $previousGridContext
         throw
     }
-    
+
     # Restore state after successful content execution
     $session.CurrentParent = $oldParent
     $script:GridContext = $previousGridContext
@@ -240,17 +247,17 @@ function New-UiGrid {
 
     Write-Debug "POST-PROCESS: Starting"
     Write-Debug "POST-PROCESS: grid is null = $($null -eq $grid)"
-    
+
     # AutoLayout skips unwrapping - each child stays as-is
     $skipUnwrap = $AutoLayout
-    
+
     try {
         $childrenToProcess = @($grid.Children)
         $unwrappedChildren = [System.Collections.Generic.List[object]]::new()
 
         foreach ($child in $childrenToProcess) {
             Write-Debug "Processing child: $($child.GetType().FullName)"
-            
+
             # Check for FormControl tag (preferred method). Only -FormLayout unwraps. A positional grid keeps the labeled composite in one cell, where the user put it.
             $formTag = $null
             if ($FormLayout -and !$skipUnwrap -and $child -is [System.Windows.Controls.StackPanel]) {
@@ -259,7 +266,7 @@ function New-UiGrid {
                     $formTag = $tagValue
                 }
             }
-            
+
             # Fallback: detect the label+control panel by structure (for backward compat)
             $isLabelWrapper = $false
             if ($FormLayout -and !$skipUnwrap -and !$formTag -and $child -is [System.Windows.Controls.StackPanel]) {
@@ -413,19 +420,22 @@ function New-UiGrid {
     }
 
     Write-Debug "Placement phase complete"
+
+    Set-UiRowAlignment -Panel $grid
+
     # FullWidth mode. WrapPanel parents need explicit Width since they size to content
     if ($FullWidth -or $parent -is [System.Windows.Controls.WrapPanel]) {
         $grid.HorizontalAlignment = 'Stretch'
         if ($parent -is [System.Windows.Controls.WrapPanel]) {
-            $grid.Width = $parent.ActualWidth
-            if ($grid.Width -eq 0) { $grid.Width = 800 }
+            $sideMargins = $grid.Margin.Left + $grid.Margin.Right
+            $grid.Width  = if ($parent.ActualWidth -gt 0) { $parent.ActualWidth - $sideMargins } else { 800 }
 
             # Track parent resizes so the grid width stays in sync with the tab/window
-            $gridWidthRef  = $grid
+            $gridWidthRef   = $grid
             $parentWidthRef = $parent
             $parentWidthRef.Add_SizeChanged({
                 param($sender, $sizeArgs)
-                $newWidth = $sender.ActualWidth
+                $newWidth = $sender.ActualWidth - $gridWidthRef.Margin.Left - $gridWidthRef.Margin.Right
                 if ($newWidth -gt 50) { $gridWidthRef.Width = $newWidth }
             }.GetNewClosure())
         }

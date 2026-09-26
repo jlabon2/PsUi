@@ -467,11 +467,9 @@ namespace PsUi
             // Initial focus on load, and set taskbar icon properly
             Loaded += delegate 
             { 
-                // Set unique AppUserModelID to separate from PowerShell in taskbar
                 if (ShowInTaskbar)
                 {
-                    var appId = "PsUi.KeyCapture." + Guid.NewGuid().ToString("N").Substring(0, 8);
-                    WindowManager.SetWindowAppId(this, appId);
+                    WindowManager.SetWindowAppId(this, "PsUi.KeyCapture");
                     
                     // Force taskbar to use our icon via WM_SETICON
                     if (_windowIcon != null)
@@ -1148,6 +1146,12 @@ namespace PsUi
         // X button returns Escape to signal cancellation.
         public static KeyInfo ShowAndCapture(string prompt = null)
         {
+            return ShowAndCapture(prompt, Guid.Empty);
+        }
+
+        // Passed the run's session so an open child can't claim the dialog
+        public static KeyInfo ShowAndCapture(string prompt, Guid sessionId)
+        {
             KeyInfo result = new KeyInfo(27, (char)27, ControlKeyStates.NumLockOn, true);
             
             // If session is already cancelled, throw to terminate the script
@@ -1184,7 +1188,15 @@ namespace PsUi
                         
                         // Prefer ActiveDialogParent - it's set before the output window is shown,
                         // avoiding the race where IsActive is still false during Loaded
-                        var session = SessionManager.Current;
+                        SessionContext session = null;
+                        if (sessionId != Guid.Empty)
+                        {
+                            session = SessionManager.GetSession(sessionId);
+                        }
+                        if (session == null)
+                        {
+                            session = SessionManager.Current;
+                        }
                         if (session != null && session.ActiveDialogParent != null)
                         {
                             var dialogParent = session.ActiveDialogParent;

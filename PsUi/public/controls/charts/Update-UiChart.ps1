@@ -4,7 +4,7 @@ function Update-UiChart {
         Updates an existing chart with new data.
     .DESCRIPTION
         Pushes new data to a chart created with New-UiChart. Works from async
-        button actions - the update lands on the UI thread on its own.
+        button actions since the update runs on the UI thread on its own.
 
         This is the explicit update path. Charts also update automatically when
         you assign an ordered hashtable of new data to the chart variable inside a
@@ -26,17 +26,18 @@ function Update-UiChart {
     .EXAMPLE
         New-UiChart -Type Bar -Variable 'diskChart' -Title 'Disk size (GB)'
         New-UiButton -Text 'Refresh' -NoOutput -Action {
-            $diskData = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
-                Select-Object @{N='Label';E={$_.DeviceID}}, @{N='Value';E={[math]::Round($_.Size/1GB)}}
+            $diskData = [ordered]@{}
+            foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3") {
+                $diskData[$disk.DeviceID] = [math]::Round($disk.Size / 1GB)
+            }
             Update-UiChart -Variable 'diskChart' -Data $diskData
         }
     .EXAMPLE
         # Pipeline objects with custom property names
         New-UiChart -Type Pie -Variable 'procChart' -Title 'Processes by vendor'
         New-UiButton -Text 'Scan' -NoOutput -Action {
-            $procs = Get-Process | Where-Object Company | Group-Object Company |
-                Sort-Object Count -Descending | Select-Object -First 8
-            Update-UiChart -Variable 'procChart' -Data $procs -LabelProperty Name -ValueProperty Count
+            $procs = Get-Process | Where-Object Company | Group-Object Company | Sort-Object Count -Descending
+            Update-UiChart -Variable 'procChart' -Data $procs[0..7] -LabelProperty Name -ValueProperty Count
         }
     #>
     [CmdletBinding()]
@@ -75,14 +76,29 @@ function Update-UiChart {
         foreach ($item in $Data) { $collected.Add($item) }
     }
     else {
-        $collected.Add($Data) 
+        $collected.Add($Data)
     }
-    # Queue the chart rebuild onto the UI thread via Invoke-OnUIThread
-    $containerRef  = $proxy.Control
-    $dataRef       = $collected
-    $labelOverride = $LabelProperty
-    $valueOverride = $ValueProperty
-    Invoke-OnUIThread {
+
+    $chart     = $proxy.Control
+    $builtWith = Invoke-OnUIThread -ArgumentList $chart -ScriptBlock {
+        param($chart)
+        $config = $chart.Tag
+        if ($config -and $config.ControlType -eq 'Chart') { @{ Label = $config.LabelProperty; Value = $config.ValueProperty } }
+    }
+    $labelName = if ($LabelProperty) { $LabelProperty } else { $builtWith.Label }
+    $valueName = if ($ValueProperty) { $ValueProperty } else { $builtWith.Value }
+
+    # The rows get read in the runspace that built them since a ScriptProperty read from the UI thread waits 250ms a row.
+    # Invoke-ChartRedraw converts again with the Tag names... only a hashtable carrying Label and Value keys survives that pass
+    $points = [System.Collections.Generic.List[object]]::new()
+    foreach ($point in (ConvertTo-ChartData -RawData $collected -LabelProperty $labelName -ValueProperty $valueName)) {
+        $points.Add(@{ Label = $point.Label; Value = $point.Value })
+    }
+
+    $redraw = @($chart, $points, $LabelProperty, $ValueProperty)
+    Invoke-OnUIThread -ArgumentList $redraw -ScriptBlock {
+        param($containerRef, $dataRef, $labelOverride, $valueOverride)
+
         # Names given here replace the ones the chart was built with, since the Tag is the only place Invoke-ChartRedraw reads them from.
         $config = $containerRef.Tag
         if ($config -and $config.ControlType -eq 'Chart') {
@@ -90,7 +106,6 @@ function Update-UiChart {
             if ($valueOverride) { $config.ValueProperty = $valueOverride }
         }
 
-        # Raw rows go over, because Invoke-ChartRedraw runs ConvertTo-ChartData itself with those Tag names. Converting here as well handed it Label/Value rows that a custom -LabelProperty second pass dropped to zero, and the chart read 'No data'.
         Invoke-ChartRedraw -Container $containerRef -NewData $dataRef
     }
 }

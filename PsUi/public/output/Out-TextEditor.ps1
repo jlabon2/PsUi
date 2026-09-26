@@ -155,10 +155,10 @@ function Out-TextEditor {
             $iconFontSnap = $null
         }
         if ($isStandalone) {
-            if ($priorSessionId -and $priorSessionId -ne [Guid]::Empty) {
+            if ($priorSessionId -and [PsUi.SessionManager]::GetSession($priorSessionId)) {
                 [PsUi.SessionManager]::SetCurrentSession($priorSessionId)
             }
-            if ($null -ne $priorGlobalId) {
+            if ($null -ne $priorGlobalId -and [PsUi.SessionManager]::GetSession([Guid]$priorGlobalId)) {
                 $Global:__PsUiSessionId = $priorGlobalId
             }
             else {
@@ -204,8 +204,7 @@ function Out-TextEditor {
 
     Set-UIResources -Window $window -Colors $colors
 
-    $appId = "PsUi.TextEditor." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+    [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.TextEditor')
 
     $editorWindowIcon = $null
     try {
@@ -954,9 +953,10 @@ function Out-TextEditor {
 
     # Restore the calling script's session pointers. Add_Closed already disposed any editor session. CurrentSessionId is Empty by now.
     if ($isStandalone) {
-        if ($priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
+        # The editor has no owner, so the window that opened it can close first and leave a dead id to put back
+        if ($priorSessionId -and [PsUi.SessionManager]::GetSession($priorSessionId)) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
 
-        if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+        if ($null -ne $priorGlobalId -and [PsUi.SessionManager]::GetSession([Guid]$priorGlobalId)) {  $Global:__PsUiSessionId = $priorGlobalId  }
         else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
     }
 

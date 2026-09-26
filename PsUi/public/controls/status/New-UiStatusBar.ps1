@@ -2,11 +2,10 @@ function New-UiStatusBar {
     <#
     .SYNOPSIS
         Creates a status bar docked to the bottom (or top) of the window.
-    .DESCRIPTION
-        Themed bar with freeform child controls. Drop New-UiSpacer between
-        items to push everything after it to the right side. -AutoProgress
-        embeds a progress bar that Write-Progress from button actions drives
-        automatically.
+        Themed bar with freeform child controls. New-UiSpacer pushes what follows to the right,
+        and -AutoProgress embeds a bar that Write-Progress drives. Inside New-UiTab or
+        New-UiExpander the bar stays there and hides with it. Write-Status without a name goes to
+        the window's own bar, so give an inner bar a -Variable to reach it.
     .PARAMETER Content
         Scriptblock defining the bar's child controls. Optional when -DefaultText
         is supplied.
@@ -14,7 +13,8 @@ function New-UiStatusBar {
         Session name for the bar. When omitted, a synthetic name is minted and
         the bar stays discoverable via the IsStatusBar tag fallback.
     .PARAMETER Location
-        'Bottom' (default) or 'Top'.
+        'Bottom' (default) or 'Top'. Inside a tab or expander, Top puts the bar first and
+        Bottom leaves it where it is written.
     .PARAMETER DefaultText
         Initial status text. Prepends a TextBlock that becomes the canonical
         status label Set-UiStatusBar / Write-Status target.
@@ -25,10 +25,9 @@ function New-UiStatusBar {
         Embeds a Cancel button that becomes visible while an async action is
         running. Click calls Stop-UiAsync.
     .PARAMETER Intercept
-        Intercepts Write-Warning and Write-Error from button actions, displaying
-        them as clickable badge counters in the status bar. Click a badge to see
-        a popup with timestamped message details. Badges reset on each new
-        action unless -Persist is also specified.
+        Catches Write-Warning and Write-Error from button actions as badge counters on the bar.
+        Click a badge for the messages. Badges reset each action unless -Persist is set. While
+        the bar shows, -NoOutput and grid action errors land here instead of in a dialog.
     .PARAMETER CaptureHost
         Requires -Intercept. Also intercepts Write-Host and Write-Information
         from button actions, counting them on a console badge and displaying
@@ -50,7 +49,7 @@ function New-UiStatusBar {
     .PARAMETER NoOutputOnly
         Requires -Intercept. Only intercepts from buttons that do NOT have an
         output window. Prevents duplicate badge notifications when warnings and
-        errors are already visible in Show-UiOutput.
+        errors are already visible in the output window.
     .PARAMETER Persist
         Requires -Intercept. Keeps badge counters and popup messages across
         button actions instead of resetting on each new click. Useful for
@@ -168,6 +167,9 @@ function New-UiStatusBar {
     $meta = @{
         IsStatusBar = $true
         InnerPanel  = $innerPanel
+
+        # Two equivalent bars, when evaluated through Resolve-UiStatusBar, will default to the first one built
+        BuiltAt     = [System.Diagnostics.Stopwatch]::GetTimestamp()
     }
 
     # Severity-reset timer lives on the UI thread so its Tick outlives background-action teardown.
@@ -288,6 +290,9 @@ function New-UiStatusBar {
     }
     $meta.StatusText = $firstText
 
+    # Clear-UiStatus puts the label back to this
+    $meta.InitialText = if ($firstText) { $firstText.Text } else { '' }
+
     # Wrap user content in a clipping border so overflow truncates instead of bleeding over badges
     $contentPanel               = [System.Windows.Controls.DockPanel]::new()
     $contentPanel.LastChildFill = $true
@@ -314,13 +319,13 @@ function New-UiStatusBar {
             Margin            = [System.Windows.Thickness]::new(0, 0, 0, 0)
         }
 
-        # Tag must be a hashtable before styling - Set-UiStatusBar and the timer Tick handler both reach into it to update fill color when severity changes
+        # Set-ProgressBarStyle reads the brush key off this Tag
         $autoBar.Tag = @{ BrushTag = 'AccentBrush'; Severity = 'Info' }
 
         try { Set-ProgressBarStyle -ProgressBar $autoBar }
         catch { Write-Debug "AutoProgress: Set-ProgressBarStyle failed: $_" }
 
-        # Small label above the progress bar showing Write-Progress text
+        # Write-Progress activity label
         $progressLabel = [System.Windows.Controls.TextBlock]@{
             FontSize            = 9
             TextTrimming        = 'CharacterEllipsis'
@@ -356,9 +361,16 @@ function New-UiStatusBar {
             VerticalAlignment = 'Center'
             Visibility        = [System.Windows.Visibility]::Hidden
         }
+
+        # Stop-UiAsync cancels the current session's run
+        $cancelSessionId = $session.SessionId
+        $pushSession     = ${function:Push-UiSession}
+        $popSession      = ${function:Pop-UiSession}
         $cancelButton.Add_Click({
+            $sessionToken = & $pushSession -SessionId $cancelSessionId
             try { Stop-UiAsync } catch { Write-Debug "AutoCancel: Stop-UiAsync threw: $_" }
-        })
+            & $popSession -Token $sessionToken
+        }.GetNewClosure())
 
         try { Set-ButtonStyle -Button $cancelButton }
         catch { Write-Debug "AutoCancel: Set-ButtonStyle failed: $_" }
@@ -548,9 +560,10 @@ function New-UiStatusBar {
         }
     }
 
-    # Walk up the parent chain to decide where to dock.
-    # Tabs and expanders get a local bar; everything else docks to the window unless -Inline says otherwise.
-    $dockToWindow = !$Inline.IsPresent
+    # Tabs and expanders get a local bar, and everything else docks to the window unless -Inline says otherwise
+    # New-UiTab and New-UiExpander count themselves in while their content runs
+    # That's because New-UiExpander isn't a WPF Expander, and a card or grid in a tab only joins it after its own content runs
+    $dockToWindow = !$Inline.IsPresent -and [int]$script:TabOrExpanderDepth -eq 0
     if ($dockToWindow) {
         $walker = $session.CurrentParent
         while ($walker) {

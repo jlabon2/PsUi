@@ -391,6 +391,43 @@ namespace PsUi
         }
     }
 
+    // FileVersionInfo's 14 line ToString makes a row like 240px tall
+    public class SingleLineConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value == null) return null;
+
+            string text;
+            try
+            {
+                text = value.ToString();
+            }
+            catch (Exception)
+            {
+                return value;
+            }
+
+            // One line goes back as it came, so a date keeps the binding's culture
+            if (text == null || text.IndexOf('\n') < 0) return value;
+
+            string first = null;
+            foreach (string line in text.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Length == 0) continue;
+                if (first != null) return first + " ...";
+                first = trimmed;
+            }
+            return first != null ? first : string.Empty;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
     public class IsExpandableConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)

@@ -9,7 +9,9 @@ function Invoke-UiToolAction {
 
         [string]$CommandDisplayName,
 
-        [string]$CommandDefinition
+        [string]$CommandDefinition,
+
+        [string]$FunctionFile
     )
 
     $session = Get-UiSession
@@ -19,6 +21,7 @@ function Invoke-UiToolAction {
         $CommandName = $def.CommandName
         $CommandDisplayName = $def.DisplayName
         $CommandDefinition = $def.CommandDefinition
+        $FunctionFile = $def.FunctionFile
     }
 
     if (!$CommandName) {
@@ -26,8 +29,9 @@ function Invoke-UiToolAction {
         return
     }
 
-    # For local functions, inject the definition first
-    if ($CommandDefinition) {
+    # Local functions come over as text, while one out of a .ps1 gets its whole file dot sourced so the helpers beside it are also available
+    if ($FunctionFile) { . $FunctionFile }
+    elseif ($CommandDefinition) {
         $funcBlock = [scriptblock]::Create("function $CommandName {`n$CommandDefinition`n}")
         . $funcBlock
     }
@@ -42,7 +46,8 @@ function Invoke-UiToolAction {
                elseif ($_.Value -is [scriptblock]) { "{$($_.Value)}" }
                elseif ($_.Value -is [array]) { "($($_.Value -join ', '))" }
                else { "'$($_.Value)'" }
-        if ($_.Value -is [switch]) { "-$($_.Key)" } else { "-$($_.Key) $val" }
+        if ($_.Value -is [switch]) { "-$($_.Key)$(if (!$_.Value) { ':$false' })" }
+        else { "-$($_.Key) $val" }
     }) -join ' '
 
     $displayName = if ($CommandDisplayName) { $CommandDisplayName } else { $CommandName }

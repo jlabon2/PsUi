@@ -17,6 +17,9 @@ function Add-LineChartElements {
     $chartHeight = $height - ($margin * 2)
     $pointGap    = $chartWidth / [math]::Max(1, $count - 1)
 
+    # Mid plot for one point, since the y axis sits on the margin
+    $firstX = if ($count -eq 1) { $margin + ($chartWidth / 2) } else { $margin }
+
     # For large datasets, reduce point markers and labels
     $showDots       = $count -le 100
     $showDataLabels = $count -le 20
@@ -45,7 +48,7 @@ function Add-LineChartElements {
     $points = [System.Windows.Media.PointCollection]::new()
     for ($i = 0; $i -lt $count; $i++) {
         $item = $Data[$i]
-        $x    = $margin + ($i * $pointGap)
+        $x    = $firstX + ($i * $pointGap)
         $y    = $height - $margin - (($item.Value / $maxValue) * $chartHeight)
         [void]$points.Add([System.Windows.Point]::new($x, $y))
     }

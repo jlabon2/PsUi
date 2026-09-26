@@ -94,6 +94,9 @@ namespace PsUi
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, IntPtr[]> _windowIconHandles =
             new System.Collections.Concurrent.ConcurrentDictionary<IntPtr, IntPtr[]>();
 
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, bool> _refreshPending =
+            new System.Collections.Concurrent.ConcurrentDictionary<IntPtr, bool>();
+
         [DllImport("user32.dll")]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
@@ -321,9 +324,9 @@ namespace PsUi
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
                 // That reaches the titlebar and Alt+Tab and stops there.
-                // Every PsUi window carries its own AppUserModelID, and the shell caches the icon it read when it built the button under that id.
+                // The shell caches the icon it read when it built the button under the window's AppUserModelID.
                 // Without the rebuild below, a theme switch leaves the old icon sitting in the taskbar.
-                if (window.ShowInTaskbar) { RefreshTaskbarButton(hWnd); }
+                if (window.ShowInTaskbar) { ScheduleTaskbarRefresh(window, hWnd); }
 
                 // Track handles for cleanup on window close or repeated calls
                 var iconHandles = new IntPtr[] { smallIcon, bigIcon };
@@ -362,6 +365,18 @@ namespace PsUi
         // One per thread, since every PsUi window owns an STA thread of its own and a COM object made on one cannot be called from another.
         [ThreadStatic]
         private static ITaskbarList _taskbarList;
+
+        // A theme switch sets the icon twice while it restyles, and two rebuilds can drop the window's button, so every call before the thread goes idle shares one
+        private static void ScheduleTaskbarRefresh(Window window, IntPtr hWnd)
+        {
+            if (!IsWindowVisible(hWnd) || !_refreshPending.TryAdd(hWnd, true)) { return; }
+            window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(delegate
+            {
+                bool pending;
+                _refreshPending.TryRemove(hWnd, out pending);
+                RefreshTaskbarButton(hWnd);
+            }));
+        }
 
         // The shell reads the window icon once, when it builds the button, so dropping the tab and adding it back gets a fresh read.
         // Off screen there is no button to rebuild yet, and AddTab would conjure one early.

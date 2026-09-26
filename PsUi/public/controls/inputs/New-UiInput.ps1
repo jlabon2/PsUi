@@ -34,9 +34,9 @@ function New-UiInput {
     .PARAMETER Required
         Mark the field as required with an asterisk.
     .PARAMETER Validate
-        ScriptBlock for custom validation. Receives the input value as $args[0].
-        Return $true if valid, $false or throw to indicate invalid.
-        Used with -ErrorMessage to show a custom error message.
+        ScriptBlock for custom validation when given the input value as $args[0]. Return $true if
+        valid, $false or throw if not. -ErrorMessage sets the message shown. Without it, an error
+        the block wrote before failing shows in the field.
     .PARAMETER ValidatePattern
         Regex pattern the input must match. Shows error if input doesn't match.
         For simple pattern validation, prefer this over -Validate.
@@ -90,7 +90,7 @@ function New-UiInput {
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         # The common flavors in one form
-        New-UiInput -Label 'Name' -Variable 'name' -Placeholder 'Jane Doe'
+        New-UiInput -Label 'Name' -Variable 'name' -Placeholder 'Patricia'
         New-UiInput -Label 'Age' -Variable 'age' -InputType Int
         New-UiInput -Label 'Hourly rate' -Variable 'rate' -InputType Double
         New-UiInput -Label 'Password' -Variable 'pass' -Secure
@@ -179,6 +179,10 @@ function New-UiInput {
 
     $session = Assert-UiSession -CallerName 'New-UiInput'
     Write-Debug "Label='$Label', Variable='$Variable', InputType='$InputType', Secure=$isSecure"
+
+    $ownerSessionId = $session.SessionId
+    $pushSession    = ${function:Push-UiSession}
+    $popSession     = ${function:Pop-UiSession}
 
     $colors  = Get-ThemeColors
     $parent  = $session.CurrentParent
@@ -326,14 +330,18 @@ function New-UiInput {
         # Click handler hands off to the shared dispatcher. Mode + Options is all it needs.
         $helperBtn.Add_Click({
             param($sender, $eventArgs)
-            $info = $sender.Tag
+
+            # Covers Show-UiHelperError throwing from inside the catch block
+            trap { Write-Debug "New-UiInput helper button: $_"; continue }
+
+            $info         = $sender.Tag
+            $sessionToken = & $pushSession -SessionId $ownerSessionId
             try {
                 $result = Invoke-UiHelperPicker -Mode $info.Mode -Options $info.HelperOptions
                 if ($result) { $info.TextBox.Text = $result }
             }
-            catch {
-                Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode
-            }
+            catch { Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode }
+            & $popSession -Token $sessionToken
         }.GetNewClosure())
 
         [System.Windows.Controls.Grid]::SetColumn($helperBtn, 1)
@@ -365,6 +373,10 @@ function New-UiInput {
             BorderBrush     = $borderBrush
             ErrorBrush      = $errorBrush
             IsSecure        = $isSecure
+            SessionId       = $ownerSessionId
+            PushSession     = $pushSession
+            PopSession      = $popSession
+            InvokeCallback  = ${function:Invoke-UiCallback}
         }
 
         # Validation runner - checks input and updates UI
@@ -384,14 +396,24 @@ function New-UiInput {
 
             # Run scriptblock validation
             if ($ctx.Validate) {
+                $sessionToken = & $ctx.PushSession -SessionId $ctx.SessionId
+                $written      = [System.Collections.Generic.List[object]]::new()
                 try {
-                    $result = & $ctx.Validate $inputValue
+                    $result = & $ctx.InvokeCallback -ScriptBlock $ctx.Validate -ArgumentList (, $inputValue) -ErrorList $written
                     # Treat any falsy value (including $null, 0, empty string) as validation failure
                     if (!$result) { $isValid = $false }
                 }
                 catch {
                     $isValid      = $false
                     $errorMessage = $_.Exception.Message
+                }
+                & $ctx.PopSession -Token $sessionToken
+
+                # The written error beats Invalid input and -ErrorMessage beats both
+                $needsText = !$isValid -and !$errorMessage -and !$ctx.ErrorMessage
+                if ($needsText -and $written.Count) { $errorMessage = "$($written[0])" }
+                elseif ($isValid) {
+                    foreach ($record in $written) { Write-Warning "New-UiInput Validate error: $record" }
                 }
             }
 
@@ -477,9 +499,7 @@ function New-UiInput {
     Set-FullWidthConstraint -Control $stack -Parent $parent -FullWidth:$FullWidth
 
     # Apply custom WPF properties if specified
-    if ($WPFProperties) {
-        Set-UiProperties -Control $stack -Properties $WPFProperties
-    }
+    if ($WPFProperties) {  Set-UiProperties -Control $stack -Properties $WPFProperties }
 
     Write-Debug "Adding to $($parent.GetType().Name)"
     [void]$parent.Children.Add($stack)
@@ -492,9 +512,7 @@ function New-UiInput {
     Register-UiControlComplete -Name $Variable -Control $inputControl -InitialValue $initialValue -RegisterTheme:$isTextBox
 
     # Hook conditional enabling if specified
-    if ($EnabledWhen) {
-        Register-UiCondition -TargetControl $inputControl -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled
-    }
+    if ($EnabledWhen) { Register-UiCondition -TargetControl $inputControl -Condition $EnabledWhen -ClearIfDisabled:$ClearIfDisabled }
 
     # Enter triggers the submit button
     if ($SubmitButton) {
@@ -503,17 +521,14 @@ function New-UiInput {
             param($sender, $keyArgs)
             if ($keyArgs.Key -eq [System.Windows.Input.Key]::Return) {
                 # Only trigger if input has actual content
-                $inputValue = if ($sender -is [System.Windows.Controls.PasswordBox]) {
-                    $sender.Password
-                }
-                else {
-                    $sender.Text
-                }
+                $inputValue = if ($sender -is [System.Windows.Controls.PasswordBox]) { $sender.Password }
+                              else { $sender.Text }
+
                 if ([string]::IsNullOrWhiteSpace($inputValue)) { return }
-                
-                $sess = [PsUi.SessionManager]::Current
+
+                $sess = [PsUi.SessionManager]::GetSession($ownerSessionId)
                 if (!$sess) { return }
-                
+
                 # Look up registered button and trigger its click
                 $btn = $sess.GetRegisteredButton($btnName)
                 if ($btn -and $btn.IsEnabled) {

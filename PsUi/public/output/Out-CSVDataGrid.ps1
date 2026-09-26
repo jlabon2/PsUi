@@ -19,11 +19,11 @@ function Out-CSVDataGrid {
     .PARAMETER TitleText
         Window title.
     .PARAMETER IsFilterable
-        Kept for v2.x call sites. The filter box is always on now, so this switch
-        changes nothing.
+        Kept for scripts written against an earlier build. The filter box is always on now,
+        so this switch changes nothing.
     .PARAMETER IsResizeable
-        Adds the corner resize grip. The window resizes either way. Kept for v2.x
-        call sites.
+        Adds the corner resize grip. The window resizes either way. Kept for scripts written
+        against an earlier build.
     .PARAMETER ColumnsToPopupOnSelection
         Column names that pop a separate viewer when clicked. Use for long values
         you can't easily edit inline.
@@ -331,8 +331,7 @@ function Out-CSVDataGrid {
 
             Set-UIResources -Window $window -Colors $colors
 
-            $appId = "PsUi.CSVEditor." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-            [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+            [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.CSVEditor')
 
             $csvWindowIcon = $null
             try {

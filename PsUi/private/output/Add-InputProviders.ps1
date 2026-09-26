@@ -19,6 +19,11 @@ function Add-InputProviders {
 
     $isDebug = $DebugEnabled
 
+    # Runs during the click so this is the run's own session
+    $ownerSessionId = [PsUi.SessionManager]::CurrentSessionId
+    $pushSession    = ${function:Push-UiSession}
+    $popSession     = ${function:Pop-UiSession}
+
     # Input Provider for Read-Host
     $Executor.InputProvider = {
         param($PromptText)
@@ -32,17 +37,24 @@ function Add-InputProviders {
             Start-Sleep -Milliseconds 500
         }
 
+        # If the dialog throws, continue resumes at the pop and the run gets the value set before the push
+        trap { if ($isDebug) { [Console]::WriteLine("[DEBUG] Read-Host dialog failed: $_") }; continue }
+        $result       = ''
+        $sessionToken = & $pushSession -SessionId $ownerSessionId
+
         # Detect native Pause command (calls Read-Host with this exact prompt)
         $isPause = $PromptText -eq 'Press Enter to continue...' -or $PromptText -eq 'Press any key to continue . . .'
         if ($isPause) {
             if ($isDebug) { [Console]::WriteLine('[DEBUG] Detected Pause pattern') }
             Show-UiMessageDialog -Title 'Paused' -Message 'Press OK to continue...' -Buttons OK -Icon Info | Out-Null
+            & $popSession -Token $sessionToken
             if ($wasPinned) { $Window.Topmost = $true }
             return ''
         }
 
         $msg    = if (![string]::IsNullOrWhiteSpace($PromptText)) { $PromptText } else { 'The running script is requesting input.' }
         $result = Show-UiInputDialog -Title 'Script Input Required' -Prompt $msg
+        & $popSession -Token $sessionToken
         if ($isDebug) { [Console]::WriteLine("[DEBUG] Read-Host returned: $(if ($result) { '<value>' } else { '<empty>' })") }
         if ($wasPinned) { $Window.Topmost = $true }
         return $result
@@ -59,8 +71,12 @@ function Add-InputProviders {
             Start-Sleep -Milliseconds 500
         }
 
+        trap { if ($isDebug) { [Console]::WriteLine("[DEBUG] Read-Host -AsSecureString dialog failed: $_") }; continue }
         $msg          = if (![string]::IsNullOrWhiteSpace($PromptText)) { $PromptText } else { 'Script is requesting a password.' }
+        $secureInput  = $null
+        $sessionToken = & $pushSession -SessionId $ownerSessionId
         $secureInput  = Show-UiInputDialog -Title 'Secure Input Required' -Prompt $msg -Password
+        & $popSession -Token $sessionToken
         if ($wasPinned) { $Window.Topmost = $true }
 
         if ($secureInput) {
@@ -85,7 +101,11 @@ function Add-InputProviders {
             Start-Sleep -Milliseconds 500
         }
 
-        $result = Show-UiChoiceDialog -Caption $Caption -Message $Message -Choices $Choices -DefaultChoice $DefaultChoice
+        trap { if ($isDebug) { [Console]::WriteLine("[DEBUG] PromptForChoice dialog failed: $_") }; continue }
+        $result       = $DefaultChoice
+        $sessionToken = & $pushSession -SessionId $ownerSessionId
+        $result       = Show-UiChoiceDialog -Caption $Caption -Message $Message -Choices $Choices -DefaultChoice $DefaultChoice
+        & $popSession -Token $sessionToken
         if ($isDebug) { [Console]::WriteLine("[DEBUG] PromptForChoice returned: $result") }
         if ($wasPinned) { $Window.Topmost = $true }
         return $result
@@ -102,7 +122,11 @@ function Add-InputProviders {
             Start-Sleep -Milliseconds 500
         }
 
-        $result = Show-UiCredentialDialog -Caption $Caption -Message $Message -UserName $UserName -TargetName $TargetName
+        trap { if ($isDebug) { [Console]::WriteLine("[DEBUG] Get-Credential dialog failed: $_") }; continue }
+        $result       = $null
+        $sessionToken = & $pushSession -SessionId $ownerSessionId
+        $result       = Show-UiCredentialDialog -Caption $Caption -Message $Message -UserName $UserName -TargetName $TargetName
+        & $popSession -Token $sessionToken
         if ($isDebug) { [Console]::WriteLine("[DEBUG] Get-Credential returned: $(if ($result) { 'PSCredential' } else { '<cancelled>' })") }
         if ($wasPinned) { $Window.Topmost = $true }
         return $result
@@ -119,7 +143,11 @@ function Add-InputProviders {
             Start-Sleep -Milliseconds 500
         }
 
-        $result = Show-UiPromptDialog -Caption $Caption -Message $Message -Descriptions $Descriptions
+        trap { if ($isDebug) { [Console]::WriteLine("[DEBUG] Prompt dialog failed: $_") }; continue }
+        $result       = [System.Collections.Generic.Dictionary[string, psobject]]::new()
+        $sessionToken = & $pushSession -SessionId $ownerSessionId
+        $result       = Show-UiPromptDialog -Caption $Caption -Message $Message -Descriptions $Descriptions
+        & $popSession -Token $sessionToken
         if ($isDebug) { [Console]::WriteLine("[DEBUG] Prompt returned: $(if ($result) { "$($result.Count) values" } else { '<cancelled>' })") }
         if ($wasPinned) { $Window.Topmost = $true }
         return $result

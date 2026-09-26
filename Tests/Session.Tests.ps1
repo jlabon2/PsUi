@@ -1461,3 +1461,32 @@ function Show-Dash { New-UiLabel -Text 'x' }
         }
     }
 }
+
+Describe 'Set-UiCapturedVariable' -Tag 'RequiresSession' {
+    BeforeAll {
+        $script:storeId          = [PsUi.SessionManager]::CreateSession()
+        $script:storeSavedId     = [PsUi.SessionManager]::CurrentSessionId
+        $script:storeHadGlobal   = Test-Path Variable:Global:__PsUiSessionId
+        $script:storeSavedGlobal = if ($script:storeHadGlobal) { $Global:__PsUiSessionId } else { $null }
+        [PsUi.SessionManager]::SetCurrentSession($script:storeId)
+        $Global:__PsUiSessionId = $script:storeId
+        $script:store = [PsUi.SessionManager]::Current
+    }
+
+    AfterAll {
+        [PsUi.SessionManager]::DisposeSession($script:storeId)
+        [PsUi.SessionManager]::SetCurrentSession($script:storeSavedId)
+        if ($script:storeHadGlobal) { $Global:__PsUiSessionId = $script:storeSavedGlobal }
+        else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+    }
+
+    It 'Puts the value in the window''s captured store, $null included' {
+        $when = Get-Date
+        Set-UiCapturedVariable -Name 'lastRun' -Value $when
+        $script:store.GetCapturedVariable('lastRun') | Should -Be $when
+
+        Set-UiCapturedVariable 'lastRun' $null
+        $script:store.CapturedVariables.ContainsKey('lastRun') | Should -BeTrue
+        $script:store.GetCapturedVariable('lastRun') | Should -BeNullOrEmpty
+    }
+}

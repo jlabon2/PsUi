@@ -23,6 +23,11 @@ function New-UiTool {
         regular controls. For everything else, "time to GUI" for a script is one line.
     .PARAMETER Command
         The command to wrap: a cmdlet, function, alias, script path, or a CommandInfo object.
+
+        Pass a .ps1 that has no param block and only defines functions, and the form wraps its
+        one function, or the one named after the file. Run dot sources the whole file first, so
+        helper functions in the same file work. New-UiTool refuses a file that runs other code
+        at its top level, since every Run would repeat it.
     .PARAMETER Title
         Window title. Defaults to the command name.
     .PARAMETER Width
@@ -203,7 +208,8 @@ function New-UiTool {
     Write-Debug "Introspection complete: $($uiDef.Parameters.Count) parameter(s) detected"
 
     # No current support for using on PsUi commands and probably won't ever be. Warn rather than refuse, since use for reading parameters is a fair thing to want.
-    if ($uiDef.CommandInfo -and $uiDef.CommandInfo.Source -eq 'PsUi') {
+    # PsUi dot sources a function file itself, so that function's Source reads PsUi too
+    if ($uiDef.CommandInfo -and $uiDef.CommandInfo.Source -eq 'PsUi' -and !$uiDef.FunctionFile) {
         Write-Warning "$($uiDef.CommandInfo.Name) is a PsUi command. New-UiTool on PsUi's own commands is unsupported and gives unexpected results."
     }
 
@@ -373,19 +379,22 @@ function New-UiTool {
         $colors = Get-ThemeColors
 
         $paramsGroupBox = [System.Windows.Controls.GroupBox]::new()
-        $paramsGroupBox.Margin = [System.Windows.Thickness]::new(0,0,0,8)
+        # Lines up with the About card
+        $paramsGroupBox.Margin = [System.Windows.Thickness]::new(4, 0, 4, 8)
 
         if ($hasMultipleSets) {
             $setItems = @($parameterSets)
             $defaultSet = if ($parameterSetName) { $parameterSetName } else { $setItems[0] }
 
             # Re-capture values for the nested OnChange closure (PS 5.1 closure workaround)
-            $capturedHelpers       = $capturedInputHelpers
-            $capturedCmdInfoForOnChange = $cmdInfo
-            $capturedCmdForOnChange = $capturedCommand
-            $capturedExcludesForOnChange = $capturedExcludes
+            $capturedHelpers                  = $capturedInputHelpers
+            $capturedCmdInfoForOnChange       = $cmdInfo
+            $capturedCmdForOnChange           = $capturedCommand
+            $capturedExcludesForOnChange      = $capturedExcludes
             $capturedShowParamTypeForOnChange = $capturedShowParamType
-            $capturedDescriptionsForOnChange = $paramDescriptions
+            $capturedDescriptionsForOnChange  = $paramDescriptions
+            $capturedDefaultsForOnChange      = if ($uiDef.ParameterDefaults) { $uiDef.ParameterDefaults } else { @{} }
+            $capturedIncludeCommonForOnChange = [bool]$uiDef.IncludeCommon
 
             $headerGrid = [System.Windows.Controls.Grid]::new()
             $col1 = [System.Windows.Controls.ColumnDefinition]::new()
@@ -423,9 +432,10 @@ function New-UiTool {
                 }
 
                 # The captured CommandInfo, used as is. Fetching it again can miss a function that has since been extracted away.
-                $cmdInfo = $capturedCmdInfoForOnChange
-                $commonParams = @('Verbose','Debug','ErrorAction','WarningAction','InformationAction','ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer','PipelineVariable','WhatIf','Confirm','UseTransaction')
-                $excludeList = @($capturedExcludesForOnChange) + $commonParams
+                $cmdInfo      = $capturedCmdInfoForOnChange
+                $commonParams = @([System.Management.Automation.Cmdlet]::CommonParameters) + @([System.Management.Automation.Cmdlet]::OptionalCommonParameters)
+                $excludeList  = @($capturedExcludesForOnChange)
+                if (!$capturedIncludeCommonForOnChange) { $excludeList += $commonParams }
 
                 # Get the parameter set definition to check mandatory correctly
                 $paramSetDef = $cmdInfo.ParameterSets | Where-Object { $_.Name -eq $newSet }
@@ -463,14 +473,15 @@ function New-UiTool {
                     }
 
                     $newParams.Add([PSCustomObject]@{
-                        Name        = $paramName
-                        Type        = $param.ParameterType
-                        IsMandatory = $isMandatoryInSet -or $isSetDefiningSwitch
-                        ValidateSet = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
+                        Name          = $paramName
+                        Type          = $param.ParameterType
+                        IsMandatory   = $isMandatoryInSet -or $isSetDefiningSwitch
+                        ValidateSet   = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
                         ValidateRange = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateRangeAttribute] } | Select-Object -First 1
-                        DefaultValue = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.PSDefaultValueAttribute] } | Select-Object -First 1
-                        IsSwitch    = $param.ParameterType -eq [switch]
-                        Position    = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).Position | Where-Object { $_ -ge 0 } | Select-Object -First 1
+                        DefaultValue  = $capturedDefaultsForOnChange[$paramName]
+                        HasDefault    = $capturedDefaultsForOnChange.ContainsKey($paramName)
+                        IsSwitch      = $param.ParameterType -eq [switch]
+                        Position      = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).Position | Where-Object { $_ -ge 0 } | Select-Object -First 1
                     })
                 }
 

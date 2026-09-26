@@ -49,7 +49,8 @@ function ConvertTo-UiDataGridSnapshot {
     }
 
     # Cast once so PSMemberSet construction below doesn't recast per row.
-    $defaultPropNamesArr = if ($defaultPropertyNames -and $defaultPropertyNames.Count -gt 0) { [string[]]$defaultPropertyNames } else { $null }
+    # Typed on the variable, since an if expression hands back object[]
+    [string[]]$defaultPropNamesArr = if ($defaultPropertyNames -and $defaultPropertyNames.Count -gt 0) { $defaultPropertyNames } else { $null }
 
     # PSPropertySet content is identical for every row in a homogeneous collection.
     # Build once outside the loop. Only the per row PSMemberSet has to stay inside - those can't be shared across objects.
@@ -67,7 +68,9 @@ function ConvertTo-UiDataGridSnapshot {
         }
     }
 
-    $result = [System.Collections.Generic.List[object]]::new($Items.Count)
+    $result       = [System.Collections.Generic.List[object]]::new($Items.Count)
+    $commandLines = $null
+    $copyRefused  = @{}
 
     foreach ($item in $Items) {
         if ($null -eq $item) { continue }
@@ -88,11 +91,22 @@ function ConvertTo-UiDataGridSnapshot {
             }
             continue
         }
-        if ($item -is [System.Management.Automation.PSCustomObject]) {
 
-            # Copy() gives an independent property bag over the same values - the NoteProperties below land on the DISPLAY row, never the user's object.
-            # Mutating the original leaked _BaseObject/_SearchText into the user's own Export-Csv and ConvertTo-Json (the self referential _BaseObject recursed to the json depth cap), and -PassThru handed back rows wearing grid internals.
-            $display = $item.PSObject.Copy()
+        $display = $null
+        if ($item -is [System.Management.Automation.PSCustomObject]) {
+            # Copy() throws on a deserialized row from Import-Clixml or Invoke-Command
+            $rowType = [string]$item.PSObject.TypeNames[0]
+            if (!$copyRefused.ContainsKey($rowType)) {
+                try { $display = $item.PSObject.Copy() }
+                catch {
+                    # One throw per type, at 300us a row on 5.1
+                    $copyRefused[$rowType] = $true
+                    Write-Debug "Copy() refused a $rowType row: $_"
+                }
+            }
+        }
+
+        if ($null -ne $display) {
 
             # Keep the _BaseObject contract consistent across input types. Downstream consumers (context menus, action handlers) reach for $row._BaseObject without caring how the row got into the grid.
             # A repassed display row already carries one pointing at the true original - keep that chain intact.
@@ -115,21 +129,47 @@ function ConvertTo-UiDataGridSnapshot {
             $snap         = [ordered]@{}
             # 256 char initial capacity covers a typical property heavy row (~10 props * ~25 chars) without reallocs.
             $searchBuffer = if ($BuildSearchIndex) { [System.Text.StringBuilder]::new(256) } else { $null }
+            $isProcess    = $item -is [System.Diagnostics.Process]
 
             foreach ($prop in $item.PSObject.Properties) {
 
                 $name = $prop.Name
                 if ($name.StartsWith('_')) { continue }
                 if ($prop -is [System.Management.Automation.PSMemberSet]) { continue }
+
+                # Modules walks every loaded DLL, 10ms a process on either edition and 3.9s for 390. $row._BaseObject.Modules still has it in there
+                if ($isProcess -and $name -eq 'Modules') { continue }
+
                 $val = $null
-                try { $val = $prop.Value }
-                catch {
-                    # ScriptProperty throws on protected resources (Process.MainModule on elevated procs). Null is what the grid would render anyway.
-                    $val = $null
+                if ($isProcess -and $name -eq 'CommandLine') {
+                    # On 7 this ScriptProperty runs a CIM query per process, 54s for 390, where one query for all of them takes 150-240ms.
+                    # Leaving it off the row doesn't work, because the row carries the Process type name and the type data puts the ScriptProperty straight back
+                    if ($null -eq $commandLines) {
+                        $commandLines = @{}
+                        try {
+                            $cimProcesses = Get-CimInstance -ClassName Win32_Process -Property ProcessId, CommandLine -ErrorAction Stop
+
+                            # ProcessId is UInt32 against Process.Id's Int32, so cast or miss
+                            foreach ($cimProcess in $cimProcesses) {  $commandLines[[int]$cimProcess.ProcessId] = $cimProcess.CommandLine }
+                        }
+                        catch { Write-Debug "Bulk CommandLine query failed: $_" }
+                    }
+
+                    # If the Process never started its Id reads null, and a null key throws
+                    if ($null -ne $item.Id) { $val = $commandLines[$item.Id] }
+                }
+                else {
+                    try { $val = $prop.Value }
+                    catch {
+                        # Throws on protected ones, like MainModule on an elevated process
+                        $val = $null
+                    }
                 }
 
                 $snap[$name] = $val
-                if ($searchBuffer -and $null -ne $val) {
+
+                # Parent is a Process built from an Id, and its ToString rereads the process table, 1.6s over a full Get-Process on 7.
+                if ($searchBuffer -and $null -ne $val -and !($isProcess -and $name -eq 'Parent')) {
                     # [string] read a hashtable as its type name
                     [void]$searchBuffer.Append([PsUi.ValueKind]::IndexText($val, 25, 512))
                     [void]$searchBuffer.Append(' ')

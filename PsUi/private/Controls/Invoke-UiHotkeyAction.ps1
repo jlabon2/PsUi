@@ -17,17 +17,16 @@ function Invoke-UiHotkeyAction {
         return
     }
 
+    $sessionToken = Push-UiSession -SessionId $Context.SessionId
+
     if ($noAsync) {
-        # Run synchronously on UI thread
-        try {
-            & $action
-        }
-        catch {
-            Write-Warning "Hotkey action failed (error occured): $_"
-        }
+        try { $null = Invoke-UiCallback -ScriptBlock $action -Label 'Hotkey action' }
+        catch { Write-Warning "Hotkey action error: $_" }
     }
     else {
         # Run async using standard pattern
-        Invoke-UiAsync -ScriptBlock $action
+        $null = Invoke-UiAsync -ScriptBlock $action
     }
+
+    Pop-UiSession -Token $sessionToken
 }

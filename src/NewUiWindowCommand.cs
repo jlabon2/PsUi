@@ -179,7 +179,20 @@ namespace PsUi
             bool hasExplicitHeight = MyInvocation.BoundParameters.ContainsKey("Height");
             bool autoSize = !hasExplicitWidth && !hasExplicitHeight;
             bool autoSizeHeight = hasExplicitWidth && !hasExplicitHeight;
-            
+
+            // Called from another window, this runs in generated text without a file
+            string callerScriptName = MyInvocation.ScriptName;
+            int callerScriptLine = MyInvocation.ScriptLineNumber;
+            int outerContentLine = 0;
+            SessionContext outerSession = SessionManager.Current;
+            if (string.IsNullOrEmpty(callerScriptName) && outerSession != null && !string.IsNullOrEmpty(outerSession.CallerScriptName)
+                && outerSession.Window != null && outerSession.Window.Dispatcher.CheckAccess())
+            {
+                callerScriptName = outerSession.CallerScriptName;
+                outerContentLine = outerSession.CallerScriptLine;
+                callerScriptLine = outerContentLine + callerScriptLine - 1;
+            }
+
             // Capture all parameters for the thread closure
             var windowParams = new WindowParameters
             {
@@ -213,11 +226,13 @@ namespace PsUi
                 DebugMode = debugMode,
                 VerboseMode = verboseMode,
                 // Capture caller location for error reporting
-                CallerScriptName = MyInvocation.ScriptName,
-                CallerScriptLine = MyInvocation.ScriptLineNumber,
+                CallerScriptName = callerScriptName,
+                CallerScriptLine = callerScriptLine,
+                OuterContentLine = outerContentLine,
                 ExportOnClose = ExportOnClose.IsPresent,
                 Splash = Splash.IsPresent,
-                Logo = Logo
+                Logo = Logo,
+                ContentErrorAction = GetContentErrorAction()
             };
 
             // Capture the host for Write-Host routing
@@ -233,6 +248,8 @@ namespace PsUi
             Dictionary<string, object> exportedVariables = windowParams.ExportOnClose 
                 ? new Dictionary<string, object>() 
                 : null;
+
+            var contentErrors = new ContentErrorRelay();
 
             // Splash window runs on its own STA thread while main window loads
             Thread splashThread = null;
@@ -277,7 +294,7 @@ namespace PsUi
             {
                 try
                 {
-                    createdWindow = RunWindow(windowParams, host, windowReady, windowHolder, exportedVariables, splashDispatcherCapture);
+                    createdWindow = RunWindow(windowParams, host, contentErrors, windowReady, windowHolder, exportedVariables, splashDispatcherCapture);
                 }
                 catch (Exception ex)
                 {
@@ -285,11 +302,40 @@ namespace PsUi
                     // Signal ready even on error so caller doesn't hang
                     if (windowReady != null) { windowReady.Set(); }
                 }
+                finally
+                {
+                    // If the build dies early, it would wait forever for the next error
+                    contentErrors.Finish();
+                }
             });
             windowThread.SetApartmentState(ApartmentState.STA);
             windowThread.IsBackground = false; // Keep alive until window closes
             windowThread.Name = "PsUi-Window-" + Guid.NewGuid().ToString().Substring(0, 8);
             windowThread.Start();
+
+            // Under Stop, only commands told to carry on still reach the relay
+            if (windowParams.ContentErrorAction == ActionPreference.Stop)
+            {
+                SetErrorAction(ActionPreference.Continue);
+            }
+            else if ((debugMode || verboseMode) && !MyInvocation.BoundParameters.ContainsKey("ErrorAction"))
+            {
+                // 5.1 reads -Debug on New-UiWindow as ErrorAction Inquire and -Verbose as Continue, where 7 keeps the script's preference
+                SetErrorAction(windowParams.ContentErrorAction);
+            }
+
+            // Ahead of both waits, since the window thread blocks on each error
+            try
+            {
+                contentErrors.Pump(WriteError);
+            }
+            catch
+            {
+                // WriteError throws when the pipeline stops or an Inquire gets Halt, and the window thread sees Halted before it shows
+                windowThread.Join();
+                if (windowReady != null) { windowReady.Dispose(); }
+                throw;
+            }
 
             // With -PassThru, return immediately after window spawns (dont wait for close)
             if (windowParams.PassThru)
@@ -299,13 +345,9 @@ namespace PsUi
                 
                 if (threadError != null)
                 {
-                    ThrowTerminatingError(new ErrorRecord(
-                        threadError, 
-                        "WindowError", 
-                        ErrorCategory.OperationStopped, 
-                        null));
+                    StopWindow(threadError, windowParams.ContentErrorAction);
                 }
-                
+
                 // Get window from holder (set before Dispatcher.Run() blocked)
                 if (windowHolder[0] != null)
                 {
@@ -316,16 +358,12 @@ namespace PsUi
             {
                 // Normal mode: wait for window to close
                 windowThread.Join();
-            
+
                 if (threadError != null)
                 {
-                    ThrowTerminatingError(new ErrorRecord(
-                        threadError, 
-                        "WindowError", 
-                        ErrorCategory.OperationStopped, 
-                        null));
+                    StopWindow(threadError, windowParams.ContentErrorAction);
                 }
-                
+
                 // Export captured variables to caller's scope
                 if (exportedVariables != null && exportedVariables.Count > 0)
                 {
@@ -338,6 +376,64 @@ namespace PsUi
         }
         
         // RunWindow and helper methods moved to NewUiWindowCommand.Builder.cs
+
+        // 7 labels a thrown error 'Exception' instead of saying which command threw it
+        private static ErrorRecord WindowError(Exception threadError)
+        {
+            RuntimeException thrown = threadError as RuntimeException;
+            if (thrown != null) { thrown.WasThrownFromThrowStatement = false; }
+            return new ErrorRecord(threadError, "WindowError", ErrorCategory.OperationStopped, null);
+        }
+
+        // WriteError under Stop ends the script, not just the statement
+        private void StopWindow(Exception threadError, ActionPreference contentErrorAction)
+        {
+            ErrorRecord record = WindowError(threadError);
+            if (contentErrorAction == ActionPreference.Stop && SetErrorAction(ActionPreference.Stop))
+            {
+                WriteError(record);
+            }
+            ThrowTerminatingError(record);
+        }
+
+        // Starts on -ErrorAction if passed, else the calling script's preference
+        private ActionPreference GetContentErrorAction()
+        {
+            object preference;
+            if (!MyInvocation.BoundParameters.TryGetValue("ErrorAction", out preference))
+            {
+                preference = SessionState.PSVariable.GetValue("ErrorActionPreference");
+            }
+            if (preference == null) { return ActionPreference.Continue; }
+
+            try
+            {
+                return (ActionPreference)LanguagePrimitives.ConvertTo(preference, typeof(ActionPreference),
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (PSInvalidCastException)
+            {
+                return ActionPreference.Continue;
+            }
+        }
+
+        // ErrorAction is internal, and this is the setter -ErrorAction uses
+        private bool SetErrorAction(ActionPreference errorAction)
+        {
+            try
+            {
+                System.Reflection.PropertyInfo errorActionProperty = CommandRuntime.GetType().GetProperty("ErrorAction",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (errorActionProperty == null || !errorActionProperty.CanWrite) { return false; }
+                errorActionProperty.SetValue(CommandRuntime, errorAction, null);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Setting New-UiWindow's ErrorAction to " + errorAction + " failed: " + ex.Message);
+                return false;
+            }
+        }
 
         // Container for thread closure (avoids capturing 'this')
         private class WindowParameters
@@ -374,11 +470,82 @@ namespace PsUi
             // Caller location info for accurate error reporting
             public string CallerScriptName { get; set; }
             public int CallerScriptLine { get; set; }
+            // Zero unless this window opened from inside another one
+            public int OuterContentLine { get; set; }
             // Export captured variables to global scope on window close
             public bool ExportOnClose { get; set; }
             // Show splash screen while loading
             public bool Splash { get; set; }
             public string Logo { get; set; }
+            public ActionPreference ContentErrorAction { get; set; }
+        }
+
+        // WriteError only runs on the cmdlet thread, and Post waits for it
+        private sealed class ContentErrorRelay
+        {
+            private readonly object _gate = new object();
+            private ErrorRecord _pending;
+            private bool _finished;
+            private bool _halted;
+
+            // Set once a WriteError throws
+            public bool Halted
+            {
+                get { lock (_gate) { return _halted; } }
+            }
+
+            // Window thread. False once the cmdlet side has stopped taking records.
+            public bool Post(ErrorRecord record)
+            {
+                lock (_gate)
+                {
+                    if (_halted || _finished) { return false; }
+                    _pending = record;
+                    Monitor.PulseAll(_gate);
+                    while (_pending != null && !_halted) { Monitor.Wait(_gate); }
+                    return !_halted;
+                }
+            }
+
+            public void Finish()
+            {
+                lock (_gate)
+                {
+                    _finished = true;
+                    Monitor.PulseAll(_gate);
+                }
+            }
+
+            // Cmdlet thread. A throwing write halts the relay and carries on up.
+            public void Pump(Action<ErrorRecord> write)
+            {
+                while (true)
+                {
+                    ErrorRecord record;
+                    lock (_gate)
+                    {
+                        while (_pending == null && !_finished) { Monitor.Wait(_gate); }
+                        if (_pending == null) { return; }
+                        record = _pending;
+                    }
+
+                    bool written = false;
+                    try
+                    {
+                        write(record);
+                        written = true;
+                    }
+                    finally
+                    {
+                        lock (_gate)
+                        {
+                            _pending = null;
+                            if (!written) { _halted = true; }
+                            Monitor.PulseAll(_gate);
+                        }
+                    }
+                }
+            }
         }
     }
 }

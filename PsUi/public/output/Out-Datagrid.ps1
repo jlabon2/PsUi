@@ -189,10 +189,13 @@ function Out-Datagrid {
                     if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
                 }
                 if ($null -ne $sessionId -and $sessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($sessionId)  }
-                if ($null -ne $priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
 
-                if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
-                else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+                if ($null -ne $priorSessionId -and ($priorSessionId -eq [Guid]::Empty -or [PsUi.SessionManager]::GetSession($priorSessionId))) {
+                    if ($priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
+
+                    if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+                    else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+                }
 
                 if ($iconFontSnap) {
                     [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
@@ -227,8 +230,7 @@ function Out-Datagrid {
             Set-UIResources -Window $window -Colors $colors
 
             try {
-                $appId = "PsUi.OutDatagrid." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-                [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+                [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.OutDatagrid')
             }
             catch { Write-Debug "SetWindowAppId failed: $_" }
 
@@ -354,13 +356,19 @@ function Out-Datagrid {
             if ($context.NoSafeWrap)    { $gridArgs.NoSafeWrap    = $true }
 
             New-UiDataGrid @gridArgs
+            $gridRef = $session.GetControl('picked')
+
+            # Left at New-UiDataGrid's 300px cap the grid floats centered in the star row, and -Fill doesnt help since it looks for a page ScrollViewer this window doesn't have
+            $gridRef.MaxHeight = [double]::PositiveInfinity
+
+            # The 600px floor pushes the scrollbar off a window under 650 wide
+            $gridRef.MinWidth = 0
 
             $session.CurrentParent = $buttonBar
 
             # Get-UiSession comes back null in WPF click scopes, so the click actions take direct refs.
             $winRef    = $window
             $resultRef = $context.SharedResult
-            $gridRef   = $session.GetControl('picked')
 
             if ($context.PassThru) {
                 New-UiButton -Text 'OK' -NoAsync -Action {
@@ -398,10 +406,14 @@ function Out-Datagrid {
                 if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
             }
             [PsUi.SessionManager]::DisposeSession($sessionId)
-            if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
 
-            if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
-            else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
+            # The grid's opener can close first and move the thread on
+            if ($priorSessionId -eq [Guid]::Empty -or [PsUi.SessionManager]::GetSession($priorSessionId)) {
+                if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
+
+                if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+                else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
+            }
 
             if ($iconFontSnap) {
                 [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)

@@ -40,7 +40,7 @@ function Set-UiProgress {
         [ValidateSet('Info', 'Success', 'Warning', 'Error')]
         [string]$Severity,
 
-        # Bool can't be null, so PSBoundParameters.ContainsKey() is what tells us whether the caller actually asked to toggle the mode.
+        # Bool can't be null, so only PSBoundParameters.ContainsKey() says whether your script asked to toggle the mode.
         [bool]$Indeterminate
     )
 
@@ -55,55 +55,54 @@ function Set-UiProgress {
         return
     }
 
-    $hasValue     = $PSBoundParameters.ContainsKey('Value')
-    $hasIncrement = $PSBoundParameters.ContainsKey('Increment')
-    $hasLabel     = $PSBoundParameters.ContainsKey('Label')
-    $hasSeverity  = $PSBoundParameters.ContainsKey('Severity')
-    $hasIndeterm  = $PSBoundParameters.ContainsKey('Indeterminate')
-
-    # Nothing to do? Don't bother the dispatcher about it.
-    if (!($hasValue -or $hasIncrement -or $hasLabel -or $hasSeverity -or $hasIndeterm)) {
-        return
+    # Only what was passed goes across and is keyed by parameter name
+    $change = @{}
+    foreach ($key in 'Value', 'Increment', 'Label', 'Severity', 'Indeterminate') {
+        if ($PSBoundParameters.ContainsKey($key)) { $change[$key] = $PSBoundParameters[$key] }
     }
 
-    Invoke-OnUIThread {
-        if ($hasValue -or $hasIncrement) {
-            # Read $progress.Value here (inside the dispatcher) so -Increment alone sees the latest committed value, not whatever was current when the call queued. Matters when callers fire Set-UiProgress in tight loops.
-            $newValue = if ($hasValue) { $Value } else { $progress.Value }
+    # Only -Variable passed? Don't bother the UI thread about it.
+    if (!$change.Count) { return }
 
-            if ($hasIncrement) { $newValue += $Increment }
+    if ($change.Contains('Severity')) { $change.BrushKey = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault }
 
-            # Clamp so callers don't have to think about it
+    $labelMissed = Invoke-OnUIThread -ArgumentList $progress, $change -ScriptBlock {
+        param($progress, $change)
+
+        if ($change.Contains('Value') -or $change.Contains('Increment')) {
+            # Read $progress.Value here on the UI thread, so -Increment in a tight loop sees the latest committed value and not whatever was current when the call queued
+            $newValue = if ($change.Contains('Value')) { $change.Value } else { $progress.Value }
+
+            if ($change.Contains('Increment')) { $newValue += $change.Increment }
+
+            # Clamp so your script doesn't have to think about it
             if ($newValue -lt $progress.Minimum) { $newValue = $progress.Minimum }
             if ($newValue -gt $progress.Maximum) { $newValue = $progress.Maximum }
             $progress.Value = $newValue
         }
 
-        if ($hasSeverity) {
-            # Map severity to brush key for theme-aware tinting
-            $brushKey = Get-SeverityBrushKey -Severity $Severity -UseAccentDefault
-
+        if ($change.Contains('Severity')) {
             # Clear local value so the resource binding wins
             $progress.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
-            $progress.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, $brushKey)
+            $progress.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, $change.BrushKey)
         }
 
         $meta = $progress.Tag
         if ($meta -is [hashtable]) {
-            if ($hasLabel) {
-                if ($meta.LabelBlock) { $meta.LabelBlock.Text = $Label }
-                else { Write-Verbose "Set-UiProgress: '$Variable' was created without -Label; skipping label update." }
+            if ($change.Contains('Label')) {
+                if ($meta.LabelBlock) { $meta.LabelBlock.Text = $change.Label }
+                else { $true }
             }
-            if ($hasSeverity) {
-                $meta.Severity = $Severity
-                $meta.BrushTag = $brushKey
+            if ($change.Contains('Severity')) {
+                $meta.Severity = $change.Severity
+                $meta.BrushTag = $change.BrushKey
             }
         }
 
-        if ($hasIndeterm) {
-            # See .PARAMETER Indeterminate for the construction-time caveat.
-            $progress.IsIndeterminate = $Indeterminate
-            Write-Verbose "Set-UiProgress: toggled IsIndeterminate=$Indeterminate on '$Variable'."
-        }
+        # See .PARAMETER Indeterminate for the construction time caveat.
+        if ($change.Contains('Indeterminate')) { $progress.IsIndeterminate = $change.Indeterminate }
     }
+
+    if ($labelMissed) { Write-Verbose "Set-UiProgress: '$Variable' was created without -Label; skipping label update." }
+    if ($change.Contains('Indeterminate')) { Write-Verbose "Set-UiProgress: toggled IsIndeterminate=$Indeterminate on '$Variable'." }
 }

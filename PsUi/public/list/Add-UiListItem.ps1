@@ -67,5 +67,5 @@ function Add-UiListItem {
     # The threadsafe collection hops to the UI thread on its own and copes with that thread already being torn down.
     # Anything else (a collection registered by something other than New-UiList) needs the hop made for it.
     if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { $collection.Add($Item) }
-    else { Invoke-OnUIThread -ScriptBlock { $collection.Add($Item) }.GetNewClosure() }
+    else { Invoke-OnUIThread -ArgumentList $collection, $Item -ScriptBlock { param($list, $row) $list.Add($row) } }
 }

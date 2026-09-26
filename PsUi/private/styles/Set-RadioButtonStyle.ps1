@@ -80,10 +80,10 @@ function Set-RadioButtonStyle {
     catch {
         Write-Verbose "Failed to apply custom RadioButton template: $_"
     }
-    finally {
-        if ($xmlReader)    { $xmlReader.Dispose() }
-        if ($stringReader) { $stringReader.Dispose() }
-    }
+
+    # 5.1 drops a finally when a -NoAsync click builds the radios
+    if ($xmlReader)    { $xmlReader.Dispose() }
+    if ($stringReader) { $stringReader.Dispose() }
 
     try {
         [PsUi.ThemeEngine]::RegisterElement($RadioButton)

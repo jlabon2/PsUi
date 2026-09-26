@@ -22,14 +22,17 @@ function Hide-UiStatusBar {
     $session = Get-UiSession
     if (!$session) { return }
 
-    Invoke-OnUIThread {
-        $bar = Resolve-UiStatusBar -Variable $Variable
-        if (!$bar) {
-            $hint = if ($Variable) { "no control registered as '$Variable'" }
-            else { "no status bar registered in this session" }
-            Write-Warning "Hide-UiStatusBar: $hint"
-            return
-        }
+    $outcome = Invoke-OnUIThread -ArgumentList $session, $Variable -ScriptBlock {
+        param($session, $Variable)
+
+        $bar = Resolve-UiStatusBar -Session $session -Variable $Variable
+        if (!$bar) { return 'NoBar' }
         $bar.Visibility = [System.Windows.Visibility]::Collapsed
+    }
+
+    if ($outcome -eq 'NoBar') {
+        $hint = if ($Variable) { "no control registered as '$Variable'" }
+        else { "no status bar registered in this session" }
+        Write-Warning "Hide-UiStatusBar: $hint"
     }
 }

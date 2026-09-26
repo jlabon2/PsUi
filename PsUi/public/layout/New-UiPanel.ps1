@@ -3,9 +3,10 @@
     .SYNOPSIS
         Creates a panel container for organizing child controls.
     .DESCRIPTION
-        The workhorse container. Stacks children vertically or horizontally, or wraps them
-        into responsive columns when -LayoutStyle is Wrap (-MaxColumns caps the count).
-        -Header puts the whole thing in a themed GroupBox.
+        The workhorse container. Stacks children vertically or horizontally, or wraps them into
+        responsive columns with -LayoutStyle Wrap (-MaxColumns caps the count). -Header puts it in
+        a themed GroupBox. In a horizontal or wrapped row, buttons beside a labeled input line up
+        with its box.
     .PARAMETER Content
         ScriptBlock containing child controls to render inside the panel.
     .PARAMETER Header
@@ -275,11 +276,18 @@ $sourceCode
 
             # Style and click handler
             Set-ButtonStyle -Button $iconButton -IconOnly
-            $actionScript = $HeaderAction.Action
-            # trap, not try/catch/finally. Off the pipeline a finally NREs on the way out
+            $actionScript   = $HeaderAction.Action
+            $ownerSessionId = $session.SessionId
+            $pushSession    = ${function:Push-UiSession}
+            $popSession     = ${function:Pop-UiSession}
+            $invokeCallback = ${function:Invoke-UiCallback}
+
+            # The trap's continue still reaches the pop
             $iconButton.Add_Click({
                 trap { Write-Warning "New-UiPanel header action error: $_"; continue }
-                & $actionScript
+                $sessionToken = & $pushSession -SessionId $ownerSessionId
+                $null         = & $invokeCallback -ScriptBlock $actionScript -Label 'New-UiPanel header action'
+                & $popSession -Token $sessionToken
             }.GetNewClosure())
 
             [System.Windows.Controls.Grid]::SetColumn($iconButton, 1)
@@ -327,6 +335,9 @@ $sourceCode
     
     # Restore parent after successful content execution
     $session.CurrentParent = $oldParent
-    
+
+    # -Type Tab builds a TabControl, which isn't a Panel
+    if ($innerContainer -is [System.Windows.Controls.Panel]) { Set-UiRowAlignment -Panel $innerContainer }
+
     Write-Debug "Content block complete. Added to: $($oldParent.GetType().Name)"
 }

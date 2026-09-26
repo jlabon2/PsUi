@@ -4,7 +4,7 @@ function Get-UiValue {
         Gets the value of a UI control by its variable name.
     .DESCRIPTION
         Retrieves the current value of a registered UI control. This works from
-        -NoAsync button actions where hydration doesn't apply. The read lands on
+        -NoAsync button actions where hydration doesn't apply. The read happens on
         the UI thread on its own. Call it from wherever.
     .PARAMETER Variable
         The variable name of the control. This matches the -Variable parameter
@@ -34,18 +34,10 @@ function Get-UiValue {
     $control = $session.GetControl($Variable)
     if (!$control) { Write-Warning "Get-UiValue: Control '$Variable' not found in session."; return $null }
     
-    $dispatcher    = $control.Dispatcher
-    $needsDispatch = !$dispatcher.CheckAccess()
-    
     $getAction = {
         param($ctrl)
         return [PsUi.ControlValueExtractor]::ExtractValue($ctrl)
     }
-    
-    if ($needsDispatch) {
-        return $dispatcher.Invoke([Func[object, object]]$getAction, $control)
-    }
-    else {
-        return (& $getAction $control)
-    }
+
+    return Invoke-OnUIThread -Dispatcher $control.Dispatcher -ArgumentList $control -ScriptBlock $getAction
 }

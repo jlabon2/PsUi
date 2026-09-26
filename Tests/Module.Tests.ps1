@@ -253,6 +253,20 @@ Describe 'Controls reach the session through Assert-UiSession' {
     }
 }
 
+Describe 'Taskbar ids' {
+    It 'Gives each kind of window one fixed id, since Windows keeps every new one until sign out' {
+        $repo  = Join-Path $PSScriptRoot '..'
+        $files = @(Get-ChildItem (Join-Path $repo 'PsUi') -Recurse -Include *.ps1) + @(Get-ChildItem (Join-Path $repo 'src') -Filter *.cs)
+        $calls = @($files | Select-String -Pattern 'SetWindowAppId\(' | Where-Object { $_.Line -notmatch 'static void SetWindowAppId' })
+        $calls.Count | Should -BeGreaterThan 5
+
+        $built = foreach ($call in $calls) {
+            if ($call.Line -notmatch "SetWindowAppId\([^,]+,\s*[`"'][^`"'+]+[`"']\)") { '{0}:{1}' -f $call.Filename, $call.LineNumber }
+        }
+        @($built) -join ', ' | Should -BeNullOrEmpty
+    }
+}
+
 # Catches an export that no longer resolves, and a GUID somebody regenerated.
 Describe 'Module Manifest' {
     BeforeAll {

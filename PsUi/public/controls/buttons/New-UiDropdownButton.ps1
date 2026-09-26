@@ -176,6 +176,12 @@
         Orientation = 'Vertical'
     }
 
+    # The item handlers are closures. These only finds a private function where the window injected it, so resolve them here
+    $ownerSessionId = $session.SessionId
+    $pushSession    = ${function:Push-UiSession}
+    $popSession     = ${function:Pop-UiSession}
+    $invokeCallback = ${function:Invoke-UiCallback}
+
     foreach ($item in $Items) {
         $itemButton = [System.Windows.Controls.Button]@{
             Height                      = 32
@@ -249,12 +255,15 @@
 
             # Fire OnChange callback
             if ($tag.OnChange) {
-                try {
-                    & $tag.OnChange $selectedValue
+                $sessionToken = & $pushSession -SessionId $ownerSessionId
+                $callback     = @{
+                    ScriptBlock  = $tag.OnChange
+                    ArgumentList = (, $selectedValue)
+                    Label        = 'OnChange callback'
                 }
-                catch {
-                    Write-Warning "OnChange callback error: $_"
-                }
+                try { $null = & $invokeCallback @callback }
+                catch { Write-Warning "OnChange callback error: $_" }
+                & $popSession -Token $sessionToken
             }
         }.GetNewClosure())
 

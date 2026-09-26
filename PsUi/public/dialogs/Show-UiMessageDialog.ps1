@@ -4,6 +4,8 @@ function Show-UiMessageDialog {
         Displays a themed message dialog with customizable buttons and icons.
     .DESCRIPTION
         Shows a custom WPF dialog that respects the current theme. Replaces standard MessageBox.
+        A message taller than the screen scrolls inside the dialog, which stays away from the
+        taskbar with its buttons in view.
     .PARAMETER Title
         Dialog window title.
     .PARAMETER Message
@@ -367,6 +369,32 @@ function Show-UiMessageDialog {
 
     # Attach the standard fade-in
     Initialize-UiWindowLoaded -Window $window -TitleBarBackground $colors.HeaderBackground -TitleBarForeground $colors.HeaderForeground
+
+    # CenterOnParent places the dialog before SizeToContent has measured it, a long message grows down past the taskbar
+    $fitWindow = $window
+    $window.Add_Loaded({
+        $source = [System.Windows.PresentationSource]::FromVisual($fitWindow)
+        if (!$source) { return }
+        $handle = [System.Windows.Interop.WindowInteropHelper]::new($fitWindow).Handle
+        $area   = [PsUi.WindowManager]::GetWorkAreaForWindow($handle)
+
+        # Device pixels, not DIPs
+        $toDip  = $source.CompositionTarget.TransformFromDevice
+        $top    = $toDip.Transform($area.TopLeft).Y
+        $bottom = $toDip.Transform($area.BottomRight).Y
+
+        # Without UpdateLayout, ActualHeight still reads the old height
+        if ($fitWindow.MaxHeight -gt $bottom - $top) {
+            $fitWindow.MaxHeight = $bottom - $top
+            $fitWindow.UpdateLayout()
+        }
+        if ($fitWindow.Top + $fitWindow.ActualHeight -gt $bottom) {
+            $fitWindow.Top = $bottom - $fitWindow.ActualHeight
+        }
+
+        # CenterOnParent stops at the virtual screen's top, which a taskbar docked up there covers
+        if ($fitWindow.Top -lt $top) { $fitWindow.Top = $top }
+    }.GetNewClosure())
 
     # Position and show
     Set-UiDialogPosition -Dialog $window

@@ -163,8 +163,8 @@ namespace PsUi
                     }
                     else
                     {
-                        // STA mode: spawn dedicated thread for COM compatibility
-                        // But now we're gated - max 8 STA threads at a time
+                        // A dedicated STA thread per run which only waits. the runspace already has its own STA pipeline thread.
+                        // Still limited with a max 8 of these at a time
                         var staThread = new Thread(() =>
                         {
                             try { action(); }

@@ -44,20 +44,19 @@ function Remove-UiListItem {
     $collection = $session.GetListCollection($Variable)
     if ($null -ne $collection) {
         # IndexOf and RemoveAt go across together.
-        # Split them over two hops and another thread can shift the list between the two, so the index points at the wrong row by the time it lands.
+        # Split them over two hops and another thread can shift the list in between, so the index points at the wrong row by the time the remove runs
         $removeOne = {
+            param($collection, $Item)
             $index = $collection.IndexOf($Item)
-            if ($index -ge 0) {
-                Write-Debug "Removing item at index $index"
-                $collection.RemoveAt($index)
-            }
-            else {
-                Write-Warning "Item not found in list."
-            }
-        }.GetNewClosure()
+            if ($index -ge 0) { $collection.RemoveAt($index) }
+            $index
+        }
 
-        if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { & $removeOne }
-        else { Invoke-OnUIThread -ScriptBlock $removeOne }
+        $index = if ((Get-UiCollectionType -Obj $collection) -eq 'PsUiObservable') { & $removeOne $collection $Item }
+        else { Invoke-OnUIThread -ArgumentList $collection, $Item -ScriptBlock $removeOne }
+
+        if ($index -ge 0) { Write-Debug "Removed item at index $index" }
+        elseif ($null -ne $index) { Write-Warning "Item not found in list." }
     }
     else {
         Write-Error "List '$Variable' not found."

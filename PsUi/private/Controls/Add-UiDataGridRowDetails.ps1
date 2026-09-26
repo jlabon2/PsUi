@@ -24,6 +24,13 @@ function Add-UiDataGridRowDetails {
 
     # InvokeWithContext - $_ doesn't survive the trip across the module boundary by itself.
     $templateRef = $Template
+
+    # Details load long after the build, so the grid's session is read now
+    $gridSession   = Get-UiSession
+    $gridSessionId = if ($gridSession) { $gridSession.SessionId } else { $null }
+    $pushSession   = ${function:Push-UiSession}
+    $popSession    = ${function:Pop-UiSession}
+
     $DataGrid.Add_LoadingRowDetails({
         param($sender, $eventArgs)
         $panel = $eventArgs.DetailsElement -as [System.Windows.Controls.Panel]
@@ -37,8 +44,12 @@ function Add-UiDataGridRowDetails {
         $panel.Children.Clear()
         $panel.Tag = $row
 
-        $sess = Get-UiSession
-        if (!$sess) { return }
+        $sessionToken = & $pushSession -SessionId $gridSessionId
+        $sess         = Get-UiSession
+        if (!$sess) {
+            & $popSession -Token $sessionToken
+            return
+        }
 
         # PS's CheckActionPreference NREs on leaving the try block when the scriptblock is invoked off pipeline (WPF routed event delegate). The NRE propagates to the window's Dispatcher.UnhandledException handler and prints a stack trace even when the template ran fine, just to keep morale up. trap covers cleanup on the error path. The final assignment covers success. 
         $previousParent = $sess.CurrentParent
@@ -57,6 +68,7 @@ function Add-UiDataGridRowDetails {
         [void]$templateRef.InvokeWithContext($null, $vars)
 
         $sess.CurrentParent = $previousParent
+        & $popSession -Token $sessionToken
     }.GetNewClosure())
 
     # WPF recycles row containers as they scroll out, so clear the panel so the next row gets a fresh one. Tag goes back to $null so the identity guard doesn't skip the next row.

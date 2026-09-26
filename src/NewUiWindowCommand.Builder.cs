@@ -16,7 +16,7 @@ namespace PsUi
     public partial class NewUiWindowCommand
     {
         // Main window creation/lifecycle: creates session, runspace, UI, runs event loop
-        private Window RunWindow(WindowParameters p, PSHost host, ManualResetEvent windowReady = null,
+        private Window RunWindow(WindowParameters p, PSHost host, ContentErrorRelay contentErrors, ManualResetEvent windowReady = null,
             Window[] windowHolder = null, Dictionary<string, object> exportedVariables = null,
             System.Windows.Threading.Dispatcher splashDispatcher = null)
         {
@@ -265,39 +265,16 @@ namespace PsUi
                 // Create content area with layout-specific scrolling
                 Panel contentPanel = CreateContentPanel(p.LayoutMode);
 
-                if (p.AutoSize)
+                // Every sizing mode scrolls, since a fixed height can be too small too
+                // Focus lands here when a -NoOutput button disables, so no focus box
+                var scrollViewer = new ScrollViewer
                 {
-                    // Full auto-size - use ScrollViewer so content scrolls if MaxHeight clips the window
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
-                else if (p.AutoSizeHeight)
-                {
-                    // Auto-size height - use ScrollViewer, window will cap height after layout
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
-                else
-                {
-                    // Fixed height - use ScrollViewer for overflow
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    FocusVisualStyle = null
+                };
+                scrollViewer.Content = contentPanel;
+                outerPanel.Children.Add(scrollViewer);
 
                 // Configure session - store chromeInfo for later access, session accessible via GetSession
                 session.Window = window;
@@ -318,13 +295,22 @@ namespace PsUi
                 // Execute user's Content scriptblock
                 ExecuteContentScript(p.Content, p.PrivateFunctions, p.CallerVariables, p.CallerFunctions,
                                      session, windowRunspace, p.DebugMode, p.VerboseMode,
-                                     p.CallerScriptName, p.CallerScriptLine);
+                                     p.CallerScriptName, p.CallerScriptLine, p.OuterContentLine, contentErrors, p.ContentErrorAction);
+
+                // Every content error has gone out, so the cmdlet thread can wait
+                contentErrors.Finish();
+
+                // WriteError threw on the cmdlet side, which ends the window like a throw
+                if (contentErrors.Halted)
+                {
+                    throw new OperationCanceledException("New-UiWindow stopped on a -Content error.");
+                }
 
                 // Apply padding if no TabControl present
                 ApplyContentPadding(contentPanel);
 
                 // Configure window animations and events
-                ConfigureWindowEvents(window, p, windowRunspace, colors, sessionId, splashDispatcher);
+                ConfigureWindowEvents(window, p, windowRunspace, colors, sessionId, scrollViewer, splashDispatcher);
 
                 // Apply custom WPF properties
                 if (p.WPFProperties != null && p.WPFProperties.Count > 0)
@@ -508,9 +494,7 @@ namespace PsUi
                 DebugLog("WINDOW", string.Format("Fixed window size: {0}x{1}", p.Width, p.Height));
             }
 
-            // Set unique app ID for taskbar identity
-            string appId = "PsUi.Window." + Guid.NewGuid().ToString().Substring(0, 8);
-            WindowManager.SetWindowAppId(window, appId);
+            WindowManager.SetWindowAppId(window, "PsUi.Window");
 
             // Enable proper maximize behavior for borderless window (respects taskbar)
             WindowManager.EnableBorderlessMaximize(window);
@@ -645,10 +629,9 @@ namespace PsUi
             titleBarGrid.Children.Add(iconImage);
             titleBarIconOut = iconImage;
 
-            // Title text
+            // Follows Window.Title so a retitle shows here too
             var titleText = new TextBlock
             {
-                Text = p.Title,
                 FontSize = 13,
                 FontWeight = FontWeights.Normal,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -656,6 +639,7 @@ namespace PsUi
                 Margin = new Thickness(8, 0, 0, 0),
                 Tag = "HeaderText"
             };
+            titleText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Title") { Source = window });
             titleText.SetResourceReference(TextBlock.ForegroundProperty, "HeaderForegroundBrush");
             Grid.SetColumn(titleText, 1);
             titleBarGrid.Children.Add(titleText);
@@ -875,7 +859,7 @@ namespace PsUi
 
         // Fade-in, icon setup, console restore on close
         private void ConfigureWindowEvents(Window window, WindowParameters p, Runspace windowRunspace,
-                                            Hashtable colors, Guid sessionId,
+                                            Hashtable colors, Guid sessionId, ScrollViewer contentScroller,
                                             System.Windows.Threading.Dispatcher splashDispatcher = null)
         {
             // Fade-in effect
@@ -931,6 +915,18 @@ namespace PsUi
                 if (p.AutoSizeHeight)
                 {
                     window.MaxHeight = double.PositiveInfinity;
+                }
+
+                // SizeToContent rounds to whole pixels, content measures in fractions.
+                // That leaves the scroller a hair short, with a scrollbar over it.
+                // Past 2px it's a real overflow and keeps its scrollbar.
+                if ((p.AutoSize || p.AutoSizeHeight) && contentScroller != null)
+                {
+                    window.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        double overflow = contentScroller.ExtentHeight - contentScroller.ViewportHeight;
+                        if (overflow > 0 && overflow < 2) { window.Height = Math.Ceiling(window.ActualHeight + overflow); }
+                    }), System.Windows.Threading.DispatcherPriority.Loaded);
                 }
 
                 var animation = new System.Windows.Media.Animation.DoubleAnimation
@@ -1032,7 +1028,10 @@ namespace PsUi
                 // Skip if already handled
                 if (e.Handled) return;
 
-                var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
+                // A key event starts at the focused element - a test can raise one there without real focus
+                var focused = e.OriginalSource as System.Windows.DependencyObject;
+                var mods = System.Windows.Input.Keyboard.Modifiers;
+                var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
 
                 // Check if focus is in an editable text control
                 bool isEditableText = false;
@@ -1049,17 +1048,14 @@ namespace PsUi
                     isEditableText = !((System.Windows.Controls.RichTextBox)focused).IsReadOnly;
                 }
 
-                if (isEditableText)
+                // F1 to F24 never type, so they fire from a text box too
+                bool isFunctionKey = key >= System.Windows.Input.Key.F1 && key <= System.Windows.Input.Key.F24;
+                if (isEditableText && !isFunctionKey)
                 {
                     // Allow text input unless it's a modified key (Ctrl/Alt)
-                    bool hasModifier = (System.Windows.Input.Keyboard.Modifiers &
-                        (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt)) != 0;
+                    bool hasModifier = (mods & (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt)) != 0;
                     if (!hasModifier) return;
                 }
-
-                // Build normalized key combo string using StringBuilder to reduce allocations
-                var mods = System.Windows.Input.Keyboard.Modifiers;
-                var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
 
                 // Ignore standalone modifier keys
                 if (key == System.Windows.Input.Key.LeftCtrl || key == System.Windows.Input.Key.RightCtrl ||
@@ -1523,7 +1519,8 @@ namespace PsUi
                                            Dictionary<string, string> callerFunctions,
                                            SessionContext session, Runspace runspace,
                                            bool debugMode, bool verboseMode,
-                                           string callerScriptName, int callerScriptLine)
+                                           string callerScriptName, int callerScriptLine, int outerContentLine,
+                                           ContentErrorRelay contentErrors, ActionPreference contentErrorAction)
         {
             // Inject the calling scope's variables
             if (callerVariables != null && callerVariables.Count > 0)
@@ -1607,8 +1604,10 @@ namespace PsUi
             if (originalFile == "script" && !string.IsNullOrEmpty(callerScriptName))
             {
                 originalFile = System.IO.Path.GetFileName(callerScriptName);
-                originalStartLine = callerScriptLine;
                 originalPath = callerScriptName;
+
+                // Inside another window, lines count from that window's content
+                originalStartLine = outerContentLine > 0 ? outerContentLine + originalStartLine - 1 : callerScriptLine;
             }
 
             // A nested container runs its own block through Invoke-UiContent, and those blocks come out of the AddScript text below without a file on them, so the session is where they read the file and line from.
@@ -1633,39 +1632,202 @@ namespace PsUi
                     scriptBuilder.Append("$VerbosePreference = 'Continue'; ");
                 }
 
+                // Only Stop, as SilentlyContinue would keep them out of $Error
+                bool stopContent = contentErrorAction == ActionPreference.Stop;
+                if (stopContent)
+                {
+                    scriptBuilder.Append("$ErrorActionPreference = 'Stop'; ");
+                }
+
+                bool quiet = contentErrorAction == ActionPreference.SilentlyContinue || contentErrorAction == ActionPreference.Ignore;
+
                 // Nothing ahead of the content gets a line of its own, the try included, so generated line 1 is the line the content block opens on.
                 scriptBuilder.Append("try {");
                 scriptBuilder.Append(content.ToString());
                 scriptBuilder.AppendLine();
                 scriptBuilder.AppendLine("} catch {");
+                // SilentlyContinue would swallow a throw
+                scriptBuilder.AppendLine("    $ErrorActionPreference = 'Stop'");
                 scriptBuilder.AppendLine("    $__psui_err = $_");
                 scriptBuilder.AppendLine("    $__psui_msg = $__psui_err.Exception.Message");
-                // If error is already formatted (from nested Invoke-UiContent), pass it through
                 scriptBuilder.AppendLine("    if ($__psui_msg -match '^\\[.+:\\d+\\]') {");
                 scriptBuilder.AppendLine("        throw $__psui_msg");
                 scriptBuilder.AppendLine("    }");
                 scriptBuilder.AppendLine("    $__psui_info = $__psui_err.InvocationInfo");
-                // Use MyCommand.Name since InvocationName is often empty
-                scriptBuilder.AppendLine("    $__psui_cmd = 'unknown'");
-                scriptBuilder.AppendLine("    if ($__psui_info -and $__psui_info.MyCommand) { $__psui_cmd = $__psui_info.MyCommand.Name }");
                 scriptBuilder.AppendLine("    $__psui_relLine = if ($__psui_info) { $__psui_info.ScriptLineNumber } else { 0 }");
+
+                // The frame at the live stack's depth is this block's failing line.
+                // The first PsUi frame inside it is the command it called.
+                scriptBuilder.AppendLine("    $__psui_cmd = $null");
+                scriptBuilder.AppendLine("    $__psui_frames = @($__psui_err.ScriptStackTrace -split '\\r?\\n')");
+                scriptBuilder.AppendLine("    $__psui_at = $__psui_frames.Count - @(Get-PSCallStack).Count");
+                scriptBuilder.AppendLine("    if ($__psui_at -ge 0 -and $__psui_frames[$__psui_at] -match ': line (\\d+)$') { $__psui_relLine = [int]$Matches[1] }");
+                scriptBuilder.AppendLine("    for ($__psui_i = $__psui_at - 1; $__psui_i -ge 0; $__psui_i--) {");
+                scriptBuilder.AppendLine("        if ($__psui_frames[$__psui_i] -notmatch '^at (.+?), ') { continue }");
+                scriptBuilder.AppendLine("        if (!(Get-Command -Name $Matches[1] -Module PsUi -ErrorAction Ignore)) { continue }");
+                scriptBuilder.AppendLine("        $__psui_cmd = $Matches[1]");
+                scriptBuilder.AppendLine("        break");
+                scriptBuilder.AppendLine("    }");
+                scriptBuilder.AppendLine("    if (!$__psui_cmd -and $__psui_info -and $__psui_info.MyCommand) { $__psui_cmd = $__psui_info.MyCommand.Name }");
                 scriptBuilder.AppendFormat("    $__psui_file = '{0}'\n", originalFile.Replace("'", "''"));
                 scriptBuilder.AppendFormat("    $__psui_baseLine = {0}\n", originalStartLine);
                 scriptBuilder.AppendLine("    $__psui_actualLine = $__psui_baseLine + $__psui_relLine - 1");
-                scriptBuilder.AppendLine("    $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] Error in '$__psui_cmd': $__psui_msg\"");
+                scriptBuilder.AppendLine("    $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] $__psui_msg\"");
+                scriptBuilder.AppendLine("    if ($__psui_cmd) { $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] Error in '$__psui_cmd': $__psui_msg\" }");
                 scriptBuilder.AppendLine("    throw $__psui_formatted");
                 scriptBuilder.AppendLine("}");
 
-                ps.AddScript(scriptBuilder.ToString());
-                ps.Invoke();
+                string script = scriptBuilder.ToString();
+                string[] scriptLines = script.Split('\n');
 
-                if (ps.Streams.Error.Count > 0)
+                // PsUi commands only write here under Continue
+                ps.Streams.Error.DataAdded += delegate(object sender, DataAddedEventArgs e)
                 {
-                    var error = ps.Streams.Error[0];
-                    string errorMsg = error.Exception != null ? error.Exception.Message : error.ToString();
-                    throw new RuntimeException(errorMsg, error.Exception);
+                    ErrorRecord record = ps.Streams.Error[e.Index];
+                    if (contentErrors == null) { return; }
+
+                    // Stops the content at the writing line, past any catch in it
+                    if (!contentErrors.Post(LocateContentError(record, runspace, scriptLines, originalFile, originalStartLine)))
+                    {
+                        throw new PipelineStoppedException();
+                    }
+                };
+
+                ps.AddScript(script);
+
+                SetPsUiErrorAction(runspace, true, quiet);
+                try
+                {
+                    ps.Invoke();
+                }
+                finally
+                {
+                    SetPsUiErrorAction(runspace, false, quiet);
+
+                    // The script's Stop is for the build, and -NoAsync actions run here later
+                    if (stopContent) { ResetContentErrorAction(runspace); }
                 }
             }
+        }
+
+        // PsUi's functions never see the content's preference,\ so this reads it
+        private static void SetPsUiErrorAction(Runspace runspace, bool install, bool quiet)
+        {
+            // PsUi's binary module also answers to PsUi and throws on &
+            const string clear = "$ErrorActionPreference = 'Continue'; $psuiModules = @(Get-Module -Name PsUi | Where-Object { $_.ModuleType -eq 'Script' }); " +
+                "foreach ($psuiModule in $psuiModules) { & $psuiModule { Remove-Variable -Name ErrorActionPreference -Scope Script -ErrorAction Ignore } }";
+
+            // Set only keeps the instance when there's no variable there yet
+            const string place = "param($quiet) " + clear + "; $preference = [PsUi.ContentErrorPreference]::new($ExecutionContext.SessionState, $quiet); " +
+                "foreach ($psuiModule in $psuiModules) { $psuiModule.SessionState.PSVariable.Set($preference) }";
+
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddScript(install ? place : clear, true);
+                    if (install) { ps.AddArgument(quiet); }
+                    ps.Invoke();
+                    foreach (ErrorRecord error in ps.Streams.Error)
+                    {
+                        DebugLog("CONTENT", "Setting PsUi's error preference wrote an error: " + error);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Setting PsUi's error preference failed: " + ex.Message);
+            }
+        }
+
+        // Back to a fresh runspace's Continue unless the content picked its own
+        private static void ResetContentErrorAction(Runspace runspace)
+        {
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddScript("if ($global:ErrorActionPreference -eq 'Stop') { $global:ErrorActionPreference = 'Continue' }", true);
+                    ps.Invoke();
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Resetting the window runspace's $ErrorActionPreference failed: " + ex.Message);
+            }
+        }
+
+        // WriteError stamps New-UiWindow's line so the content's goes in front
+        private static ErrorRecord LocateContentError(ErrorRecord record, Runspace runspace, string[] scriptLines, string originalFile, int originalStartLine)
+        {
+            // Already located by a trap or nested window, no second prefix
+            if (System.Text.RegularExpressions.Regex.IsMatch(record.ToString(), @"^\[[^\]\r\n]+:\d+\] "))
+            {
+                return new ErrorRecord(record, null);
+            }
+
+            InvocationInfo info = record.InvocationInfo;
+            string where = null;
+            if (info != null && info.ScriptLineNumber > 0)
+            {
+                if (!string.IsNullOrEmpty(info.ScriptName))
+                {
+                    where = Path.GetFileName(info.ScriptName) + ":" + info.ScriptLineNumber;
+                }
+                else if (IsContentLine(scriptLines, info.ScriptLineNumber, info.Line))
+                {
+                    where = originalFile + ":" + (originalStartLine + info.ScriptLineNumber - 1);
+                }
+            }
+
+            // Write-Error carries its scope's line but DataAdded fires mid statement
+            if (where == null)
+            {
+                System.Management.Automation.Language.IScriptExtent position = FindContentPosition(runspace, scriptLines);
+                if (position != null) { where = originalFile + ":" + (originalStartLine + position.StartLineNumber - 1); }
+            }
+
+            // WriteError restamps
+            var located = new ErrorRecord(record, null);
+            if (where == null) { return located; }
+
+            // Write-Error straight in a block reports a command with no name
+            string command = info != null && info.MyCommand != null ? info.MyCommand.Name : null;
+            string message = string.IsNullOrEmpty(command)
+                ? string.Format("[{0}] {1}", where, record)
+                : string.Format("[{0}] Error in '{1}': {2}", where, command, record);
+
+            located.ErrorDetails = new ErrorDetails(message);
+            if (record.ErrorDetails != null) { located.ErrorDetails.RecommendedAction = record.ErrorDetails.RecommendedAction; }
+            return located;
+        }
+
+        // Captured functions and PsUi internals count lines from their own text
+        private static bool IsContentLine(string[] scriptLines, int lineNumber, string lineText)
+        {
+            if (lineNumber < 1 || lineNumber > scriptLines.Length || lineText == null) { return false; }
+            return string.Equals(scriptLines[lineNumber - 1].TrimEnd('\r', '\n'), lineText.TrimEnd('\r', '\n'), StringComparison.Ordinal);
+        }
+
+        // Top frame first
+        private static System.Management.Automation.Language.IScriptExtent FindContentPosition(Runspace runspace, string[] scriptLines)
+        {
+            try
+            {
+                foreach (CallStackFrame frame in runspace.Debugger.GetCallStack())
+                {
+                    System.Management.Automation.Language.IScriptExtent position = frame.Position;
+                    if (position == null || !string.IsNullOrEmpty(position.File)) { continue; }
+                    if (IsContentLine(scriptLines, position.StartLineNumber, position.StartScriptPosition.Line)) { return position; }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Reading the call stack for a content error's line failed: " + ex.Message);
+            }
+            return null;
         }
 
         // Convert string/Color/Brush to WPF Brush

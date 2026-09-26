@@ -65,9 +65,11 @@ function Build-UiDataGridColumns {
 
     Write-Debug "Build-UiDataGridColumns kind=$specKind, items=$($Items.Count), editable=$Editable"
 
-    # Auto and Filter share the Add-DataGridColumns build path (array popups, alias resolution, DefaultDisplayPropertySet fallback). Visibility tweaks happen after.
+    # Auto and Filter share the Add-DataGridColumns build (array popups, alias resolution, the default set's order), and visibility gets adjusted after
     if ($specKind -in 'Auto', 'Filter') {
-        $colResult    = Add-DataGridColumns -DataGrid $DataGrid -FirstItem $firstItem
+        # ArrayList.Add unwraps rows
+        $plainRows    = $firstItem -isnot [psobject]
+        $colResult    = Add-DataGridColumns -DataGrid $DataGrid -FirstItem $firstItem -PlainRows:$plainRows
         $allProps     = @($colResult.AllProperties)
         $defaultProps = @($colResult.DefaultProperties)
 
@@ -94,8 +96,12 @@ function Build-UiDataGridColumns {
             }
         }
         elseif (!$DefaultPropertiesOnly) {
-            # Add-DataGridColumns auto hides non default props. Reveal them all.
-            foreach ($col in $DataGrid.Columns) { $col.Visibility = [System.Windows.Visibility]::Visible }
+            # Add-DataGridColumns hides the props outside the default set, so show them all again, bar the ones WPF can't read off a plain row
+            $psOnly = $colResult.PsOnlyProperties
+            foreach ($col in $DataGrid.Columns) {
+                if ($psOnly.Contains([string]$col.Header)) { continue }
+                $col.Visibility = [System.Windows.Visibility]::Visible
+            }
         }
 
         # HideEmptyColumns runs last so it wins over the above.
@@ -117,6 +123,7 @@ function Build-UiDataGridColumns {
         if ($Editable) {
             $editorStyle = Get-UiDataGridTextEditorStyle
             $probeMax    = [Math]::Min(10, $Items.Count)
+            $baseItem    = $firstItem.PSObject.BaseObject
             # Snapshot the collection, the typed branch below swaps columns in place.
             foreach ($col in @($DataGrid.Columns)) {
                 if ($col -isnot [System.Windows.Controls.DataGridTextColumn]) { continue }
@@ -134,6 +141,19 @@ function Build-UiDataGridColumns {
                 if ($propName -match '\.') {
                     Write-Debug "Editable sweep: '$propName' contains a dot; WPF can't path-bind it - staying read-only."
                     continue
+                }
+
+                # TwoWay on Process.Id throws and takes the window down
+                $member = $firstItem.PSObject.Properties[$propName]
+                if ($member -and !$member.IsSettable) { continue }
+
+                # 5.1 marks a service's DisplayName and ServiceName [ReadOnly(true)] 
+                if ($baseItem -isnot [System.Management.Automation.PSCustomObject]) {
+                    $descriptor = [System.ComponentModel.TypeDescriptor]::GetProperties($baseItem).Find($propName, $true)
+
+                    # PS notes like PSPath have no descriptor, so the $descriptor null check is needed
+                    # The descriptor's IsReadOnly is the only way to tell a service's DisplayName/ServiceName from a note property with the same name
+                    if (($plainRows -and !$descriptor) -or ($descriptor -and $descriptor.IsReadOnly)) { continue }
                 }
 
                 $sample = $null
@@ -196,6 +216,7 @@ function Build-UiDataGridColumns {
             AllProperties       = $allProps
             DefaultProperties   = $defaultProps
             PopulatedProperties = $populated
+            PsOnlyProperties    = $colResult.PsOnlyProperties
         }
     }
 
