@@ -557,6 +557,7 @@ function Initialize-UiToolParameters {
                 if ($actualControl -is [System.Windows.Controls.TextBox]) { $actualControl.Add_TextChanged($onRequiredChange) }
                 elseif ($actualControl -is [System.Windows.Controls.PasswordBox]) { $actualControl.Add_PasswordChanged($onRequiredChange) }
                 elseif ($actualControl -is [System.Windows.Controls.ComboBox]) { $actualControl.Add_SelectionChanged($onRequiredChange) }
+            }
         }
 
         # Required indicator
