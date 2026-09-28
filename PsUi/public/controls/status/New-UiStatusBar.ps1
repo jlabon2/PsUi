@@ -2,6 +2,7 @@ function New-UiStatusBar {
     <#
     .SYNOPSIS
         Creates a status bar docked to the bottom (or top) of the window.
+    .DESCRIPTION
         Themed bar with freeform child controls. New-UiSpacer pushes what follows to the right,
         and -AutoProgress embeds a bar that Write-Progress drives. Inside New-UiTab or
         New-UiExpander the bar stays there and hides with it. Write-Status without a name goes to

@@ -14,8 +14,8 @@ function Add-UiListItem {
         Add-UiListItem 'myList' 'Simple string item'
     .EXAMPLE
         # With a list that has -DisplayFormat "{Name} ({Role})"
-        Add-UiListItem 'userQueue' @{ Name = 'John'; Role = 'Admin'; Email = 'john@example.com' }
-        # Displays as "John (Admin)" but full object is available when selected
+        Add-UiListItem 'userQueue' @{ Name = 'Robert'; Role = 'Admin'; Email = 'robert@example.com' }
+        # Displays as "Robert (Admin)" but full object is available when selected
     #>
     [CmdletBinding()]
     param(

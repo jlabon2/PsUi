@@ -1,0 +1,3 @@
+This wiki is a copy of what's in [jlabon2/PsUi](https://github.com/jlabon2/PsUi). A GitHub Action syncs it one way whenever something is pushed to main, using rsync with `--delete`, so anything you edit here in the web UI gets overwritten on the next sync, and any page you create here gets deleted.
+
+To fix something, send a PR to the repo. The hand written pages are in `docs/wiki/`. The command pages (and the Command Index) are built from the comment help so fix the wording in the comment help under `PsUi/public` instead. The docs check fails any PR that edits `docs/wiki/reference` directly.

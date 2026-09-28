@@ -2,10 +2,10 @@
 
 All changes to PsUi will be documented in this file.
 
-## [1.1.1] - 2026-09-16
+## [1.1.1] - 2026-09-28
 
 
-Controls now get built even if `New-UiWindow` isn't directly called. `Get-UiSession` is now exported. Functions that stand in for the parameters that used to only take hashtables, plus the attached property path in `-WPFProperties` finally working. The Pester suite split into one file per area and stands at 625 tests. Several fixes across buttons, charts, links, the tool window and the threadsafe lists.
+Controls now get built even if `New-UiWindow` isn't directly called. `Get-UiSession` is now exported. Functions that stand in for the parameters that used to only take hashtables, plus the attached property path in `-WPFProperties` finally working. The Pester suite split into one file per area and stands at 625 tests. Several fixes across buttons, charts, links, the tool window and the threadsafe lists. The docs are now in the [wiki](https://github.com/jlabon2/PsUi/wiki) and the main README got shrunk.
 
 Two critical fixes:
  1) Installing from the gallery led to windows with no PsUi commands exported into them
@@ -44,6 +44,12 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **`New-UiTree` rightclick menu**: Expand All, Collapse All, Expand, Collapse and Copy, plus Check and Uncheck All Below on a treelist where checkboxes are added. `-NoContextMenu` skips.
 - **New-UiCredential `-NoPeek`**: the password field now has the hold to reveal eye button `New-UiInput -Password` has. `-NoPeek` removes it.
 - **`New-UiChildWindow -SizeToContent`**: take the height off the content instead of `-Height`, capped to the work area of the monitor its parent is on. The window pins that height once it is up, so the grip and the edges still drag. `New-UiTool` uses it for a form that would otherwise leave most of a fixed window empty.
+
+#### Docs
+
+- **The wiki** (#18): Getting Started, an FAQ, examples, and pages on how PsUi scripts work, threading, sessions, output, theming, raw WPF access, and the architecture. Every command gets a reference page built from its comment help by `Build-Docs.ps1` and a GitHub Action fails a push when the committed pages don't match a fresh build.
+- **`Get-Help New-UiWindow`** (#24): the one compiled cmdlet only printed its syntax. It has a synopsis, a description, every parameter, and five examples now on 5.1 and 7, and `-Online` opens its wiki page.
+- **`Build-PsUi.ps1 -BuildDocs`**: rebuilds the reference pages after a compile.
 
 ### Changed
 
@@ -167,6 +173,7 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **The + button on a single select `New-UiList` threw after adding**: the new name was left unselected. It selects the name it just added, even one the list already had.
 - **`Show-UiGlyphBrowser` let long icon names run past their tiles**: they end in an ellipsis, and the heading says which icon font is active.
 - **After a long session new windows lost their taskbar icon, and copying stopped working in every app**: every window registered its own taskbar id, which Windows keeps until you sign out or reboot, and the table they share filled up. Each kind of window reuses one id now, so open windows of one kind share a taskbar button. Super edge case.
+- **`Out-CSVDataGrid` keeps files in order**: the dropdown and the first file shown came out in hash order. PS7 shuffled that every time.
 
 ## [1.1.0] - 2026-08-08
 

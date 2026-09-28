@@ -1,0 +1,34 @@
+name: docs-check
+
+# Fails when:
+# - the committed reference tree differs from a fresh build
+# - a page carries {{ Fill }} stubs
+# - parameter headings drift
+# - an overlay file under docs/pages is misnamed
+# See Build-Docs.ps1 -Verify.
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - 'PsUi/**'
+      - 'src/**'
+      - 'docs/wiki/**'
+      - 'docs/pages/**'
+      - 'Build-Docs.ps1'
+  pull_request:
+    paths:
+      - 'PsUi/**'
+      - 'src/**'
+      - 'docs/wiki/**'
+      - 'docs/pages/**'
+      - 'Build-Docs.ps1'
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build-Docs -Verify
+        shell: pwsh
+        run: ./Build-Docs.ps1 -Verify

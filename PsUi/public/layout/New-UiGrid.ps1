@@ -13,9 +13,9 @@ function New-UiGrid {
         Column definitions in flexible formats:
         - Integer: Number of equal-width columns (e.g., 3)
         - String: Comma-separated definitions (e.g., 'Auto,*' or 'Auto, *, 100')
-        - Array: Array of definitions (e.g., @('Auto', '*', '2*', '100'))
+        - Array: Array of definitions (e.g., `@('Auto', '*', '2*', '100')`)
 
-        Valid definitions: 'Auto', '*' (star), '2*' (weighted star), or number (fixed pixels).
+        Valid definitions: 'Auto', `'*'` (star), `'2*'` (weighted star), or number (fixed pixels).
     .PARAMETER Rows
         Row definitions in same flexible formats as Columns.
         If omitted, rows are created automatically as needed.

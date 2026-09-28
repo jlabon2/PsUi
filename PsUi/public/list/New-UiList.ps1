@@ -22,7 +22,7 @@ function New-UiList {
         and the two only stay in step while the mirror holds.
     .PARAMETER DisplayFormat
         Format string for displaying objects. Use property names in braces.
-        Example: "{Username} ({AccountType})" shows "jsmith (Admin)".
+        Example: "{Username} ({AccountType})" shows "wesley (Admin)".
         When specified, Add-UiListItem automatically generates display text from hashtables.
     .PARAMETER MultiSelect
         Allow multiple selection.
@@ -70,7 +70,7 @@ function New-UiList {
         # Object list with auto-formatted display
         New-UiList -Variable "queue" -DisplayFormat "{Username} ({AccountType})"
         # Then just pass hashtables - display text is automatic:
-        Add-UiListItem 'queue' @{ Username = 'jsmith'; FullName = 'John'; AccountType = 'Admin' }
+        Add-UiListItem 'queue' @{ Username = 'wesley'; FullName = 'Wesley'; AccountType = 'Admin' }
     #>
     [CmdletBinding()]
     param(

@@ -19,7 +19,7 @@
     .PARAMETER Header
         Column header text. Defaults to -Name.
     .PARAMETER Width
-        Column width: a number, 'Auto', 'Star', '*', or star notation like '2*'.
+        Column width: a number, 'Auto', 'Star', `'*'`, or star notation like `'2*'`.
     .PARAMETER MinWidth
         Minimum width in pixels. Overrides the computed floor.
     .PARAMETER Format

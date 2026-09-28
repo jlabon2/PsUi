@@ -94,9 +94,8 @@ function New-UiTree {
         )
         $employees | New-UiTree -Variable 'org' -IdProperty 'EmployeeId' -ParentIdProperty 'Manager.EmployeeId' -DisplayProperty 'Name'
     .EXAMPLE
-        # .NET namespaces
-        [AppDomain]::CurrentDomain.GetAssemblies().GetTypes() |
-            Select -Unique FullName |
+        # .NET namespaces in the PowerShell engine
+        [psobject].Assembly.GetExportedTypes() |
             New-UiTree -Variable 'types' -PathProperty 'FullName' -PathSeparator '.'
     .EXAMPLE
         # Services by status. Auto start protected, stopped preselected.

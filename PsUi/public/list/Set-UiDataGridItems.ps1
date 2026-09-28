@@ -20,7 +20,7 @@ function Set-UiDataGridItems {
         won't show in the cell on its own - PSCustomObject rows raise no change notifications, so
         rerun Set-UiDataGridItems to show the change.
     .EXAMPLE
-        New-UiButton -Text 'Refresh' -Action {
+        New-UiButton -Text 'Refresh' -NoOutput -Action {
             Set-UiDataGridItems -Variable procs -Items (Get-Process)
         }
     .EXAMPLE

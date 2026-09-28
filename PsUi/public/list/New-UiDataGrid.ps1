@@ -162,9 +162,9 @@ function New-UiDataGrid {
         `$_`/`$row` inside are the row data. Runs on the UI thread when the row expands, use
         Invoke-UiAsync inside for anything slow.
 
-        Example: -RowDetailsTemplate { New-UiLabel -Text $_.Description; New-UiLabel -Text $_.Notes}
+        Example: `{ New-UiLabel -Text $_.Description; New-UiLabel -Text $_.Notes }`
 
-        Example: -RowDetailsTemplate { New-UiTextArea -Default ($_|Out-String) -ReadOnly }
+        Example: `{ New-UiTextArea -Default ($_|Out-String) -ReadOnly }`
     .PARAMETER RowBackground
         Scriptblock that colors rows. Returns a color string (e.g. '#33FF6B6B') or `$null`.
         `$_`/`$row` is the row data. Runs as rows scroll into view.
@@ -270,7 +270,7 @@ function New-UiDataGrid {
         $rows = [System.Collections.ArrayList]::new()
         New-UiWindow -Title 'Live feed' -Content {
             New-UiDataGrid -Variable feed -ItemsSource $rows -Fill
-            New-UiButton -Text 'Add row' -Action {
+            New-UiButton -Text 'Add row' -NoOutput -Action {
                 [void]$rows.Add([pscustomobject]@{ Time = Get-Date; Value = Get-Random })
             }
         }

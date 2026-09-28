@@ -266,7 +266,9 @@ function Out-CSVDataGrid {
                 break
             }
 
-            $Script:CurrentCSVData = @{}
+            # Ordered, or the dropdown and the first file shown come out in hash order, which 7 reshuffles every run
+            # OrderedDictionary has no ContainsKey, so the lookups below use Contains.
+            $Script:CurrentCSVData = [ordered]@{}
             $Script:HasChanges = $false
 
             foreach ($filePath in $allFiles) {
@@ -287,11 +289,11 @@ function Out-CSVDataGrid {
 
                     # Two files sharing a basename (e.g. -Recurse over folders each holding config.csv) collapsed to one key - the earlier vanished from the combo and Save misfired to the survivor's path. Tag the parent folder on collision so each file keeps its own entry and Path. The key is opaque: it's the combo label and the save lookup key, nothing rebuilds it from the path.
                     $fileName = $baseName
-                    if ($Script:CurrentCSVData.ContainsKey($fileName)) {
+                    if ($Script:CurrentCSVData.Contains($fileName)) {
                         $parentDir = Split-Path -Leaf (Split-Path -Parent $filePath)
                         $fileName  = '{0}  ({1})' -f $baseName, $parentDir
                         $dupIndex  = 2
-                        while ($Script:CurrentCSVData.ContainsKey($fileName)) {
+                        while ($Script:CurrentCSVData.Contains($fileName)) {
                             $fileName = '{0}  ({1} {2})' -f $baseName, $parentDir, $dupIndex
                             $dupIndex++
                         }

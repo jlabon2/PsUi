@@ -60,7 +60,7 @@ function New-UiChart {
     .EXAMPLE
         # Empty chart updated by a button action
         New-UiChart -Type Bar -Variable 'diskChart' -Title 'Disk Usage'
-        New-UiButton -Text 'Scan' -Action {
+        New-UiButton -Text 'Scan' -NoOutput -Action {
             $disks = [ordered]@{}
             foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3") {
                 $disks[$disk.DeviceID] = [math]::Round($disk.FreeSpace / 1GB)

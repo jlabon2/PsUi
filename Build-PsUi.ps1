@@ -2,29 +2,36 @@
 .SYNOPSIS
     Builds the PsUi C# backend into framework-specific DLLs.
 .DESCRIPTION
-    Compiles the C# source in ./src to DLLs for three targets: .NET Framework 4.5.2 (WinPE),
-    .NET Framework 4.7.2 (for 5.1) and .NET 6.0 (for 7+).
+    Compiles the C# source in ./src to DLLs for three targets: .NET Framework 4.5.2
+    (WinPE), .NET Framework 4.7.2 (for 5.1) and .NET 6.0 (for 7+).
 
     Output is placed in ./PsUi/lib/net452/, ./PsUi/lib/desktop/ and ./PsUi/lib/core/
 
     Includes WebView2 dependencies for embedded browser support.
 .PARAMETER Configuration
     Build configuration: Debug or Release. Default is Release.
+.PARAMETER BuildDocs
+    Run Build-Docs.ps1 after a successful compile, regenerating the wiki reference
+    pages against the freshly built binaries. Needs PowerShell 7 on the PATH.
 .EXAMPLE
     .\Build-PsUi.ps1
 .EXAMPLE
     .\Build-PsUi.ps1 -Configuration Debug
+.EXAMPLE
+    .\Build-PsUi.ps1 -BuildDocs
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+
+    [switch]$BuildDocs
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
-$srcPath = Join-Path $projectRoot 'src'
-$modulePath = Join-Path $projectRoot 'PsUi'
+$srcPath     = Join-Path $projectRoot 'src'
+$modulePath  = Join-Path $projectRoot 'PsUi'
 
 Write-Host "Building PsUi C# backend..." -ForegroundColor Cyan
 Write-Host "  Source: $srcPath" -ForegroundColor Gray
@@ -48,9 +55,7 @@ try {
     foreach ($tfm in @('net452', 'net472', 'net6.0-windows')) {
         Write-Host "  Building $tfm..." -ForegroundColor Gray
         dotnet build -c $Configuration -f $tfm
-        if ($LASTEXITCODE -ne 0) {
-            throw "Build failed for $tfm with exit code $LASTEXITCODE"
-        }
+        if ($LASTEXITCODE -ne 0) { throw "Build failed for $tfm with exit code $LASTEXITCODE" }
     }
 }
 finally {
@@ -68,24 +73,22 @@ $keepFolders = @('runtimes')
 foreach ($frameworkPath in @($net6Path, $net472Path)) {
     if (!(Test-Path $frameworkPath)) { continue }
 
-    # Remove unwanted files (SDK dependencies we don't need)
     Get-ChildItem $frameworkPath -File | Where-Object { $_.Name -notin $keepFiles } | Remove-Item -Force -ErrorAction SilentlyContinue
 
     # Remove unwanted folders (localization, ref assemblies, etc.)
     Get-ChildItem $frameworkPath -Directory | Where-Object { $_.Name -notin $keepFolders } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Clean up WebView2 runtimes and copy native loader to lib root
 function Clean-WebView2Runtimes {
     param([string]$TargetPath)
 
     $runtimesPath = Join-Path $TargetPath 'runtimes'
     if (!(Test-Path $runtimesPath)) { return }
 
-    # Copy WebView2Loader.dll for each architecture to lib folder root
+    # x64 loader keeps the raw filename, x86 gets the .x86 suffix
     $platforms = @(
-        @{ Arch = 'win-x64'; Suffix = '' }       # Default for x64 (most common)
-        @{ Arch = 'win-x86'; Suffix = '.x86' }   # Fallback for x86
+        @{ Arch = 'win-x64'; Suffix = '' }
+        @{ Arch = 'win-x86'; Suffix = '.x86' }
     )
 
     foreach ($plat in $platforms) {
@@ -96,7 +99,6 @@ function Clean-WebView2Runtimes {
         }
     }
 
-    # Remove runtimes folder - native DLLs now in lib root
     Remove-Item $runtimesPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -134,12 +136,11 @@ if (Test-Path $net452Path) {
     Get-ChildItem $net452Path -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Verify output
 Write-Host ""
 Write-Host "Build complete. Output:" -ForegroundColor Green
 
 $desktopDll = Join-Path $modulePath 'lib\desktop\PsUi.dll'
-$coreDll = Join-Path $modulePath 'lib\core\PsUi.dll'
+$coreDll    = Join-Path $modulePath 'lib\core\PsUi.dll'
 
 if (Test-Path $desktopDll) {
     $size = (Get-Item $desktopDll).Length / 1KB
@@ -168,4 +169,16 @@ else {
 
 if ($held.Count -gt 0) {
     throw "Held open by another process and left at the old copy: $($held -join ', '). Close it and build again."
+}
+
+# This session's .NET types are cached. A docs build in the same process would document the DLLs from before the compile. Need to use a fresh pwsh.
+if ($BuildDocs) {
+    if (!(Get-Command pwsh -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: -BuildDocs needs PowerShell 7 (pwsh) on the PATH." -ForegroundColor Red
+        return
+    }
+    Write-Host ""
+    Write-Host "Building docs..." -ForegroundColor Cyan
+    pwsh -NoProfile -File (Join-Path $projectRoot 'Build-Docs.ps1')
+    if ($LASTEXITCODE -ne 0) { throw "Docs build failed with exit code $LASTEXITCODE" }
 }
