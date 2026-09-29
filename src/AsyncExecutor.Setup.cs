@@ -213,7 +213,7 @@ function Global:Out-Host {
                 {
                     if (!string.IsNullOrWhiteSpace(mod))
                     {
-                        string escapedMod = mod.Replace("'", "''");
+                        string escapedMod = System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent(mod);
                         sb.AppendFormat("Import-Module '{0}' -ErrorAction SilentlyContinue\n", escapedMod);
                     }
                 }

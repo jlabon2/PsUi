@@ -347,14 +347,14 @@ function Add-ResultActionClickHandlers {
                     $capturedProgressLabel.Text = $statusParts -join " - "
                 })
 
-                # Cancel never reaches OnComplete.
-                $actionExecutor.add_OnCancelled({
+                # Cancel never reaches OnComplete and the OnComplete below can't see these click locals by the time it fires
+                $releaseClaim = {
                     if ($actionSession -and [object]::ReferenceEquals($actionSession.ActiveExecutor, $actionExecutor)) { $actionSession.ActiveExecutor = $null }
-                }.GetNewClosure())
+                }.GetNewClosure()
+                $actionExecutor.add_OnCancelled($releaseClaim)
+                $actionExecutor.add_OnComplete($releaseClaim)
 
                 $actionExecutor.add_OnComplete({
-                    # Ahead of the IsCancelled early return, since the run is over either way.
-                    if ($actionSession -and [object]::ReferenceEquals($actionSession.ActiveExecutor, $actionExecutor)) { $actionSession.ActiveExecutor = $null }
                     if ($capturedState.IsCancelled) { return }
 
                     if ($capturedState.DebugEnabled) {

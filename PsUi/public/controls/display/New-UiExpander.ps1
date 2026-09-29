@@ -153,8 +153,8 @@ function New-UiExpander {
     $session.CurrentParent = $contentPanel
     $script:TabOrExpanderDepth = [int]$script:TabOrExpanderDepth + 1
 
-    # 5.1 NREs on a finally from a -NoAsync click or a row details template
-    try { & $Content }
+    # 5.1 NREs on a finally from a -NoAsync click or a row details template. The do loop keeps a break or continue in -Content from skipping the restores.
+    try { do { & $Content } while ($false) }
     catch {
         $session.CurrentParent = $previousParent
         $script:TabOrExpanderDepth--

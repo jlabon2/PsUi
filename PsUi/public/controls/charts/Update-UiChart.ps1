@@ -72,7 +72,7 @@ function Update-UiChart {
             $collected.Add(@{ Label = $key; Value = $Data[$key] })
         }
     }
-    elseif ($Data -is [array]) {
+    elseif ($Data -is [System.Collections.IList]) {
         foreach ($item in $Data) { $collected.Add($item) }
     }
     else {

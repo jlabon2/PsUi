@@ -51,10 +51,15 @@ function Set-TabControlStyle {
 </ControlTemplate>
 "@
 
-    try {
-        $TabControl.Template = [System.Windows.Markup.XamlReader]::Parse($xaml)
-    }
-    catch {
-        Write-Verbose "Failed to apply TabControl template: $_"
+    # Check the alignment of the tab header, so it can be restored after the switch
+    $oldPanel  = if ($TabControl.Template) { $TabControl.Template.FindName('HeaderPanel', $TabControl) }
+    $alignment = if ($oldPanel) { $oldPanel.HorizontalAlignment }
+
+    try { $TabControl.Template = [System.Windows.Markup.XamlReader]::Parse($xaml) }
+    catch { Write-Verbose "Failed to apply TabControl template: $_" }
+
+    if ($null -ne $alignment -and $TabControl.ApplyTemplate()) {
+        $newPanel = $TabControl.Template.FindName('HeaderPanel', $TabControl)
+        if ($newPanel) { $newPanel.HorizontalAlignment = $alignment }
     }
 }

@@ -166,6 +166,14 @@
         $first = $found
     }
 
+    foreach ($hop in $chain) {
+        $guards = $hop.Ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.TryStatementAst] -and $node.Finally }, $true)
+        foreach ($try in $guards) {
+            if ($try.Extent.StartOffset -gt $hop.Offset -or $hop.Offset -ge $try.Finally.Extent.StartOffset) { continue }
+            throw "$CallerName sits inside a try with a finally, which would run once when the window is built and again when it closes. Wrap the block in New-UiWindow -Content { }."
+        }
+    }
+
     # The window runs the control's statement again. The PsUi commands and the script's own builders are exempt, since rerunning those is the point.
     # What is left to check is whatever else rode along in that statement.
     $exempt = [System.Collections.Generic.HashSet[string]]::new([string[]]@($commands), [StringComparer]::OrdinalIgnoreCase)

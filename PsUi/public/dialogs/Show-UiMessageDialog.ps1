@@ -77,7 +77,7 @@ function Show-UiMessageDialog {
     Write-Debug "Title='$Title' Buttons='$Buttons' Icon='$Icon' PowerShell=$PowerShell"
 
     if ($null -ne $CustomButtons) {
-        $CustomButtons = ConvertTo-UiDefinitionArray -InputObject $CustomButtons -ParameterName '-CustomButtons' -CallerName 'Show-UiMessageDialog'
+        $CustomButtons = ConvertTo-UiDefinitionArray -InputObject $CustomButtons -ParameterName '-CustomButtons' -CallerName 'Show-UiMessageDialog' -AllowObject
     }
 
     # Calculate width based on button count - each button is ~90px wide

@@ -10,7 +10,7 @@ New-UiWindow -Title 'App' -Theme Dark -Content {
 
 <p align="center"><img src="../images/theme-switch.gif" alt="The palette button in the titlebar switching a window from Light to Monokai, Frost, and OceanBlue"></p>
 
-The standalone viewers (`Out-Datagrid`, `Out-TextEditor`, `Out-CSVDataGrid`) take `-Theme` too. Without it they use the module's active theme, or Light if there isn't one. Pass `-Theme` to one of them from inside a running window and the parent window switches too since theming is app wide.
+The standalone viewers (`Out-Datagrid`, `Out-TextEditor`, `Out-CSVDataGrid`) take `-Theme` too. Without it they use the module's active theme, or Light if there isn't one. Pass `-Theme` to one of them from a `-NoAsync` button and the parent window switches too since theming is app wide. From a normal async button the viewer takes the parent window's colors and ignores `-Theme`.
 
 ## The builtin themes
 

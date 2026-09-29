@@ -134,7 +134,7 @@ Accept wildcard characters: False
 </details>
 
 ### -OnNavigating
-ScriptBlock to execute before navigation starts. Receives the URL as $args\[0]. Return $false to cancel navigation.
+ScriptBlock to execute before navigation starts. Receives the URL as $args\[0]. Return $false to cancel navigation. A throw in the block cancels it too.
 
 <details><summary>Type: ScriptBlock (optional)</summary>
 

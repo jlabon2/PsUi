@@ -21,8 +21,8 @@ function ConvertTo-ChartData {
         }
         else {
             # Try explicit property names first, then common defaults
-            $labelProps = if ($LabelProperty) { @($LabelProperty) } else { @('Label', 'Name', 'Key') }
-            $valueProps = if ($ValueProperty) { @($ValueProperty) } else { @('Value', 'Count', 'Sum', 'Total') }
+            $labelProps = @(if ($LabelProperty) { $LabelProperty }) + @('Label', 'Name', 'Key')
+            $valueProps = @(if ($ValueProperty) { $ValueProperty }) + @('Value', 'Count', 'Sum', 'Total')
 
             # A raw hashtable's data keys live on IDictionary, not PSObject.Properties and that only carries the .NET Hashtable members (Keys, Count, ...). INspect directly so a plain @{ Name = 'apple'; Count = 5 } resolves instead of silently charting nothing.
             # Generic Dictionary hides .Contains behind an explicit implementation that only finds when the call is typed IDictionary. Capturing the cast into a variable loses it and the call throws again.

@@ -23,7 +23,7 @@ function New-UiWebView {
         Useful for OAuth callback detection.
     .PARAMETER OnNavigating
         ScriptBlock to execute before navigation starts. Receives the URL as $args[0].
-        Return $false to cancel navigation.
+        Return $false to cancel navigation. A throw in the block cancels it too.
     .PARAMETER EnableScripts
         Enable JavaScript execution. Disabled by default for security.
     .PARAMETER EnableDevTools
@@ -194,7 +194,7 @@ function New-UiWebView {
 
                 # trap, not try/catch/finally. Off the pipeline a finally NREs
                 # $result is set first so the cancel test below still reads something after a trap resumes past the call.
-                trap { Write-Warning "New-UiWebView OnNavigating error: $_"; continue }
+                trap { Write-Warning "New-UiWebView OnNavigating error: $_"; $navArgs.Cancel = $true; continue }
                 $result       = @()
                 $navUrl       = $navArgs.Uri
                 $sessionToken = & $localPushSession -SessionId $localSessionId

@@ -1,7 +1,7 @@
 ﻿function ConvertTo-UiExportText {
     <#
     .SYNOPSIS
-        Flattens a value into a string suitable for export to CSV or other string formats.
+        Flattens a cell value for export to CSV or other string formats.
     #>
     [CmdletBinding()]
     param(
@@ -19,6 +19,10 @@
         'List'       { return (@(foreach ($item in $Value) { & $element $item }) -join ', ') }
         'Dictionary' { return (@(foreach ($entry in $Value.GetEnumerator()) { "$($entry.Key)=$(& $element $entry.Value)" }) -join '; ') }
         'Sequence'   { return '[sequence]' }
-        default      { return [PsUi.ValueKind]::DisplayText($Value) }
+        default {
+            # DisplayText ignores the user's culture, so dates and numbers go out raw for Export-Csv to format
+            if ($Value -is [System.IFormattable]) { return $Value }
+            return [PsUi.ValueKind]::DisplayText($Value)
+        }
     }
 }

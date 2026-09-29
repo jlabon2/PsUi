@@ -32,8 +32,8 @@ function ConvertTo-UiFileAction {
         throw "Unsupported file type: '$extension'. Supported types: $($supportedExtensions -join ', ')"
     }
 
-    # Escape single quotes in path for embedding in scriptblock
-    $escapedPath = $resolvedPath.Replace("'", "''")
+    # PS also closes a single quoted string on a curly quote so doubling the plain one isn't enough
+    $escapedPath = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($resolvedPath)
 
     # Build sanitized argument strings per target shell
     # cmd.exe metacharacters that enable injection: & | < > ^ % !
@@ -52,7 +52,7 @@ function ConvertTo-UiFileAction {
 
         $psArgValues = @($ArgumentList.Values | ForEach-Object {
             # Single-quote each value so PS treats it as a literal string
-            $val = $_.ToString().Replace("'", "''")
+            $val = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_.ToString())
             "'$val'"
         })
         $psArgString = $psArgValues -join ' '

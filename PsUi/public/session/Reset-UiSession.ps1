@@ -21,6 +21,7 @@ function Reset-UiSession {
     $sessionCount = [PsUi.SessionManager]::ActiveSessionCount
 
     [PsUi.SessionManager]::Reset()
+    Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue
     [PsUi.ThemeEngine]::Reset()
     [PsUi.RunspacePoolManager]::Shutdown()
     

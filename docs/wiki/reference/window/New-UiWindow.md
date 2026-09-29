@@ -69,9 +69,13 @@ $window = New-UiWindow -Title 'Monitor' -PassThru -Content {
 New-UiWindow -Title 'New User' -ExportOnClose -Content {
     New-UiInput -Label 'Username' -Variable 'user'
     New-UiToggle -Label 'Admin' -Variable 'isAdmin'
-    New-UiButton -Text 'Save' -Capture 'user', 'isAdmin' -Action { Write-Host "Saved $user" }
+    New-UiButton -Text 'Save' -Capture 'savedUser', 'savedAdmin' -Action {
+        $savedUser  = $user
+        $savedAdmin = $isAdmin
+        Write-Host "Saved $user"
+    }
 }
-Write-Host "Creating $user (admin: $isAdmin)"
+Write-Host "Creating $savedUser (admin: $savedAdmin)"
 ```
 
 <p align="center"><img src="../../../pages/window/New-UiWindow/example5.png" alt=""></p>

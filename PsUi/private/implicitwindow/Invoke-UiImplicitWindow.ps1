@@ -110,5 +110,21 @@
     foreach ($frame in (Get-PSCallStack)) {
         if ($frame.InvocationInfo.MyCommand.CommandType -eq 'ExternalScript') { return 'Exit' }
     }
+
+    # Under -Command the stopped pipeline exits 1 on a normal close but -NoExit keeps its console and -Command still has stdin to read
+    $arguments = [Environment]::GetCommandLineArgs()
+    $launched  = $false
+    for ($i = 1; $i -lt $arguments.Count; $i++) {
+        if ($arguments[$i] -notmatch '^(--?|/)(.+)$') { continue }
+        $switch = $Matches[2]
+        if ($switch.Length -ge 3 -and 'noexit'.StartsWith($switch, [System.StringComparison]::OrdinalIgnoreCase)) { return 'Stop' }
+        if ($switch -eq 'ec' -or 'encodedcommand'.StartsWith($switch, [System.StringComparison]::OrdinalIgnoreCase)) { $launched = $true; continue }
+
+        # Everything after -Command is the command text
+        if (!'command'.StartsWith($switch, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $launched = $i + 1 -ge $arguments.Count -or $arguments[$i + 1] -ne '-'
+        break
+    }
+    if ($launched) { return 'Exit' }
     return 'Stop'
 }

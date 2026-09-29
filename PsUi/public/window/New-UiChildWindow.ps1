@@ -196,7 +196,11 @@ function New-UiChildWindow {
     # Capped to the parent's monitor, since SystemParameters.WorkArea is the primary screen only and a tall window on a shorter second screen runs off the bottom.
     if ($SizeToContent) {
         $ownerHandle          = if ($Parent) { [System.Windows.Interop.WindowInteropHelper]::new($Parent).Handle } else { [IntPtr]::Zero }
-        $window.MaxHeight     = [PsUi.WindowManager]::GetWorkAreaForWindow($ownerHandle).Height
+        $ownerSource          = if ($Parent) { [System.Windows.PresentationSource]::FromVisual($Parent) }
+
+        # The monitor's work area comes back in device pixels, MaxHeight wants DIPs
+        $toDip                = if ($ownerSource) { $ownerSource.CompositionTarget.TransformFromDevice.M22 } else { 1 }
+        $window.MaxHeight     = [PsUi.WindowManager]::GetWorkAreaForWindow($ownerHandle).Height * $toDip
         $window.SizeToContent = 'Height'
     }
 

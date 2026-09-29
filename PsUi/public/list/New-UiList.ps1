@@ -187,10 +187,13 @@ function New-UiList {
         $session.RegisterListCollection($Variable, $sourceCollection)
     }
 
-    # Set up ItemsSource with CollectionView for filtering
+    # Every control on this source shares the default view, so filtering that one empties the other lists and dropdowns too
     if ($null -ne $sourceCollection) {
-        $collectionView = [System.Windows.Data.CollectionViewSource]::GetDefaultView($sourceCollection)
-        $listBox.ItemsSource = $collectionView
+        $collectionView = [System.Windows.Data.ListCollectionView]::new($sourceCollection)
+
+        # Selector follows CurrentItem on any view but the default one and that starts on row 0. Leaving this null preselects the first item
+        $listBox.IsSynchronizedWithCurrentItem = $false
+        $listBox.ItemsSource                   = $collectionView
     }
 
     # With a toolbar the whole thing goes in a DockPanel, and without one the ListBox goes in on its own.
@@ -414,14 +417,19 @@ function New-UiList {
                 & $addState.PopSession -Token $sessionToken
                 if ([string]::IsNullOrWhiteSpace($result)) { return }
 
-                # Top level because an ObservableCollection[int] source throws after the row is in and the trap's continue would skip the rest of an if
+                # Top level because an ObservableCollection[int] source refuses 'abc' and the trap's continue would skip the rest of an if
                 [void]$addState.Collection.Add($result)
 
-                # SelectedItem picks the first equal item, the older copy of a repeated name, and the index only holds while the new row is the last one showing
                 $listView = $addState.ListView
                 $last     = $listView.Items.Count - 1
+                $isLast   = $last -ge 0 -and $listView.Items[$last] -ceq $result
+
+                # SelectedItems.Add ignores the dialog's '8080' string when the source holds 8080 as Int32
+                if ($isLast) { $result = $listView.Items[$last] }
+
+                # SelectedItem picks the first equal item, the older copy of a repeated name, and the index only holds while the new row is the last one showing
                 if ($listView.SelectionMode -ne 'Single') { [void]$listView.SelectedItems.Add($result) }
-                elseif ($last -ge 0 -and $listView.Items[$last] -ceq $result) { $listView.SelectedIndex = $last }
+                elseif ($isLast) { $listView.SelectedIndex = $last }
                 else { $listView.SelectedItem = $result }
 
                 if ($addState.CountLabel) {

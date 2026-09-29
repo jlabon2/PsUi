@@ -138,24 +138,31 @@ function New-UiTab {
     }
     $tabItem = [System.Windows.Controls.TabItem]@{ Header = $Header }
 
-    # -Icon swaps the string header for glyph + text (the same layout New-UiButton builds). No local Foreground on either block, so the style's selected/hover colors inherit into both.
+    # HeaderTemplate, since a theme switch pins ControlForegroundBrush on any TextBlock without a TemplatedParent and the tab loses its selected colors
     $iconText = if ($Icon) { [PsUi.ModuleContext]::GetIcon($Icon) } else { $null }
     if ($iconText) {
-        $headerPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
-        $iconBlock = [System.Windows.Controls.TextBlock]@{
-            Text              = $iconText
-            FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
-            FontSize          = 12
-            VerticalAlignment = 'Center'
-            Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
-        }
-        $headerBlock = [System.Windows.Controls.TextBlock]@{
-            Text              = $Header
-            VerticalAlignment = 'Center'
-        }
-        [void]$headerPanel.Children.Add($iconBlock)
-        [void]$headerPanel.Children.Add($headerBlock)
-        $tabItem.Header = $headerPanel
+        $textBlockType = [System.Windows.Controls.TextBlock]
+        $centered      = [System.Windows.VerticalAlignment]::Center
+
+        $iconFactory = [System.Windows.FrameworkElementFactory]::new($textBlockType)
+        $iconFactory.SetValue($textBlockType::TextProperty, $iconText)
+        $iconFactory.SetValue($textBlockType::FontFamilyProperty, [PsUi.ModuleContext]::ActiveIconFontFamily)
+        $iconFactory.SetValue($textBlockType::FontSizeProperty, [double]12)
+        $iconFactory.SetValue($textBlockType::VerticalAlignmentProperty, $centered)
+        $iconFactory.SetValue($textBlockType::MarginProperty, [System.Windows.Thickness]::new(0, 0, 6, 0))
+
+        $textFactory = [System.Windows.FrameworkElementFactory]::new($textBlockType)
+        $textFactory.SetBinding($textBlockType::TextProperty, [System.Windows.Data.Binding]::new())
+        $textFactory.SetValue($textBlockType::VerticalAlignmentProperty, $centered)
+
+        $panelFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.StackPanel])
+        $panelFactory.SetValue([System.Windows.Controls.StackPanel]::OrientationProperty, [System.Windows.Controls.Orientation]::Horizontal)
+        $panelFactory.AppendChild($iconFactory)
+        $panelFactory.AppendChild($textFactory)
+
+        $headerTemplate            = [System.Windows.DataTemplate]::new()
+        $headerTemplate.VisualTree = $panelFactory
+        $tabItem.HeaderTemplate    = $headerTemplate
     }
     Set-TabItemStyle -TabItem $tabItem
 
@@ -231,9 +238,9 @@ function New-UiTab {
     $script:TabOrExpanderDepth = [int]$script:TabOrExpanderDepth + 1
     Write-Debug "Entering content block"
 
-    # Execute content - restore parent outside try/finally for PS 5.1 closure compatibility
+    # Restores stay out of a finally for 5.1, and the one pass loop soaks up a break or continue from -Content
     try {
-        Invoke-UiContent -Content $Content -CallerName 'New-UiTab' -ErrorAction Stop
+        do { Invoke-UiContent -Content $Content -CallerName 'New-UiTab' -ErrorAction Stop } while ($false)
     }
     catch {
         # Restore parent before re-throwing

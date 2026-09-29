@@ -25,6 +25,22 @@ function Resolve-UiListSource {
     $refWriteMissed  = $false
     $converted       = [System.Collections.Generic.List[string]]::new()
 
+    # The mirror inserts through IList, and Collection<T> throws there for anything that isn't already a T, so a typed list gets a typed wrap and PS converts on Add.
+    $newWrap = {
+        param($list)
+        $itemType = [object]
+        $seed     = $list
+
+        # PS hands a string to the IEnumerable seed as its characters
+        if ($list -is [string]) { $seed = @($list) }
+        elseif ($list -is [System.Collections.IList] -and !$list.IsFixedSize) {
+            $listOfT = $list.GetType().GetInterface('System.Collections.Generic.IList`1')
+            if ($listOfT) { $itemType = $listOfT.GetGenericArguments()[0] }
+        }
+        $wrapType = [PsUi.AsyncObservableCollection`1].MakeGenericType($itemType)
+        ,$wrapType::new($seed, $uiDispatcher)
+    }
+
     switch ($collectionType) {
         'Null' {
             $collection = [PsUi.AsyncObservableCollection[object]]::new($uiDispatcher)
@@ -39,7 +55,7 @@ function Resolve-UiListSource {
         }
 
         'WpfObservable' {
-            $wrapper = [PsUi.AsyncObservableCollection[object]]::new($Source, $uiDispatcher)
+            $wrapper = & $newWrap $Source
             $wrapper.AttachMirror($Source)
             $mirrorAttached = $true
             $collection     = $wrapper
@@ -55,7 +71,7 @@ function Resolve-UiListSource {
             }
             else {
                 $innerName = if ($null -eq $inner) { 'null' } else { $inner.GetType().Name }
-                try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($inner, $uiDispatcher) }
+                try { $wrapper = & $newWrap $inner }
                 catch {
                     throw "-ItemsSource takes a list. The [ref] points at a $innerName, which is not one, and PowerShell cannot read it as a sequence either."
                 }
@@ -88,7 +104,7 @@ function Resolve-UiListSource {
 
         default {
             # PS can't read a DateTime or a PSCustomObject as a sequence, so the constructor dies talking about overloads.
-            try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($Source, $uiDispatcher) }
+            try { $wrapper = & $newWrap $Source }
             catch {
                 throw "-ItemsSource takes a list. A $($Source.GetType().Name) is not one, and PowerShell cannot read it as a sequence either."
             }

@@ -14,6 +14,10 @@
     if ($script:uiPasteJoinNever) { return $false }
     if ($script:uiPasteJoinAlways) { return $true }
 
+    # KeyAvailable throws on redirected stdin
+    $pending = try { [Console]::KeyAvailable } catch { $false }
+    if ($pending) { return $false }
+
     # These lines are coming off the prompt without the user having pressed Enter on any of them, so they get shown before they run.
     $shown   = ($Text -split "`n" | ForEach-Object { "    $_" }) -join [Environment]::NewLine
     $message = 'These pasted lines are queued behind a PsUi command and use PsUi to build controls of their own.' + [Environment]::NewLine + $shown + [Environment]::NewLine + 'Put them in the same window?'

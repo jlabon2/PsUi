@@ -19,7 +19,7 @@ Two critical fixes:
 
 #### Stand-in functions
 
-Five parameters took nested hashtables, and a something like a misspelled would error silently: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Useless the moment you typo a key. Each one now has a function behind it, so the same functionality can now be input with functions and parements with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. Those still work everywhere.
+Five parameters took nested hashtables, and a something like a misspelled would error silently: `-RowContextMenu`, `-ResultActions`, `-CustomButtons`, `-Columns`, `-HeaderAction`. Useless the moment you typo a key. Each one now has a function behind it, so the same functionality can now be input with functions and parements with tab completion and `Get-Help`, and a bad one throws at the line you wrote instead of three functions deep. Pass a definition block, an array of them, or the hashtables you already have. Those still work everywhere. `-HeaderAction` is the exception as it holds one button and takes a single `New-UiHeaderAction` call in parens or a hashtable, not a block or an array.
 
 - **New-UiMenuItem**: one `-RowContextMenu` entry. `-Text`, `-Action`, `-Icon`, `-NoAsync`, and `-Enabled` taking a literal bool or a per row scriptblock. A nonbool `-Enabled` throws now, where a misspelled one used to enable everything.
 - **New-UiResultAction**: one entry in the output window's Actions dropdown. `-Confirm` takes a format string with `{0}` for the selection count, and `-ObjectType` limits the action to matching result tabs. Both existed and neither was documented.
@@ -65,6 +65,7 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **Datagrids start with the object's default columns**: object types now lead with their default set in its own order, and files with Mode, LastWriteTime, Length and Name the way the console lists them. `-DefaultPropertiesOnly` and Out-Datagrid's Load defaults use that order, and so do the output window's grids.
 - **A nonterminating error in `-Content` doesn't kill the window**: `Get-ChildItem` on a missing folder or a `Write-Error` kept `New-UiWindow` from opening, and only the first error showed. Each one prints now with its file and line, and the window still opens. If a PsUi control fails to build the window still stops, unless `SilentlyContinue` is set, which leaves that control out. A `throw` or `-ErrorAction Stop` stops it either way, and so does a PsUi command called with an invalid parameter.
 - **Values that print over several lines show their first line in a grid**: a `FileVersionInfo` cell made its row ~240px tall. The cell reads the first line and an ellipsis.
+- **`New-UiList -ItemsSource` points your variable at a threadsafe list**: `$list.Add()` from a background action reaches the list now. The variable isn't the list or array you passed anymore, so `.AddRange()` and `.Sort()` stop working on it, and so does `-is [ArrayList]`. `-NoBind` leaves it alone.
 - **Pester tests**: split out of one file into eleven, one per area, at 625 in total, with a good chunk of them tightened up.
 
 ### Fixed
@@ -106,6 +107,7 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **`New-UiWindow -WPFProperties` did less than every control's use of the parameter**: strings never converted and attached properties were skipped silently. It runs through `Set-UiProperties` like every control, and `Tag` is reserved.
 - **Charts with a custom `-LabelProperty` came up empty, and `Update-UiChart` showed 'No data' on one**: the data got converted twice and the second conversion nuked every row.
 - **`New-UiChart -Width` and `-Height` were ignored**: neither reached the chart.
+- **`New-UiChart` and `Update-UiChart` showed 'No data' for a `List[T]` or `ArrayList` passed to `-Data`**: only a plain array got read as rows. Any list does now.
 - **Single point charts crashed or came up blank**: one point arrives as a scalar with no count, so the draw loop never ran. A one slice pie was blank too. It draws as a circle.
 - **`New-UiButton -Width` under 16 crashed, and `-Height` alone never shrank**: WPF throws on a negative inner size, and the height guard only ran when a width was given.
 - **`New-UiButton -Parameters` went in as one argument on a sync click**: it splats now.
@@ -157,7 +159,7 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **F5 and the other F keys didn't fire while a text box had focus**: `Register-UiHotkey` skips keys without Ctrl or Alt while an input box is focused, and the F keys were included. F1 to F24 fire from a text box now. Escape and the letter keys still don't.
 - **`Set-UiValue`, `Write-Status`, `Update-UiChart` and the other helpers lost their errors on the UI thread**: the action never got them. They show in the output window or the Action Error dialog now, and a throw there stops the action.
 - **A `-NoAsync` action stopped dead at a failed line and showed no error**: a `Set-UiValue` the control refused ended the click. The error shows in a dialog now and the action carries on, and `Set-UiValue` says what it refused ('loud' isn't a value the slider 'volume' takes).
-- **Errors from panel header actions, `-OnClosed`, `-OnComplete`, `-OnError`, web view navigation and `-ValidateScript` only reached `$Error`**: each one shows now, the way a `-NoAsync` button's do.
+- **Errors from panel header actions, `-OnClosed`, `-OnComplete`, `-OnError`, web view navigation and `-ValidateScript` only reached `$Error`**: each one shows now as a warning on the console you launched from.
 - **A long run of errors pushed the Action Error dialog off the screen**: it lists the first ten and counts the rest, and any message taller than the screen stops at the edge and scrolls.
 - **A status bar inside `New-UiExpander` docked to the window**: it stays in the expander and hides when the expander collapses, and `Write-Status` without a name reaches the window's own bar.
 - **The label over an `-AutoProgress` bar repeated the status text**: it shows the activity, or stays empty.
@@ -173,7 +175,12 @@ New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
 - **The + button on a single select `New-UiList` threw after adding**: the new name was left unselected. It selects the name it just added, even one the list already had.
 - **`Show-UiGlyphBrowser` let long icon names run past their tiles**: they end in an ellipsis, and the heading says which icon font is active.
 - **After a long session new windows lost their taskbar icon, and copying stopped working in every app**: every window registered its own taskbar id, which Windows keeps until you sign out or reboot, and the table they share filled up. Each kind of window reuses one id now, so open windows of one kind share a taskbar button. Super edge case.
+- **A curly apostrophe in a script's file name kept `New-UiWindow` from opening**: `Carl’s tools.ps1` broke the script PsUi builds around `-Content`, and `New-UiButton -File` wouldn't build on it either. It opens now, and a curly quote in an `-ArgumentList` value stays inside its quotes too.
+- **A curly quote in the working folder's name broke the folder restore after every async action**: a `Set-Location` inside the action stayed in effect, and a crafted name ran whatever followed the quote as code. The folder comes back now whatever the name.
+- **`Out-CSVDataGrid` Save turned accented letters into `?` on 5.1**: `Export-Csv` defaults to ASCII there, and Save wrote straight over the file you opened. Save, Save All, and Save As write UTF-8 now.
+- **`Out-CSVDataGrid -NoHeader` put a `"Column1","Column2"` header on the file when saving**: a headerless file stays headerless.
 - **`Out-CSVDataGrid` keeps files in order**: the dropdown and the first file shown came out in hash order. PS7 shuffled that every time.
+- **`New-UiWindow -TabAlignment Center` tabs slid back to the left after a theme switch**: they stay centered now.
 
 ## [1.1.0] - 2026-08-08
 

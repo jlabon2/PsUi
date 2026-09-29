@@ -200,7 +200,7 @@ namespace PsUi
         public static string BuildPwdRestore(string originalPath)
         {
             if (string.IsNullOrEmpty(originalPath)) return string.Empty;
-            string escapedPath = originalPath.Replace("'", "''");
+            string escapedPath = System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent(originalPath);
             return string.Format("Set-Location -LiteralPath '{0}' -ErrorAction SilentlyContinue", escapedPath);
         }
     }

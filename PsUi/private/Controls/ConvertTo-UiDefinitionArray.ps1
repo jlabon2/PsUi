@@ -16,7 +16,9 @@ function ConvertTo-UiDefinitionArray {
 
         [switch]$PassThruDictionary,
 
-        [switch]$AllowString
+        [switch]$AllowString,
+
+        [switch]$AllowObject
     )
 
     if ($null -eq $InputObject) { return $null }
@@ -56,6 +58,14 @@ function ConvertTo-UiDefinitionArray {
         if ($definition -is [System.Collections.IDictionary]) {
             $copy = @{}
             foreach ($key in $definition.Keys) { $copy[$key] = $definition[$key] }
+            $normalized.Add($copy)
+            continue
+        }
+
+        # Full type name since [pscustomobject] is PSObject and matches a wrapped string too
+        if ($AllowObject -and $definition -is [System.Management.Automation.PSCustomObject]) {
+            $copy = @{}
+            foreach ($prop in $definition.PSObject.Properties) { $copy[$prop.Name] = $prop.Value }
             $normalized.Add($copy)
             continue
         }

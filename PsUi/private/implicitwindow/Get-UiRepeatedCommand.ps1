@@ -50,7 +50,8 @@
     if (!$script:uiLoopCommandFilter) {
         $script:uiLoopCommandFilter = {
             param($node)
-            $node -is [System.Management.Automation.Language.CommandAst] -and (Get-UiPlainCommandName -Command $node) -in 'ForEach-Object', '%', 'foreach'
+            ($node -is [System.Management.Automation.Language.CommandAst] -and (Get-UiPlainCommandName -Command $node) -in 'ForEach-Object', '%', 'foreach') -or
+            ($node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Member.Value -in 'ForEach', 'Where')
         }
     }
 
@@ -86,12 +87,20 @@
         $loopStart = $offset
         $innerLoop = $null
 
-        # Earlier trips round a loop ran what comes after the call as well. A ForEach-Object block counts as a loop.
+        # Earlier trips round a loop ran what comes after the call as well. A ForEach-Object block is a loop, and so is a .ForEach() or .Where() in the statement itself.
         foreach ($candidate in $container.FindAll($script:uiStatementAstFilter, $true)) {
             $isLoop = $false
             foreach ($type in $loops) { if ($candidate -is $type) { $isLoop = $true; break } }
-            if (!$isLoop -and $candidate -is [System.Management.Automation.Language.PipelineAst]) {
-                $isLoop = @($candidate.FindAll($script:uiLoopCommandFilter, $true)).Count -gt 0
+
+            # $rows = $items.ForEach({ }) has no pipeline around it
+            $holder = $candidate -is [System.Management.Automation.Language.PipelineAst] -or $candidate -is [System.Management.Automation.Language.AssignmentStatementAst]
+            if (!$isLoop -and $holder) {
+                # A .Where() inside a block the statement hands to & or a helper is a filter in there, not a loop round the call
+                $isLoop = @($candidate.FindAll($script:uiLoopCommandFilter, $true) | Where-Object {
+                    $up = $_.Parent
+                    while ($up -and $up -ne $candidate -and $up -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]) { $up = $up.Parent }
+                    $_ -isnot [System.Management.Automation.Language.InvokeMemberExpressionAst] -or $up -eq $candidate
+                }).Count -gt 0
             }
             if (!$isLoop -or $candidate.Extent.StartOffset -gt $offset -or $offset -ge $candidate.Extent.EndOffset) { continue }
             if ($candidate.Extent.EndOffset -gt $end) { $end = $candidate.Extent.EndOffset }
@@ -146,7 +155,10 @@
                 $alias = Get-Command -Name $name -CommandType Alias -ErrorAction SilentlyContinue
                 if ($alias) { $name = $alias.Definition }
                 if ($Exempt.Contains($name) -or $name -in $harmless -or $name -notmatch '^([A-Za-z]+)-') { continue }
-                if ($Matches[1] -notin $mutating -and $name -ne 'Out-File') { continue }
+                if ($Matches[1] -notin $mutating -and $name -notin 'Out-File', 'Tee-Object') { continue }
+
+                # Tee-Object -Variable writes no file
+                if ($name -eq 'Tee-Object' -and $command.CommandElements.Where({ $_.ParameterName -like 'va*' })) { continue }
             }
 
             # The error reads better with the loop the control sits in than with the statement around it.

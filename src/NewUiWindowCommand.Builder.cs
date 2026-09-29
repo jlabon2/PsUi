@@ -1669,7 +1669,8 @@ namespace PsUi
                 scriptBuilder.AppendLine("        break");
                 scriptBuilder.AppendLine("    }");
                 scriptBuilder.AppendLine("    if (!$__psui_cmd -and $__psui_info -and $__psui_info.MyCommand) { $__psui_cmd = $__psui_info.MyCommand.Name }");
-                scriptBuilder.AppendFormat("    $__psui_file = '{0}'\n", originalFile.Replace("'", "''"));
+                string escapedFile = System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent(originalFile);
+                scriptBuilder.AppendFormat("    $__psui_file = '{0}'\n", escapedFile);
                 scriptBuilder.AppendFormat("    $__psui_baseLine = {0}\n", originalStartLine);
                 scriptBuilder.AppendLine("    $__psui_actualLine = $__psui_baseLine + $__psui_relLine - 1");
                 scriptBuilder.AppendLine("    $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] $__psui_msg\"");

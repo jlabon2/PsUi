@@ -303,6 +303,7 @@ function Out-CSVDataGrid {
                         Data      = [System.Collections.ArrayList]@($csvData)
                         Modified  = $false
                         Delimiter = $Delimiter
+                        NoHeader  = [bool]$NoHeader
                     }
                 }
                 catch {
@@ -1067,11 +1068,18 @@ function Out-CSVDataGrid {
                                 Path              = $csvInfo.Path
                                 NoTypeInformation = $true
                                 Force             = $true
+                                Encoding          = 'UTF8'
                             }
                             if ($csvInfo.Delimiter) {
                                 $exportParams['Delimiter'] = $csvInfo.Delimiter
                             }
-                            $csvInfo.Data | Export-Csv @exportParams
+                            # Export-Csv always writes a header and 5.1 has no -NoHeader, so a -NoHeader file would come back with the made up Column1..N line on top
+                            if ($csvInfo.NoHeader) {
+                                $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                # Through -Value, since an empty pipe never opens the file and every deleted row would still be on disk
+                                Set-Content -LiteralPath $csvInfo.Path -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                            }
+                            else { $csvInfo.Data | Export-Csv @exportParams }
                             Show-ThemedDialog -Title 'Saved' -Message "Saved: $script:currentFileName" -Buttons OK -Icon Info
                         }
                         catch {
@@ -1093,11 +1101,16 @@ function Out-CSVDataGrid {
                                 Path              = $csvInfo.Path
                                 NoTypeInformation = $true
                                 Force             = $true
+                                Encoding          = 'UTF8'
                             }
                             if ($csvInfo.Delimiter) {
                                 $exportParams['Delimiter'] = $csvInfo.Delimiter
                             }
-                            $csvInfo.Data | Export-Csv @exportParams
+                            if ($csvInfo.NoHeader) {
+                                $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                Set-Content -LiteralPath $csvInfo.Path -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                            }
+                            else { $csvInfo.Data | Export-Csv @exportParams }
                             $savedCount++
                         }
                         catch {
@@ -1123,11 +1136,16 @@ function Out-CSVDataGrid {
                                     Path              = $saveDialog.FileName
                                     NoTypeInformation = $true
                                     Force             = $true
+                                    Encoding          = 'UTF8'
                                 }
                                 if ($csvInfo.Delimiter) {
                                     $exportParams['Delimiter'] = $csvInfo.Delimiter
                                 }
-                                $csvInfo.Data | Export-Csv @exportParams
+                                if ($csvInfo.NoHeader) {
+                                    $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                    Set-Content -LiteralPath $saveDialog.FileName -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                                }
+                                else { $csvInfo.Data | Export-Csv @exportParams }
                                 Show-ThemedDialog -Title 'Saved' -Message "Data saved to:`n$($saveDialog.FileName)" -Buttons OK -Icon Info
                             }
                             catch {

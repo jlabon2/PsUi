@@ -49,6 +49,8 @@ function New-DictionarySubTab {
     }
     else {
         foreach ($dict in $GroupItems) {
+            # Only the first item of a mixed Other bucket picked this builder
+            if ($dict -isnot [System.Collections.IDictionary]) { continue }
             foreach ($entry in $dict.GetEnumerator()) {
                 $key    = $entry.Key
                 $rawVal = $entry.Value

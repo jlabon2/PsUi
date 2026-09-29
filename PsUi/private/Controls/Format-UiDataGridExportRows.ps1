@@ -31,7 +31,7 @@ function Format-UiDataGridExportRows {
             $val = ConvertTo-UiExportText -Value $val
 
             if ($Sanitize -and $null -ne $val) {
-                $text = [string]$val
+                $text = if ($val -is [System.IFormattable]) { $val.ToString() } else { [string]$val }
                 if ($text.Length -gt 0) {
                     $head = $text[0]
                     # Excel runs formulas starting with =/+/-/@. Tab, CR, LF are Microsoft's documented "macro injection" prefixes. Maybe more?

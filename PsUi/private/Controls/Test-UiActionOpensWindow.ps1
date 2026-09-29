@@ -29,7 +29,7 @@ function Test-UiActionOpensWindow {
 
         # An alias is evaluated by what it points at. An aliased win spawner slipping through puts a window on the async thread, where it dies pathetically... 
         # A false positive results in a button running sync that could have run async, and that is the better way to be wrong.
-        $alias = Get-Command -Name $name -CommandType Alias -ErrorAction SilentlyContinue
+        $alias = Get-Alias -Name $name -ErrorAction Ignore
         if ($alias -and $alias.Definition -in $spawners) { return $true }
     }
     return $false

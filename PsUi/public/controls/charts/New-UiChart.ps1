@@ -116,7 +116,7 @@ function New-UiChart {
                 $collectedData.Add(@{ Label = $key; Value = $Data[$key] })
             }
         }
-        elseif ($Data -is [array]) {
+        elseif ($Data -is [System.Collections.IList]) {
             foreach ($item in $Data) { $collectedData.Add($item) }
         }
         else {
