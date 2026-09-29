@@ -7,8 +7,12 @@ function New-UiTree {
         For nested data, each item's display text comes from -DisplayProperty and children
         from -ChildrenProperty. For flat data like Get-ChildItem output, use -PathProperty
         to specify which property contains the hierarchical path (e.g., FullName).
-        
+
         For parent-child relationships (like processes), use -IdProperty and -ParentIdProperty.
+
+        Right-click for the context menu, which opens or shuts a branch or the whole tree, copies
+        a node's text, and on a checkbox tree checks or clears a node and everything beneath it.
+        -ExpandAll only applies as the tree is built, so use the menu once it is on screen.
     .PARAMETER Variable
         Variable name for accessing this tree in button actions.
     .PARAMETER Items
@@ -35,11 +39,25 @@ function New-UiTree {
     .PARAMETER Fill
         Grow to the rest of the window's vertical viewport instead of the fixed -Height.
         Tree resizes with the window. Use when the tree is the dominant content in the view.
+    .PARAMETER CaptureScrollWheel
+        Keep every mouse-wheel event inside the tree. Same as -ScrollWheel Capture.
+    .PARAMETER ScrollWheel
+        Says who gets the wheel while the cursor is over the tree. Page, the default, hands every
+        wheel event to the page (the main window), so a window full of them still scrolls. Edge scrolls
+        the tree's own nodes until it reaches the top or bottom and gives the page the wheel from there.
+        Capture holds on at the ends as well, so the page stays put while the cursor is here.
+        A -Fill tree starts on Edge instead, since it holds the viewport and the page behind it
+        has almost no scroll of its own left. Pass -ScrollWheel to override that.
+    .PARAMETER NoContextMenu
+        Kill the right-click menu: Expand All, Collapse All, Expand, Collapse and Copy, plus Check
+        All Below and Uncheck All Below on a checkbox tree.
     .PARAMETER ExpandAll
-        Expand all nodes on load.
+        Expand all nodes on load. That is the only time it applies. Use the right-click menu to
+        open and shut nodes afterwards.
     .PARAMETER ParentCheckBoxes
-        Checkbox on every item with children. Click a parent to toggle enabled descendants.
-        Combine with -ChildCheckBoxes for the full picker.
+        Checkbox on every item with children. Alone, each box flips only itself. With
+        -ChildCheckBoxes alongside, clicking a parent toggles enabled descendants (the
+        full picker).
     .PARAMETER ChildCheckBoxes
         Checkbox on every leaf. Alone, parents become unselectable - the box is the only way in.
     .PARAMETER WhenEnabled
@@ -76,12 +94,11 @@ function New-UiTree {
         )
         $employees | New-UiTree -Variable 'org' -IdProperty 'EmployeeId' -ParentIdProperty 'Manager.EmployeeId' -DisplayProperty 'Name'
     .EXAMPLE
-        # .NET namespaces
-        [AppDomain]::CurrentDomain.GetAssemblies().GetTypes() |
-            Select -Unique FullName |
+        # .NET namespaces in the PowerShell engine
+        [psobject].Assembly.GetExportedTypes() |
             New-UiTree -Variable 'types' -PathProperty 'FullName' -PathSeparator '.'
     .EXAMPLE
-        # Services by status; auto-start protected, stopped pre-selected.
+        # Services by status. Auto start protected, stopped preselected.
         Get-Service | Group-Object Status | ForEach-Object {
             [PSCustomObject]@{ Name = $_.Name; Children = $_.Group }
         } | New-UiTree -Variable 'svc' -ParentCheckBoxes -ChildCheckBoxes `
@@ -119,6 +136,10 @@ function New-UiTree {
 
         [switch]$Fill,
 
+        [switch]$CaptureScrollWheel,
+
+        [switch]$NoContextMenu,
+
         [switch]$ExpandAll,
 
         [switch]$ParentCheckBoxes,
@@ -132,7 +153,10 @@ function New-UiTree {
         [switch]$NoCascade,
 
         [Parameter()]
-        [hashtable]$WPFProperties
+        [hashtable]$WPFProperties,
+
+        [ValidateSet('Page', 'Edge', 'Capture')]
+        [string]$ScrollWheel = 'Page'
     )
 
     begin {
@@ -152,11 +176,11 @@ function New-UiTree {
     end {
         $session   = Assert-UiSession -CallerName 'New-UiTree'
         $parent    = $session.CurrentParent
-        # Application.Current is null with no window up (headless test harness) - deref throws.
+        # Application.Current is null without a window up, as in a headless test harness, and a deref throws.
         $app       = [System.Windows.Application]::Current
         $treeStyle = if ($app) { $app.TryFindResource('ModernTreeViewStyle') } else { $null }
 
-        # Resolve a possibly-dotted property path against an object.
+        # Resolve a property path, dotted or not, against an object.
         # 'Parent.Id' on a Process returns $process.Parent.Id (not $process.'Parent.Id').
         $getDotted = {
             param($obj, [string]$pathExpr)
@@ -186,31 +210,31 @@ function New-UiTree {
         if ($IdProperty -and $ParentIdProperty -and $allItems) {
             # Build from parent-child ID relationships (process trees, org charts)
             $nodeMap = @{}
-            
-            # First pass: create nodes for each item
+
+            # First pass makes a node for each item
             foreach ($item in $allItems) {
                 $id = & $getDotted $item $IdProperty
                 if ($null -eq $id) { continue }
-                
+
                 $displayText = & $getDotted $item $DisplayProperty
                 if ($null -eq $displayText) { $displayText = $id.ToString() }
-                
+
                 $node = [System.Windows.Controls.TreeViewItem]@{
                     Header = $displayText
                     Tag    = $item
                 }
                 if ($ExpandAll) { $node.IsExpanded = $true }
-                
+
                 $nodeMap[$id] = @{ Node = $node; Item = $item }
             }
-            
-            # Second pass: connect parent child relatonships
+
+            # Second pass connects parent to child
             foreach ($id in $nodeMap.Keys) {
                 $entry    = $nodeMap[$id]
                 $item     = $entry.Item
                 $node     = $entry.Node
                 $parentId = & $getDotted $item $ParentIdProperty
-                
+
                 if ($parentId -and $nodeMap.ContainsKey($parentId)) {
                     [void]$nodeMap[$parentId].Node.Items.Add($node)
                 }
@@ -222,46 +246,46 @@ function New-UiTree {
         elseif ($PathProperty -and $allItems) {
             # Build hierarchy from path strings (filesystem, AD, registry)
             $nodeMap = @{}
-            
+
             foreach ($item in $allItems | Sort-Object $PathProperty) {
                 $path = & $getDotted $item $PathProperty
                 if (!$path) { continue }
-                
+
                 # Split path into segments and optionally reverse for DN-style paths
                 $segments = $path.Split($PathSeparator, [System.StringSplitOptions]::RemoveEmptyEntries)
                 if ($ReversePath) { [array]::Reverse($segments) }
-                
+
                 $currentPath = ''
                 $parentNode  = $null
-                
+
                 for ($i = 0; $i -lt $segments.Count; $i++) {
                     $segment     = $segments[$i]
                     $currentPath = if ($currentPath) { "$currentPath$PathSeparator$segment" } else { $segment }
                     $isOwnPath   = ($i -eq $segments.Count - 1)
-                    
+
                     # Reuse existing node or create new one
                     if ($nodeMap.ContainsKey($currentPath)) {
                         $parentNode = $nodeMap[$currentPath]
-                        # Upsert: an item piped in later may match an existing intermediate's path.
+                        # Items piped in later can match the path of an intermediate already made, so this is an upsert.
                         # Promote the synthesized Tag to the real source object.
                         if ($isOwnPath) { $parentNode.Tag = $item }
                     }
                     else {
                         # Tag is the source item when this segment IS the item's own path, otherwise a created placeholder carrying the accumulated path so consumers always have something actionable to read from .Tag.
-                        $tagData = if ($isOwnPath) { $item } 
+                        $tagData = if ($isOwnPath) { $item }
                         else { [PSCustomObject]@{ Path = $currentPath; Synthesized = $true }
                     }
-                        
+
                         $node = [System.Windows.Controls.TreeViewItem]@{
                             Header = $segment
                             Tag    = $tagData
                         }
-                        
+
                         if ($ExpandAll) { $node.IsExpanded = $true }
-                        
+
                         if (!$parentNode) { [void]$tree.Items.Add($node) }
                         else { [void]$parentNode.Items.Add($node)  }
-                        
+
                         $nodeMap[$currentPath] = $node
                         $parentNode = $node
                     }
@@ -272,13 +296,13 @@ function New-UiTree {
             # Walk nested data structure (hashtables with Children arrays)
             $buildNodes = {
                 param($itemList, $parentNode)
-                
+
                 foreach ($item in $itemList) {
                     # $allItems can fall back to raw $Items on all null input,skip so the deref below is safe.
                     if ($null -eq $item) { continue }
                     $displayText = $null
                     $children    = $null
-                    
+
                     # Handle both hashtables and PSObjects
                     if ($item -is [hashtable]) {
                         $displayText = $item[$DisplayProperty]
@@ -306,7 +330,7 @@ function New-UiTree {
                     else { [void]$parentNode.Items.Add($node)  }
                 }
             }
-            
+
             & $buildNodes $allItems $null
         }
 
@@ -354,9 +378,9 @@ function New-UiTree {
 
             $updateLabelFg = {
                 param($sender, $e)
-                
+
                 $tviLocal = $sender -as [System.Windows.Controls.TreeViewItem]
-                
+
                 if ($null -eq $tviLocal -or $tviLocal.Header -isnot [System.Windows.Controls.StackPanel]) { return }
                 $isActiveSel = $tviLocal.IsSelected -and [System.Windows.Controls.Primitives.Selector]::GetIsSelectionActive($tviLocal)
                 $key = if ($isActiveSel) { 'SelectionForegroundBrush' } else { 'ControlForegroundBrush' }
@@ -368,13 +392,23 @@ function New-UiTree {
                 }
             }
 
+            # The descriptor holds a strong reference and leaks every TVI in the tree per closed window without the Unloaded unsubscribe.
+            # WPF's memory model is more or less just a series of suggestions?
+            # Built once rather than per node, since a closure per node is the most expensive thing in this loop.
+            $watchSelection = {
+                param($sender, $eventArgs)
+                $dpdIsSelected.AddValueChanged($sender, $updateLabelFg)
+                $dpdIsSelectionActive.AddValueChanged($sender, $updateLabelFg)
+            }.GetNewClosure()
+            $unwatchSelection = {
+                param($sender, $eventArgs)
+                $dpdIsSelected.RemoveValueChanged($sender, $updateLabelFg)
+                $dpdIsSelectionActive.RemoveValueChanged($sender, $updateLabelFg)
+            }.GetNewClosure()
+
             # Walk every TVI and decorate it.
             $decorate = {
                 param($items)
-                # Drag the outer descriptors and handler into local scope. GetNewClosure only captures locals, parent scope vars resolve to null after this function returns and Loaded fires.
-                $dpdSel = $dpdIsSelected
-                $dpdAct = $dpdIsSelectionActive
-                $upd    = $updateLabelFg
                 foreach ($tvi in $items) {
                     $hasChildren = $tvi.Items.Count -gt 0
                     $wantsBox = ($ParentCheckBoxes -and $hasChildren) -or
@@ -425,24 +459,15 @@ function New-UiTree {
                             [System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
 
                         # Watch IsSelected AND IsSelectionActive, Add_Selected misses the inactive case (tree loses focus, row stays selected).
-                        # Loaded subscribes, Unloaded unsubscribes. The descriptor holds a strong reference and leaks a tree's worth of TVIs per closed window otherwise.
-                        # WPF's memory model is more or less just a series of suggestions.
-                        $tvi.Add_Loaded({
-                            $dpdSel.AddValueChanged($tvi, $upd)
-                            $dpdAct.AddValueChanged($tvi, $upd)
-                        }.GetNewClosure())
-
-                        $tvi.Add_Unloaded({
-                            $dpdSel.RemoveValueChanged($tvi, $upd)
-                            $dpdAct.RemoveValueChanged($tvi, $upd)
-                        }.GetNewClosure())
+                        $tvi.Add_Loaded($watchSelection)
+                        $tvi.Add_Unloaded($unwatchSelection)
 
                         $stack = [System.Windows.Controls.StackPanel]@{
                             Orientation = 'Horizontal'
                         }
                         [void]$stack.Children.Add($cb)
                         [void]$stack.Children.Add($label)
-                        
+
                         # Set-CheckBoxStyle has no IsEnabled trigger - disabled boxes look enabled.
                         # Dim the whole header instead of patching the module-wide style.
                         if ($disableThis) { $stack.Opacity = 0.45 }
@@ -478,7 +503,7 @@ function New-UiTree {
                         $treeMetaForReset = $treeMeta
                         $newState = [bool]$sender.IsChecked
 
-                        # Cascade-down: walk children with a stack, checkbox lookup inlined.
+                        # Cascade down with a stack, checkbox lookup inlined
                         # Helper script blocks throw on null lookups when called from the click handler.
                         $dnStack = [System.Collections.Generic.Stack[object]]::new()
                         $dnStack.Push($sourceTvi)
@@ -546,7 +571,7 @@ function New-UiTree {
                     }
                 }
 
-                # Attach the cascade handler to every CheckBox we placed. Synchronous, $getHeaderCheckBox in scope.
+                # Attach the cascade handler to every CheckBox placed above. Synchronous, $getHeaderCheckBox in scope.
                 $wireBoxes = {
                     param($items)
                     foreach ($tvi in $items) {
@@ -561,70 +586,62 @@ function New-UiTree {
                 & $wireBoxes $tree.Items
 
                 # Seed initial parent state. If -Checked prechecked anything, walk ancestors and recompute their binary state. Loop, not recursion, to mirror the runtime cascade.
+                # Off the pipeline 5.1 won't reach a finally. If the pass throws, the tree never gets added and nobody reads the flag.
                 $treeMeta.CascadeInProgress = $true
-                try {
-                    # Collect every TVI that starts checked.
-                    $allNodes = [System.Collections.Generic.Stack[object]]::new()
-                    foreach ($root in $tree.Items) { $allNodes.Push($root) }
-                    $checkedTvis = [System.Collections.Generic.List[object]]::new()
-                    while ($allNodes.Count -gt 0) {
-                        $n = $allNodes.Pop()
-                        foreach ($c in $n.Items) { $allNodes.Push($c) }
-                        $ncb = & $getHeaderCheckBox $n
-                        if ($ncb -and $ncb.IsChecked -eq $true) { [void]$checkedTvis.Add($n) }
-                    }
 
-                    # For each checked node, ascend and refresh parent binary state.
-                    foreach ($cnode in $checkedTvis) {
-                        $node = $cnode
-                        while ($true) {
-                            $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
-                            if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
-                            $parentCb = & $getHeaderCheckBox $parentTvi
-                            if (!$parentCb) { break }
+                # Every TVI that starts checked
+                $allNodes = [System.Collections.Generic.Stack[object]]::new()
+                foreach ($root in $tree.Items) { $allNodes.Push($root) }
+                $checkedTvis = [System.Collections.Generic.List[object]]::new()
+                while ($allNodes.Count -gt 0) {
+                    $n = $allNodes.Pop()
+                    foreach ($c in $n.Items) { $allNodes.Push($c) }
+                    $ncb = & $getHeaderCheckBox $n
+                    if ($ncb -and $ncb.IsChecked -eq $true) { [void]$checkedTvis.Add($n) }
+                }
 
-                            # Counter names avoid the bare word 'checked' - the function has a [scriptblock]$Checked param and PS is case insensitive.
-                            # `$checked = 0` inherits the [scriptblock] constraint and throws at compile time.
-                            $allCheckedOrNone = $true
-                            $anyEnabled       = $false
-                            foreach ($sib in $parentTvi.Items) {
-                                $sibCb = & $getHeaderCheckBox $sib
-                                if (!$sibCb -or !$sibCb.IsEnabled) { continue }
-                                $anyEnabled = $true
-                                if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
-                            }
-                            if (!$anyEnabled) { break }
-                            $parentCb.IsChecked = $allCheckedOrNone
-                            $node = $parentTvi
+                # Walk up from each checked one
+                foreach ($cnode in $checkedTvis) {
+                    $node = $cnode
+                    while ($true) {
+                        $parentTvi = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
+                        if ($parentTvi -isnot [System.Windows.Controls.TreeViewItem]) { break }
+                        $parentCb = & $getHeaderCheckBox $parentTvi
+                        if (!$parentCb) { break }
+
+                        # Counter names avoid the plain word 'checked', since the function has a [scriptblock]$Checked param and PS is case insensitive.
+                        # `$checked = 0` inherits the [scriptblock] constraint and throws
+                        $allCheckedOrNone = $true
+                        $anyEnabled       = $false
+                        foreach ($sib in $parentTvi.Items) {
+                            $sibCb = & $getHeaderCheckBox $sib
+                            if (!$sibCb -or !$sibCb.IsEnabled) { continue }
+                            $anyEnabled = $true
+                            if ($sibCb.IsChecked -ne $true) { $allCheckedOrNone = $false }
                         }
+                        if (!$anyEnabled) { break }
+                        $parentCb.IsChecked = $allCheckedOrNone
+                        $node = $parentTvi
                     }
                 }
-                finally { $treeMeta.CascadeInProgress = $false }
+                $treeMeta.CascadeInProgress = $false
             }
         }
 
         # Register control for variable hydration
         $session.AddControlSafe($Variable, $tree)
 
-        # Reraise scroll events at the parent ScrollViewer so the tree doesn't swallow them.
-        # Only without -Fill - a filled tree leaves the outer ScrollViewer nothing to scroll, so re-raising there kills the wheel entirely. The tree's own scrollbar has to own it.
-        if (!$Fill) {
-            $tree.Add_PreviewMouseWheel({
-                param($sender, $eventArgs)
-                if (!$eventArgs.Handled) {
-                    $eventArgs.Handled = $true
-                    $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
-                    $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
-                    $newEvent.Source = $sender
-                    $parentElement = $sender.Parent -as [System.Windows.UIElement]
-                    if ($parentElement) { $parentElement.RaiseEvent($newEvent) }
-                }
-            })
-        }
+        $wheelMode = if ($CaptureScrollWheel) { 'Capture' } else { $ScrollWheel }
+
+        if ($Fill -and $wheelMode -eq 'Page' -and !$PSBoundParameters.ContainsKey('ScrollWheel')) { $wheelMode = 'Edge' }
+        Set-UiWheelRouting -Control $tree -Mode $wheelMode
+
+        # After the nodes exist and the checkbox pass set the Tag (the menu reads IsCheckBoxTree off it).
+        if (!$NoContextMenu) { New-UiTreeContextMenu -Tree $tree }
 
         if ($WPFProperties) {
             # Tag is reserved only on checkbox trees since they keep hydration metadata there (IsCheckBoxTree et al) and the C# extractor reads it, so a user-set Tag would break checked items hydration.
-            # Plain trees never touch $tree.Tag, so let those through. Copy before Remove: [hashtable] binds your own table by reference.
+            # Plain trees never touch $tree.Tag, so let those through. Copy before Remove - [hashtable] binds your own table by reference.
             if ($useCheckBoxes -and $WPFProperties.ContainsKey('Tag')) {
                 Write-Warning "New-UiTree: -WPFProperties Tag is reserved (stores tree hydration metadata). Ignoring."
                 $WPFProperties = @{} + $WPFProperties
@@ -633,10 +650,7 @@ function New-UiTree {
             if ($WPFProperties.Count -gt 0) { Set-UiProperties -Control $tree -Properties $WPFProperties }
         }
 
-        # Attach to parent container
-        if ($parent -is [System.Windows.Controls.Panel]) { [void]$parent.Children.Add($tree)  }
-        elseif ($parent -is [System.Windows.Controls.ItemsControl]) {  [void]$parent.Items.Add($tree)  }
-        elseif ($parent -is [System.Windows.Controls.ContentControl]) {   $parent.Content = $tree  }
+        Add-UiControlToParent -Control $tree -Parent $parent
 
         if ($Fill) { Set-UiFillParentHeight -Control $tree }
     }

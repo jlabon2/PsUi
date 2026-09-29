@@ -60,7 +60,8 @@ function Show-UiGlyphBrowser {
         Width   = 867.5
         Height  = 600
         Content = {
-            New-UiLabel -Text "$(Get-PsUiIconFont) Icon Browser" -Style Title
+            # Segoe Fluent Icons already ends in Icons
+            New-UiLabel -Text (Get-PsUiIconFont) -Style Title
             New-UiLabel -Text "Click any icon to copy its name to clipboard. Dimmed icons are missing from the active font; hover any tile to see which font(s) carry it. Use -Icon 'Name' with buttons, cards, and panels." -Style Note
             New-UiInput -Label 'Search' -Variable 'glyphSearch' -Placeholder 'Type to filter glyphs...'
 
@@ -125,9 +126,10 @@ function Show-UiGlyphBrowser {
                     Opacity             = $tileOpacity
                 }
 
-                $labelText = if ($glyph.Name.Length -gt 9) { $glyph.Name.Substring(0, 7) + '..' } else { $glyph.Name }
+                # Without MaxWidth the trimmed name runs right up to the tile border
                 $label = [System.Windows.Controls.TextBlock]@{
-                    Text                = $labelText
+                    Text                = $glyph.Name
+                    MaxWidth            = 67
                     FontSize            = 9
                     Foreground          = $secondaryTextBrush
                     HorizontalAlignment = 'Center'

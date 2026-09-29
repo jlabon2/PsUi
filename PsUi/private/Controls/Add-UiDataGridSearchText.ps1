@@ -23,7 +23,7 @@ function Add-UiDataGridSearchText {
             try {
                 $val = $prop.Value
                 if ($null -ne $val) {
-                    [void]$sb.Append([string]$val)
+                    [void]$sb.Append([PsUi.ValueKind]::IndexText($val, 25, 512))
                     [void]$sb.Append(' ')
                 }
             }

@@ -51,5 +51,9 @@ function New-ExpandableValueColumn {
     $cellTemplate.VisualTree = $textBlockFactory
     $valCol.CellTemplate = $cellTemplate
 
+    # Copy/export read a column's path off of SortMemberPath, then Binding, then this, and a template column has neither of the first two.
+    # Without it Get-UiDataGridVisibleColumnPaths skipped the column and wrote an empty string while saying success.
+    $valCol.ClipboardContentBinding = [System.Windows.Data.Binding]::new($ValueBinding)
+
     return $valCol
 }

@@ -22,7 +22,7 @@ function New-DataGridContextMenu {
     [void]$contextMenu.Items.Add($copyCellMenuItem)
 
     $copyCellMenuItem.Add_Click({
-        & $copyToClipboard -DataGrid $DataGrid -Cell
+        [void](& $copyToClipboard -DataGrid $DataGrid -Cell)
     }.GetNewClosure())
 
     # This and the Ctrl+C handler both route through Invoke-UiDataGridCopyToClipboard so the _* exclusion stays consistent with the toolbar.
@@ -30,7 +30,7 @@ function New-DataGridContextMenu {
     $copyMenuItem.Header = 'Copy Selected Rows'
     [void]$contextMenu.Items.Add($copyMenuItem)
 
-    $copyMenuItem.Add_Click({ & $copyToClipboard -DataGrid $DataGrid }.GetNewClosure())
+    $copyMenuItem.Add_Click({ [void](& $copyToClipboard -DataGrid $DataGrid) }.GetNewClosure())
 
     # WPF's default Ctrl+C copies "System.Object[]" for non string rows and bypasses the _* strip. Always intercept this.
     # Skip when the original source is a cell editor. Ctrl+C on that should copy the selected text inside the editor.
@@ -39,7 +39,7 @@ function New-DataGridContextMenu {
         if ($eventArgs.Key -ne 'C' -or [System.Windows.Input.Keyboard]::Modifiers -ne 'Control') { return }
         if ($eventArgs.OriginalSource -is [System.Windows.Controls.Primitives.TextBoxBase]) { return }
         if ($sender.SelectedItems.Count -gt 0) {
-            & $copyToClipboard -DataGrid $sender
+            [void](& $copyToClipboard -DataGrid $sender)
             $eventArgs.Handled = $true
         }
     }.GetNewClosure())

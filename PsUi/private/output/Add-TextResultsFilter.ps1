@@ -42,20 +42,17 @@ function Add-TextResultsFilter {
         $tag.Timer = $timer
 
         $timer.Add_Tick({
-            try {
-                $fb = $this.Tag
-                $fbTag = $fb.Tag
-                $rtb = $fbTag.RichTextBox
+            # 5.1 NREs going into a finally from a tick
+            $this.Stop()
+            $fb = $this.Tag
+            $fb.Tag.Timer = $null
 
+            try {
+                $rtb        = $fb.Tag.RichTextBox
                 $searchText = $fb.Text.Trim()
                 Find-ConsoleText -RichTextBox $rtb -SearchText $searchText
             }
             catch { Write-Debug "RichTextBox search failed: $_" }
-            finally {
-                $this.Stop()
-                $fb = $this.Tag
-                $fb.Tag.Timer = $null
-            }
         })
 
         $timer.Start()

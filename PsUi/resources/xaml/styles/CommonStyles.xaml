@@ -1,42 +1,42 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
-    
+
     <!-- Fallback value for DisabledOpacity (themes override this dynamically) -->
     <sys:Double x:Key="DisabledOpacity">0.4</sys:Double>
-    
+
     <Style x:Key="ModernLabelStyle" TargetType="Label">
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
         <Setter Property="FontFamily" Value="Segoe UI"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="Padding" Value="0,4,0,4"/>
     </Style>
-    
+
     <Style x:Key="SecondaryLabelStyle" TargetType="Label" BasedOn="{StaticResource ModernLabelStyle}">
         <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}"/>
         <Setter Property="FontSize" Value="11"/>
     </Style>
-    
+
     <Style x:Key="HeaderLabelStyle" TargetType="Label" BasedOn="{StaticResource ModernLabelStyle}">
         <Setter Property="FontSize" Value="14"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Padding" Value="0,8,0,8"/>
     </Style>
-    
+
     <Style x:Key="ModernCheckBoxStyle" TargetType="CheckBox">
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
         <Setter Property="FontFamily" Value="Segoe UI"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="Padding" Value="6,0,0,0"/>
     </Style>
-    
+
     <Style x:Key="ModernRadioButtonStyle" TargetType="RadioButton">
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
         <Setter Property="FontFamily" Value="Segoe UI"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="Padding" Value="6,0,0,0"/>
     </Style>
-    
+
     <Style x:Key="ModernComboBoxStyle" TargetType="ComboBox">
         <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
@@ -46,13 +46,13 @@
         <Setter Property="FontFamily" Value="Segoe UI"/>
         <Setter Property="FontSize" Value="12"/>
     </Style>
-    
+
     <Style x:Key="ModernSeparatorStyle" TargetType="Separator">
         <Setter Property="Background" Value="{DynamicResource BorderBrush}"/>
         <Setter Property="Height" Value="1"/>
         <Setter Property="Margin" Value="0,8,0,8"/>
     </Style>
-    
+
     <Style x:Key="ModernProgressBarStyle" TargetType="ProgressBar">
         <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
@@ -70,7 +70,7 @@
                         <Grid>
                             <Border x:Name="PART_Track"/>
                             <!-- Determinate indicator -->
-                            <Border x:Name="PART_Indicator" 
+                            <Border x:Name="PART_Indicator"
                                     Background="{TemplateBinding Foreground}"
                                     HorizontalAlignment="Left"
                                     CornerRadius="3"/>
@@ -246,12 +246,12 @@
                             <RowDefinition/>
                         </Grid.RowDefinitions>
                         <!-- Expand/collapse toggle button -->
-                        <ToggleButton x:Name="Expander" 
-                                      ClickMode="Press" 
+                        <ToggleButton x:Name="Expander"
+                                      ClickMode="Press"
                                       IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
                                       Style="{StaticResource TreeViewExpanderStyle}"/>
                         <!-- Header content with selection background -->
-                        <Border x:Name="Bd" 
+                        <Border x:Name="Bd"
                                 Grid.Column="1"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
@@ -300,9 +300,8 @@
     </Style>
 
     <!-- Modern TreeView style -->
-    <!-- Note: virtualization is NOT enabled. The current New-UiTree builder adds pre-built
-         TreeViewItems directly to .Items, which defeats VirtualizingPanel.IsVirtualizing.
-         A future refactor to ItemsSource + HierarchicalDataTemplate could re-enable it. -->
+    <!-- Prebuilt TreeViewItems virtualize ok. A TreeView leaves IsVirtualizing off unless the style asks, and CanContentScroll was set False below. Either one alone realised all 2500 nodes, against 49 with both on.
+         Standard mode, not Recycling, since every container is a permanent per node object. Pixel scroll unit keeps the kinda feel. -->
     <Style x:Key="ModernTreeViewStyle" TargetType="TreeView">
         <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}"/>
@@ -310,6 +309,9 @@
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="VirtualizingStackPanel.IsVirtualizing" Value="True"/>
+        <Setter Property="VirtualizingStackPanel.VirtualizationMode" Value="Standard"/>
+        <Setter Property="VirtualizingStackPanel.ScrollUnit" Value="Pixel"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TreeView">
@@ -320,7 +322,7 @@
                             SnapsToDevicePixels="True">
                         <ScrollViewer x:Name="TV_ScrollViewer_"
                                       Focusable="False"
-                                      CanContentScroll="False"
+                                      CanContentScroll="True"
                                       Padding="{TemplateBinding Padding}">
                             <ItemsPresenter/>
                         </ScrollViewer>

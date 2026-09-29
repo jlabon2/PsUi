@@ -16,7 +16,7 @@ namespace PsUi
     public partial class NewUiWindowCommand
     {
         // Main window creation/lifecycle: creates session, runspace, UI, runs event loop
-        private Window RunWindow(WindowParameters p, PSHost host, ManualResetEvent windowReady = null, 
+        private Window RunWindow(WindowParameters p, PSHost host, ContentErrorRelay contentErrors, ManualResetEvent windowReady = null,
             Window[] windowHolder = null, Dictionary<string, object> exportedVariables = null,
             System.Windows.Threading.Dispatcher splashDispatcher = null)
         {
@@ -30,26 +30,26 @@ namespace PsUi
                 // Create session for this thread FIRST
                 sessionId = SessionManager.CreateSession();
                 SessionManager.SetCurrentSession(sessionId);
-                
+
                 var session = SessionManager.Current;
                 if (session == null)
                 {
                     throw new InvalidOperationException("Failed to create session context");
                 }
-                
+
                 // Propagate debug mode to session so button actions can access it
                 session.DebugMode = p.DebugMode;
-                
+
                 // Propagate async apartment mode (MTA uses ThreadPool, STA uses dedicated threads)
                 session.UseMtaThreading = string.Equals(p.AsyncApartment, "MTA", StringComparison.OrdinalIgnoreCase);
-                
+
                 // Store the calling script info for error reporting
                 session.CallerScriptName = p.CallerScriptName;
                 session.CallerScriptLine = p.CallerScriptLine;
-                
+
                 // Store export flag for captured variables
                 session.ExportOnClose = p.ExportOnClose;
-                
+
                 // Store custom logo path if provided
                 session.CustomLogo = p.Logo;
 
@@ -64,24 +64,33 @@ namespace PsUi
                 // Import the PsUi module into this runspace
                 if (!string.IsNullOrEmpty(p.ModulePath))
                 {
+                    // -Name on a folder looks for <folder>/<foldername>.psd1, so a gallery install at PsUi\<version>\ sends it hunting for <version>.psd1 and the window runspace comes up without the module.
+                    // Point at the manifest when one is there.
+                    string importTarget = p.ModulePath;
+                    string manifestPath = System.IO.Path.Combine(p.ModulePath, "PsUi.psd1");
+                    if (System.IO.File.Exists(manifestPath))
+                    {
+                        importTarget = manifestPath;
+                    }
+
                     using (var ps = PowerShell.Create())
                     {
                         ps.Runspace = windowRunspace;
                         ps.AddCommand("Import-Module")
-                          .AddParameter("Name", p.ModulePath)
+                          .AddParameter("Name", importTarget)
                           .AddParameter("Force", true);
                         ps.Invoke();
-                        
+
                         if (ps.Streams.Error.Count > 0)
                         {
                             DebugLog("WINDOW", "Module import error: " + ps.Streams.Error[0].Exception.Message);
                         }
                     }
                 }
-                
+
                 // Inject private functions into this runspace
                 InjectPrivateFunctions(windowRunspace);
-                
+
                 // Inject preference variables for -Debug and -Verbose propagation
                 if (p.DebugMode || p.VerboseMode)
                 {
@@ -173,17 +182,17 @@ namespace PsUi
                     {
                         // Get theme name from filename (LoadThemeFromJson registered it in ModuleContext)
                         customThemeName = Path.GetFileNameWithoutExtension(p.ThemePath);
-                        
+
                         // Determine base theme type from custom colors or default to Light
                         string typeValue = customColors["Type"] as string;
-                        string baseTheme = customColors.ContainsKey("Type") 
+                        string baseTheme = customColors.ContainsKey("Type")
                             ? typeValue ?? "Light"
                             : "Light";
                         DebugLog("THEME", "Loaded custom theme '" + customThemeName + "' from JSON, base type: " + baseTheme);
-                        
+
                         // Apply custom colors directly to ThemeEngine using the actual theme name
                         ThemeEngine.ApplyTheme(customThemeName, customColors);
-                        
+
                         // Set ActiveTheme so child windows (output panels) use the same theme
                         ModuleContext.ActiveTheme = customThemeName;
                     }
@@ -192,12 +201,12 @@ namespace PsUi
                         DebugLog("THEME", "Failed to load custom theme, falling back to: " + p.Theme);
                     }
                 }
-                
+
                 Hashtable colors = null;
+                string resolvedTheme = p.Theme;
                 if (customColors == null)
                 {
                     // Resolve Auto to the system's actual light/dark preference
-                    string resolvedTheme = p.Theme;
                     if (string.Equals(p.Theme, "Auto", StringComparison.OrdinalIgnoreCase))
                     {
                         resolvedTheme = DetectSystemTheme();
@@ -224,7 +233,7 @@ namespace PsUi
 
                 // Build and configure the window with custom chrome
                 window = BuildWindow(p, colors);
-                
+
                 // Log UI thread exceptions before suppressing
                 window.Dispatcher.UnhandledException += (sender, e) =>
                 {
@@ -243,7 +252,8 @@ namespace PsUi
                 // Add theme button to titlebar if not hidden
                 if (!p.HideThemeButton)
                 {
-                    string currentThemeName = customThemeName ?? p.Theme;
+                    // New-ThemePopupButton declares -CurrentTheme and never reads it. The popup clears and rebuilds its rows off ModuleContext.ActiveTheme inside the click handler, so this value decides nothing until that changes.
+                    string currentThemeName = customThemeName ?? resolvedTheme;
                     AddThemeButton(window, chromeInfo, currentThemeName, windowRunspace);
                 }
 
@@ -254,40 +264,17 @@ namespace PsUi
 
                 // Create content area with layout-specific scrolling
                 Panel contentPanel = CreateContentPanel(p.LayoutMode);
-                
-                if (p.AutoSize)
+
+                // Every sizing mode scrolls, since a fixed height can be too small too
+                // Focus lands here when a -NoOutput button disables, so no focus box
+                var scrollViewer = new ScrollViewer
                 {
-                    // Full auto-size - use ScrollViewer so content scrolls if MaxHeight clips the window
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
-                else if (p.AutoSizeHeight)
-                {
-                    // Auto-size height - use ScrollViewer, window will cap height after layout
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
-                else
-                {
-                    // Fixed height - use ScrollViewer for overflow
-                    var scrollViewer = new ScrollViewer
-                    {
-                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                    };
-                    scrollViewer.Content = contentPanel;
-                    outerPanel.Children.Add(scrollViewer);
-                }
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    FocusVisualStyle = null
+                };
+                scrollViewer.Content = contentPanel;
+                outerPanel.Children.Add(scrollViewer);
 
                 // Configure session - store chromeInfo for later access, session accessible via GetSession
                 session.Window = window;
@@ -306,22 +293,31 @@ namespace PsUi
                 }
 
                 // Execute user's Content scriptblock
-                ExecuteContentScript(p.Content, p.PrivateFunctions, p.CallerVariables, p.CallerFunctions, 
+                ExecuteContentScript(p.Content, p.PrivateFunctions, p.CallerVariables, p.CallerFunctions,
                                      session, windowRunspace, p.DebugMode, p.VerboseMode,
-                                     p.CallerScriptName, p.CallerScriptLine);
+                                     p.CallerScriptName, p.CallerScriptLine, p.OuterContentLine, contentErrors, p.ContentErrorAction);
+
+                // Every content error has gone out, so the cmdlet thread can wait
+                contentErrors.Finish();
+
+                // WriteError threw on the cmdlet side, which ends the window like a throw
+                if (contentErrors.Halted)
+                {
+                    throw new OperationCanceledException("New-UiWindow stopped on a -Content error.");
+                }
 
                 // Apply padding if no TabControl present
                 ApplyContentPadding(contentPanel);
 
                 // Configure window animations and events
-                ConfigureWindowEvents(window, p, windowRunspace, colors, sessionId, splashDispatcher);
+                ConfigureWindowEvents(window, p, windowRunspace, colors, sessionId, scrollViewer, splashDispatcher);
 
                 // Apply custom WPF properties
                 if (p.WPFProperties != null && p.WPFProperties.Count > 0)
                 {
-                    ApplyWpfProperties(window, p.WPFProperties);
+                    ApplyWpfProperties(window, p.WPFProperties, windowRunspace);
                 }
-                
+
                 // Force taskbar icon before showing window
                 if (window.Icon != null)
                 {
@@ -332,37 +328,37 @@ namespace PsUi
                     }
                 }
 
-                // PassThru mode: show window and run the message loop (non-modal)
+                // PassThru mode shows the window and runs the message loop, non modal.
                 if (p.PassThru)
                 {
                     // Shutdown Dispatcher when window closes so Dispatcher.Run() returns
                     window.Closed += (s, e) => window.Dispatcher.InvokeShutdown();
-                    
+
                     // Show non-blocking (not modal)
                     window.Show();
-                    
+
                     // Store window reference before signaling (Dispatcher.Run blocks afterward)
                     if (windowHolder != null) { windowHolder[0] = window; }
-                    
+
                     // Signal that window is ready for user code to use
                     if (windowReady != null) { windowReady.Set(); }
-                    
+
                     // Run message loop - blocks this thread but allows Invoke calls
                     System.Windows.Threading.Dispatcher.Run();
-                    
+
                     // Export captured variables for PassThru mode
                     ExportCapturedVariables(sessionId, exportedVariables);
-                    
+
                     return window;
                 }
 
                 // Show the window (blocks until closed)
                 window.ShowDialog();
-                
+
                 // Export captured variables to the shared dictionary for the calling script
                 // Must happen BEFORE session disposal
                 ExportCapturedVariables(sessionId, exportedVariables);
-                
+
                 // Dispose session after export
                 if (sessionId != Guid.Empty)
                 {
@@ -377,7 +373,7 @@ namespace PsUi
                 {
                     try { splashDispatcher.InvokeShutdown(); } catch (Exception splashEx) { System.Diagnostics.Debug.WriteLine("Splash shutdown failed: " + splashEx.Message); }
                 }
-                
+
                 DebugLog("WINDOW", "Window creation error: " + ex.Message);
                 throw;
             }
@@ -412,50 +408,50 @@ namespace PsUi
 
             return window;
         }
-        
+
         // Exports captured vars back to the calling scope when -ExportOnClose is used
         private void ExportCapturedVariables(Guid sessionId, Dictionary<string, object> exportedVariables)
         {
             var session = SessionManager.GetSession(sessionId);
             if (session == null || !session.ExportOnClose) return;
             if (exportedVariables == null) return;
-            
+
             var captured = session.CapturedVariables;
             if (captured == null || captured.Count == 0) return;
-            
+
             DebugLog("EXPORT", string.Format("Exporting {0} captured variable(s) to caller scope", captured.Count));
-            
+
             // Copy captured variables to shared dictionary for the calling thread
             foreach (var kvp in captured)
             {
                 string varName = kvp.Key;
                 object value = kvp.Value;
-                
+
                 // Validate name (basic security check)
                 if (string.IsNullOrEmpty(varName) || !Constants.IsValidIdentifier(varName))
                 {
                     DebugLog("EXPORT", string.Format("Skipped invalid variable name: {0}", varName));
                     continue;
                 }
-                
+
                 // Store in shared dictionary - the calling thread will set in its runspace
                 exportedVariables[varName] = value;
-                
-                DebugLog("EXPORT", string.Format("Exported '{0}' ({1})", varName, 
+
+                DebugLog("EXPORT", string.Format("Exported '{0}' ({1})", varName,
                     value != null ? value.GetType().Name : "null"));
             }
         }
-        
+
         // Create borderless window with custom chrome (matches Out-DataGrid style)
         private Window BuildWindow(WindowParameters p, Hashtable colors)
         {
             // Shadow adds visual padding around the window
             const int shadowPadding = 16;
-            
+
             // Calculate actual window size including shadow padding
             int totalWidth = p.Width + (shadowPadding * 2);
             int totalHeight = p.Height + (shadowPadding * 2);
-            
+
             // Create borderless transparent window for custom chrome
             var window = new Window
             {
@@ -470,12 +466,12 @@ namespace PsUi
                 ResizeMode = p.NoResize ? ResizeMode.NoResize : ResizeMode.CanResize,
                 Opacity = 0  // Start invisible for fade-in
             };
-            
+
             // Calculate screen-aware max height (80% of work area, clamped to user's MaxHeight)
             var workArea = SystemParameters.WorkArea;
             int screenAwareMaxHeight = (int)(workArea.Height * 0.80);
             int effectiveMaxHeight = Math.Min(p.MaxHeight, screenAwareMaxHeight);
-            
+
             // Configure sizing behavior
             if (p.AutoSize)
             {
@@ -497,11 +493,9 @@ namespace PsUi
                 window.Height = totalHeight;
                 DebugLog("WINDOW", string.Format("Fixed window size: {0}x{1}", p.Width, p.Height));
             }
-            
-            // Set unique app ID for taskbar identity
-            string appId = "PsUi.Window." + Guid.NewGuid().ToString().Substring(0, 8);
-            WindowManager.SetWindowAppId(window, appId);
-            
+
+            WindowManager.SetWindowAppId(window, "PsUi.Window");
+
             // Enable proper maximize behavior for borderless window (respects taskbar)
             WindowManager.EnableBorderlessMaximize(window);
 
@@ -520,14 +514,14 @@ namespace PsUi
 
             // Build custom chrome structure
             BuildWindowChrome(window, p, colors, shadowPadding);
-            
+
             // Register with ThemeEngine for dynamic switching
             ThemeEngine.RegisterElement(window);
-            
+
             return window;
         }
-        
-        // Custom chrome: drop shadow + themed titlebar + resize handles
+
+        // Custom chrome brings its own drop shadow and titlebar, and puts back the resize handles WindowStyle None takes away.
         private void BuildWindowChrome(Window window, WindowParameters p, Hashtable colors, int shadowPadding)
         {
             // Get initial colors from hashtable for immediate rendering
@@ -540,7 +534,7 @@ namespace PsUi
                 if (bgVal != null) windowBg = ConvertToBrush(bgVal);
                 if (borderVal != null) borderBrush = ConvertToBrush(borderVal);
             }
-            
+
             // Create shadow border as the root visual
             var shadowBorder = new Border
             {
@@ -550,11 +544,11 @@ namespace PsUi
                 Background = windowBg,
                 BorderBrush = borderBrush
             };
-            
+
             // Also bind to DynamicResource for runtime theme changes
             shadowBorder.SetResourceReference(Border.BackgroundProperty, "WindowBackgroundBrush");
             shadowBorder.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
-            
+
             // Apply drop shadow effect
             var shadow = new System.Windows.Media.Effects.DropShadowEffect
             {
@@ -566,13 +560,13 @@ namespace PsUi
             };
             shadowBorder.Effect = shadow;
             window.Content = shadowBorder;
-            
+
             // Create main layout grid
             var mainGrid = new Grid();
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });  // Titlebar
             mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });  // Content
             shadowBorder.Child = mainGrid;
-            
+
             // Build custom titlebar and get references to placeholder elements
             ContentControl themeButtonPlaceholder;
             Image titleBarIcon;
@@ -580,12 +574,12 @@ namespace PsUi
                                           p.NoResize, out themeButtonPlaceholder, out titleBarIcon);
             Grid.SetRow(titleBar, 0);
             mainGrid.Children.Add(titleBar);
-            
+
             // Create content area placeholder - will be populated later with actual content
             var contentArea = new Border { Name = "ContentArea" };
             Grid.SetRow(contentArea, 1);
             mainGrid.Children.Add(contentArea);
-            
+
             // Store references for later use (hashtable for PowerShell accessibility)
             window.Tag = new Hashtable
             {
@@ -597,9 +591,9 @@ namespace PsUi
                 { "ShadowPadding", shadowPadding }
             };
         }
-        
-        // Titlebar layout: Icon | Title | ThemeButton | Min/Max/Close
-        private Border BuildTitleBar(Window window, WindowParameters p, Hashtable colors, 
+
+        // Titlebar runs Icon, then Title, then ThemeButton, then Min, Max and Close.
+        private Border BuildTitleBar(Window window, WindowParameters p, Hashtable colors,
                                       Border shadowBorder, int shadowPadding,
                                       System.Windows.Media.Effects.DropShadowEffect cachedShadow,
                                       bool noResize,
@@ -613,15 +607,15 @@ namespace PsUi
                 Tag = "HeaderBorder"
             };
             titleBar.SetResourceReference(Border.BackgroundProperty, "HeaderBackgroundBrush");
-            
-            // Grid layout: Icon | Title | ThemeButton | WindowControls
+
+            // Grid runs Icon, then Title, then ThemeButton, then WindowControls.
             var titleBarGrid = new Grid();
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });  // Icon
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });  // Title
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });  // Theme button
             titleBarGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });  // Window controls
             titleBar.Child = titleBarGrid;
-            
+
             // Window icon placeholder - will be set via SetWindowIcon
             var iconImage = new Image
             {
@@ -634,11 +628,10 @@ namespace PsUi
             Grid.SetColumn(iconImage, 0);
             titleBarGrid.Children.Add(iconImage);
             titleBarIconOut = iconImage;
-            
-            // Title text
+
+            // Follows Window.Title so a retitle shows here too
             var titleText = new TextBlock
             {
-                Text = p.Title,
                 FontSize = 13,
                 FontWeight = FontWeights.Normal,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -646,10 +639,11 @@ namespace PsUi
                 Margin = new Thickness(8, 0, 0, 0),
                 Tag = "HeaderText"
             };
+            titleText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Title") { Source = window });
             titleText.SetResourceReference(TextBlock.ForegroundProperty, "HeaderForegroundBrush");
             Grid.SetColumn(titleText, 1);
             titleBarGrid.Children.Add(titleText);
-            
+
             // Theme button placeholder - will be added via PowerShell
             var themeButtonPlaceholder = new ContentControl
             {
@@ -660,16 +654,16 @@ namespace PsUi
             Grid.SetColumn(themeButtonPlaceholder, 2);
             titleBarGrid.Children.Add(themeButtonPlaceholder);
             themeButtonPlaceholderOut = themeButtonPlaceholder;
-            
+
             // Window control buttons
             var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal };
             Grid.SetColumn(buttonPanel, 3);
-            
+
             // Minimize button
             var minimizeBtn = CreateWindowControlButton("\uE921", false);
             minimizeBtn.Click += (s, e) => window.WindowState = WindowState.Minimized;
             buttonPanel.Children.Add(minimizeBtn);
-            
+
             // Maximize/Restore button (only if resizing is allowed)
             Button maximizeBtn = null;
             if (!noResize)
@@ -677,13 +671,13 @@ namespace PsUi
                 maximizeBtn = CreateWindowControlButton("\uE922", false);
                 maximizeBtn.Click += (s, e) =>
                 {
-                    window.WindowState = window.WindowState == WindowState.Maximized 
-                        ? WindowState.Normal 
+                    window.WindowState = window.WindowState == WindowState.Maximized
+                        ? WindowState.Normal
                         : WindowState.Maximized;
                 };
                 buttonPanel.Children.Add(maximizeBtn);
             }
-            
+
             // Close button
             var closeBtn = CreateWindowControlButton("\uE8BB", true);
             closeBtn.Click += (s, e) =>
@@ -692,20 +686,20 @@ namespace PsUi
                 window.Close();
             };
             buttonPanel.Children.Add(closeBtn);
-            
+
             titleBarGrid.Children.Add(buttonPanel);
-            
+
             // Handle window state changes for maximize icon, shadow, and resize borders
             window.StateChanged += (s, e) =>
             {
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(window);
-                
+
                 if (window.WindowState == WindowState.Maximized)
                 {
                     if (maximizeBtn != null) maximizeBtn.Content = "\uE923";  // Restore icon
                     shadowBorder.Margin = new Thickness(0);
                     shadowBorder.Effect = null;
-                    
+
                     // Remove resize borders when maximized so scrollbars remain clickable
                     if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 }
@@ -714,7 +708,7 @@ namespace PsUi
                     if (maximizeBtn != null) maximizeBtn.Content = "\uE922";  // Maximize icon
                     shadowBorder.Margin = new Thickness(shadowPadding);
                     shadowBorder.Effect = cachedShadow;  // Reuse cached shadow
-                    
+
                     // Restore resize borders for normal window state
                     if (chrome != null) chrome.ResizeBorderThickness = new Thickness(shadowPadding + 4);
                 }
@@ -728,8 +722,8 @@ namespace PsUi
             {
                 if (e.ClickCount == 2 && !noResize)
                 {
-                    window.WindowState = window.WindowState == WindowState.Maximized 
-                        ? WindowState.Normal 
+                    window.WindowState = window.WindowState == WindowState.Maximized
+                        ? WindowState.Normal
                         : WindowState.Maximized;
                 }
                 else if (e.ClickCount == 1)
@@ -746,7 +740,7 @@ namespace PsUi
                     }
                 }
             };
-            
+
             titleBar.MouseMove += (s, e) =>
             {
                 // Snapshot the nullable up front. Setting WindowState = Normal below processes messages synchronously (StateChanged fires), which can drain a queued MouseLeftButtonUp that nulls dragStartPoint. The original code re-read dragStartPoint.Value past that point and threw (Nullable.Value on an empty nullable is an InvalidOperationException).
@@ -786,16 +780,16 @@ namespace PsUi
                     }
                 }
             };
-            
+
             titleBar.MouseLeftButtonUp += (s, e) =>
             {
                 dragStartPoint = null;
                 titleBar.ReleaseMouseCapture();
             };
-            
+
             return titleBar;
         }
-        
+
         // Min/Max/Close button with hover effect (uses XAML template)
         private Button CreateWindowControlButton(string glyph, bool isCloseButton)
         {
@@ -811,19 +805,18 @@ namespace PsUi
                 Padding = new Thickness(0),
                 Tag = "WindowControlButton"
             };
-            
+
             // Don't use SetResourceReference for Foreground - creates local value that overrides template trigger setters after theme changes.
             // Foreground is set inside the template via DynamicResource binding instead.
-            
             string templateXaml = isCloseButton ? CloseButtonTemplate : WindowControlButtonTemplate;
             btn.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(templateXaml);
-            
+
             // Mark button as hit-testable within WindowChrome area
             System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(btn, true);
-            
+
             return btn;
         }
-        
+
         // WrapPanel for responsive mode, StackPanel for stack mode
         private Panel CreateContentPanel(string layoutMode)
         {
@@ -836,7 +829,7 @@ namespace PsUi
                     VerticalAlignment = VerticalAlignment.Top
                 };
             }
-            
+
             return new StackPanel
             {
                 Orientation = Orientation.Vertical,
@@ -844,7 +837,7 @@ namespace PsUi
                 VerticalAlignment = VerticalAlignment.Top
             };
         }
-        
+
         // Add padding to content area (TabControls have their own padding)
         private void ApplyContentPadding(Panel contentPanel)
         {
@@ -863,10 +856,10 @@ namespace PsUi
                 contentPanel.Margin = new Thickness(12);
             }
         }
-        
+
         // Fade-in, icon setup, console restore on close
-        private void ConfigureWindowEvents(Window window, WindowParameters p, Runspace windowRunspace, 
-                                            Hashtable colors, Guid sessionId,
+        private void ConfigureWindowEvents(Window window, WindowParameters p, Runspace windowRunspace,
+                                            Hashtable colors, Guid sessionId, ScrollViewer contentScroller,
                                             System.Windows.Threading.Dispatcher splashDispatcher = null)
         {
             // Fade-in effect
@@ -881,7 +874,7 @@ namespace PsUi
                         splashDispatcher.InvokeShutdown();
                     }
                     catch (Exception splashEx) { System.Diagnostics.Debug.WriteLine("Splash shutdown failed: " + splashEx.Message); }
-                    
+
                     // Defer activation until after layout completes (fixes auto-size windows)
                     window.Dispatcher.BeginInvoke(new Action(() =>
                     {
@@ -889,7 +882,7 @@ namespace PsUi
                         window.Focus();
                     }), System.Windows.Threading.DispatcherPriority.Loaded);
                 }
-                
+
                 // Cap height for auto-size modes after layout is complete
                 if (p.AutoSize)
                 {
@@ -917,13 +910,25 @@ namespace PsUi
                     window.SizeToContent = SizeToContent.Manual;
                     window.Height = finalHeight;
                 }
-                
+
                 // Clear MaxHeight constraint so maximize works properly
                 if (p.AutoSizeHeight)
                 {
                     window.MaxHeight = double.PositiveInfinity;
                 }
-                
+
+                // SizeToContent rounds to whole pixels, content measures in fractions.
+                // That leaves the scroller a hair short, with a scrollbar over it.
+                // Past 2px it's a real overflow and keeps its scrollbar.
+                if ((p.AutoSize || p.AutoSizeHeight) && contentScroller != null)
+                {
+                    window.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        double overflow = contentScroller.ExtentHeight - contentScroller.ViewportHeight;
+                        if (overflow > 0 && overflow < 2) { window.Height = Math.Ceiling(window.ActualHeight + overflow); }
+                    }), System.Windows.Threading.DispatcherPriority.Loaded);
+                }
+
                 var animation = new System.Windows.Media.Animation.DoubleAnimation
                 {
                     From = 0,
@@ -935,21 +940,21 @@ namespace PsUi
                     EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
                 };
                 window.BeginAnimation(UIElement.OpacityProperty, animation);
-                
+
                 // Set themed window icon and force taskbar update
                 SetWindowIcon(window, windowRunspace, colors, p.Logo);
             };
-            
+
             // Bring owned windows forward when parent is activated (fixes Alt+Tab)
             bool isActivatingChildren = false;
             window.Activated += (sender, e) =>
             {
                 // Prevent re-entry during child activation
                 if (isActivatingChildren) return;
-                
+
                 var parentWindow = sender as Window;
                 if (parentWindow == null) return;
-                
+
                 isActivatingChildren = true;
                 try
                 {
@@ -967,7 +972,7 @@ namespace PsUi
                     isActivatingChildren = false;
                 }
             };
-            
+
             // Set window icon BEFORE showing
             SetWindowIcon(window, windowRunspace, colors, p.Logo);
 
@@ -994,7 +999,7 @@ namespace PsUi
                 // Restore console only for top-level windows (no Owner)
                 var closedWindow = sender as Window;
                 bool isTopLevel = closedWindow != null && closedWindow.Owner == null;
-                
+
                 if (p.MinimizeConsole && consolePtr != IntPtr.Zero && isTopLevel)
                 {
                     try
@@ -1010,11 +1015,11 @@ namespace PsUi
                 // Session disposal moved to after ExportCapturedVariables in RunWindow
                 window.Dispatcher.InvokeShutdown();
             };
-            
+
             // Attach the window level hotkey handler for Register-UiHotkey
             WireUpHotkeyHandler(window, windowRunspace, sessionId);
         }
-        
+
         // Handle PreviewKeyDown for registered hotkeys
         private void WireUpHotkeyHandler(Window window, Runspace windowRunspace, Guid sessionId)
         {
@@ -1022,9 +1027,12 @@ namespace PsUi
             {
                 // Skip if already handled
                 if (e.Handled) return;
-                
-                var focused = System.Windows.Input.Keyboard.FocusedElement as System.Windows.DependencyObject;
-                
+
+                // A key event starts at the focused element - a test can raise one there without real focus
+                var focused = e.OriginalSource as System.Windows.DependencyObject;
+                var mods = System.Windows.Input.Keyboard.Modifiers;
+                var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
+
                 // Check if focus is in an editable text control
                 bool isEditableText = false;
                 if (focused is TextBox)
@@ -1039,19 +1047,16 @@ namespace PsUi
                 {
                     isEditableText = !((System.Windows.Controls.RichTextBox)focused).IsReadOnly;
                 }
-                
-                if (isEditableText)
+
+                // F1 to F24 never type, so they fire from a text box too
+                bool isFunctionKey = key >= System.Windows.Input.Key.F1 && key <= System.Windows.Input.Key.F24;
+                if (isEditableText && !isFunctionKey)
                 {
                     // Allow text input unless it's a modified key (Ctrl/Alt)
-                    bool hasModifier = (System.Windows.Input.Keyboard.Modifiers & 
-                        (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt)) != 0;
+                    bool hasModifier = (mods & (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt)) != 0;
                     if (!hasModifier) return;
                 }
-                
-                // Build normalized key combo string using StringBuilder to reduce allocations
-                var mods = System.Windows.Input.Keyboard.Modifiers;
-                var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
-                
+
                 // Ignore standalone modifier keys
                 if (key == System.Windows.Input.Key.LeftCtrl || key == System.Windows.Input.Key.RightCtrl ||
                     key == System.Windows.Input.Key.LeftAlt || key == System.Windows.Input.Key.RightAlt ||
@@ -1059,18 +1064,18 @@ namespace PsUi
                 {
                     return;
                 }
-                
+
                 // Use StringBuilder to avoid List<string> and string.Join allocations per keypress
                 var keyComboBuilder = new System.Text.StringBuilder(32);
                 if ((mods & System.Windows.Input.ModifierKeys.Control) != 0) keyComboBuilder.Append("CTRL+");
                 if ((mods & System.Windows.Input.ModifierKeys.Alt) != 0) keyComboBuilder.Append("ALT+");
                 if ((mods & System.Windows.Input.ModifierKeys.Shift) != 0) keyComboBuilder.Append("SHIFT+");
                 keyComboBuilder.Append(key.ToString().ToUpperInvariant());
-                
+
                 string keyCombo = keyComboBuilder.ToString();
-                
+
                 DebugLog("HOTKEY", "Key pressed: " + keyCombo);
-                
+
                 // Look up registered action in session
                 var session = SessionManager.GetSession(sessionId);
                 if (session == null)
@@ -1078,18 +1083,18 @@ namespace PsUi
                     DebugLog("HOTKEY", "Session not found for ID: " + sessionId);
                     return;
                 }
-                
+
                 var actionContext = session.GetHotkeyAction(keyCombo);
                 if (actionContext == null)
                 {
                     DebugLog("HOTKEY", "No hotkey registered for: " + keyCombo);
                     return;
                 }
-                
+
                 DebugLog("HOTKEY", "Executing hotkey action for: " + keyCombo);
-                
+
                 e.Handled = true;
-                
+
                 // Execute the hotkey action via PowerShell
                 try
                 {
@@ -1107,20 +1112,20 @@ namespace PsUi
                 }
             };
         }
-        
+
         // Set window and taskbar icons via PowerShell helper or custom logo
         private void SetWindowIcon(Window window, Runspace windowRunspace, Hashtable colors, string logoPath = null)
         {
             try
             {
                 System.Windows.Media.Imaging.BitmapSource icon = null;
-                
+
                 // Try custom logo first
                 if (!string.IsNullOrEmpty(logoPath))
                 {
                     icon = LoadCustomIcon(logoPath);
                 }
-                
+
                 // Fall back to generated icon
                 if (icon == null)
                 {
@@ -1133,7 +1138,7 @@ namespace PsUi
                         {
                             icon = iconResults[0].BaseObject as System.Windows.Media.Imaging.BitmapSource;
                         }
-                        
+
                         // Log any errors for debugging
                         if (ps.Streams.Error.Count > 0)
                         {
@@ -1141,12 +1146,12 @@ namespace PsUi
                         }
                     }
                 }
-                
+
                 if (icon != null)
                 {
                     window.Icon = icon;
                     WindowManager.SetTaskbarIcon(window, icon);
-                    
+
                     // Also set the titlebar icon for custom chrome windows
                     var chromeInfo = window.Tag as Hashtable;
                     if (chromeInfo != null && chromeInfo.ContainsKey("TitleBarIcon"))
@@ -1161,7 +1166,7 @@ namespace PsUi
                 DebugLog("ICON", "Icon creation failed: " + iconEx.Message);
             }
         }
-        
+
         // Load custom icon from file path
         private System.Windows.Media.Imaging.BitmapSource LoadCustomIcon(string logoPath)
         {
@@ -1172,7 +1177,7 @@ namespace PsUi
                 {
                     resolvedPath = Path.GetFullPath(logoPath);
                 }
-                
+
                 if (File.Exists(resolvedPath))
                 {
                     var bitmap = new System.Windows.Media.Imaging.BitmapImage();
@@ -1188,7 +1193,7 @@ namespace PsUi
             {
                 DebugLog("ICON", "Failed to load custom logo: " + ex.Message);
             }
-            
+
             return null;
         }
 
@@ -1217,7 +1222,7 @@ namespace PsUi
                     DebugLog("THEME", "Theme file not found: " + resolvedPath);
                     return null;
                 }
-                
+
                 // Cap at 100KB to avoid loading giant files by accident
                 var fileInfo = new FileInfo(resolvedPath);
                 if (fileInfo.Length > 100 * 1024)
@@ -1226,17 +1231,17 @@ namespace PsUi
                     DebugLog("THEME", "Theme file too large: " + fileInfo.Length + " bytes");
                     return null;
                 }
-                
+
                 string json = File.ReadAllText(resolvedPath);
                 DebugLog("THEME", "Read theme JSON: " + json.Length + " chars from " + resolvedPath);
-                
-                // Parse JSON using PowerShell's ConvertFrom-Json (PS 5.1 compatible)
+
+                // Parse JSON using PS's ConvertFrom-Json, which 5.1 carries too
                 using (var ps = PowerShell.Create(RunspaceMode.CurrentRunspace))
                 {
                     ps.AddScript("param($json) $json | ConvertFrom-Json");
                     ps.AddParameter("json", json);
                     var results = ps.Invoke();
-                    
+
                     if (ps.Streams.Error.Count > 0)
                     {
                         string parseError = ps.Streams.Error[0].Exception.Message;
@@ -1244,7 +1249,7 @@ namespace PsUi
                         DebugLog("THEME", "JSON parse error: " + parseError);
                         return null;
                     }
-                    
+
                     if (results != null && results.Count > 0)
                     {
                         var pso = results[0];
@@ -1253,7 +1258,7 @@ namespace PsUi
                             Console.WriteLine("[PsUi] Theme file parsed but returned null");
                             return null;
                         }
-                        
+
                         // Convert PSObject to Hashtable
                         var hashtable = new Hashtable(StringComparer.OrdinalIgnoreCase);
                         foreach (var prop in pso.Properties)
@@ -1263,7 +1268,7 @@ namespace PsUi
                                 hashtable[prop.Name] = prop.Value.ToString();
                             }
                         }
-                        
+
                         // Validate required keys
                         var missingKeys = new List<string>();
                         foreach (string key in RequiredThemeKeys)
@@ -1273,7 +1278,7 @@ namespace PsUi
                                 missingKeys.Add(key);
                             }
                         }
-                        
+
                         if (missingKeys.Count > 0)
                         {
                             string missing = string.Join(", ", missingKeys.ToArray());
@@ -1281,24 +1286,24 @@ namespace PsUi
                             DebugLog("THEME", "Missing required keys: " + missing);
                             return null;
                         }
-                        
+
                         // Validate hex color format for all color keys
                         var invalidColors = new List<string>();
                         foreach (DictionaryEntry entry in hashtable)
                         {
                             string key = entry.Key.ToString();
                             string value = entry.Value != null ? entry.Value.ToString() : "";
-                            
+
                             // Skip non-color keys (Type is a string like "Light" or "Dark")
                             if (key.Equals("Type", StringComparison.OrdinalIgnoreCase)) continue;
-                            
+
                             // Validate hex color format: #RGB, #RRGGBB, or #AARRGGBB
                             if (!IsValidHexColor(value))
                             {
                                 invalidColors.Add(key + "=" + value);
                             }
                         }
-                        
+
                         if (invalidColors.Count > 0)
                         {
                             string invalid = string.Join(", ", invalidColors.ToArray());
@@ -1306,20 +1311,20 @@ namespace PsUi
                             DebugLog("THEME", "Invalid colors (expected #RGB, #RRGGBB, or #AARRGGBB): " + invalid);
                             return null;
                         }
-                        
+
                         // Determine theme name from filename (without extension)
                         string themeName = Path.GetFileNameWithoutExtension(resolvedPath);
-                        
+
                         // Warn if overriding a built-in theme
                         if (ModuleContext.Themes.ContainsKey(themeName))
                         {
                             Console.WriteLine("[PsUi] Warning: Custom theme '" + themeName + "' overrides a built-in theme");
                         }
-                        
-                        // Register custom theme using thread-safe method
+
+                        // Register the custom theme through the threadsafe path
                         ModuleContext.RegisterTheme(themeName, hashtable);
                         DebugLog("THEME", "Registered custom theme '" + themeName + "' with " + hashtable.Count + " properties");
-                        
+
                         return hashtable;
                     }
                 }
@@ -1356,12 +1361,12 @@ namespace PsUi
         {
             if (string.IsNullOrEmpty(value)) return false;
             if (!value.StartsWith("#")) return false;
-            
+
             string hex = value.Substring(1);
-            
-            // Valid lengths: 3 (#RGB), 6 (#RRGGBB), or 8 (#AARRGGBB)
+
+            // Valid lengths are 3 for RGB, 6 for RRGGBB, or 8 for AARRGGBB.
             if (hex.Length != 3 && hex.Length != 6 && hex.Length != 8) return false;
-            
+
             // Check all characters are valid hex digits
             foreach (char c in hex)
             {
@@ -1370,7 +1375,7 @@ namespace PsUi
                     return false;
                 }
             }
-            
+
             return true;
         }
 
@@ -1384,7 +1389,7 @@ namespace PsUi
                     ps.Runspace = runspace;
                     ps.AddCommand("Initialize-UITheme").AddParameter("Theme", theme);
                     var results = ps.Invoke();
-                    
+
                     if (ps.Streams.Error.Count > 0)
                     {
                         foreach (var err in ps.Streams.Error)
@@ -1392,7 +1397,7 @@ namespace PsUi
                             DebugLog("THEME", "PowerShell error: " + err.Exception.Message);
                         }
                     }
-                    
+
                     if (results != null && results.Count > 0)
                     {
                         return results[0].BaseObject as Hashtable;
@@ -1415,7 +1420,7 @@ namespace PsUi
                 DebugLog("THEME", "ThemeButtonPlaceholder not found in chrome info");
                 return;
             }
-            
+
             try
             {
                 using (var ps = PowerShell.Create())
@@ -1425,7 +1430,7 @@ namespace PsUi
                       .AddParameter("Container", window)
                       .AddParameter("CurrentTheme", currentTheme);
                     var results = ps.Invoke();
-                    
+
                     if (ps.Streams.Error.Count > 0)
                     {
                         foreach (var err in ps.Streams.Error)
@@ -1434,13 +1439,13 @@ namespace PsUi
                         }
                         return;
                     }
-                    
+
                     if (results != null && results.Count > 0)
                     {
                         // New-ThemePopupButton returns a hashtable with Button and Popup keys
                         var resultObj = results[0].BaseObject;
                         Hashtable resultHash = resultObj as Hashtable;
-                        
+
                         FrameworkElement themeButton = null;
                         if (resultHash != null && resultHash.ContainsKey("Button"))
                         {
@@ -1451,7 +1456,7 @@ namespace PsUi
                             // Direct cast - return type may have changed
                             themeButton = resultObj as FrameworkElement;
                         }
-                        
+
                         if (themeButton != null)
                         {
                             placeholder.Content = themeButton;
@@ -1473,7 +1478,7 @@ namespace PsUi
                 DebugLog("THEME", "Theme button creation error: " + ex.Message);
             }
         }
-        
+
         // Inject internal helper functions into window runspace
         private void InjectPrivateFunctions(Runspace runspace)
         {
@@ -1483,23 +1488,23 @@ namespace PsUi
                 DebugLog("INJECT", "No private functions to inject");
                 return;
             }
-            
+
             DebugLog("INJECT", "Injecting " + privateFuncs.Count + " private functions");
-            
+
             using (var ps = PowerShell.Create())
             {
                 ps.Runspace = runspace;
-                
+
                 foreach (DictionaryEntry entry in privateFuncs)
                 {
                     string funcName = entry.Key.ToString();
                     string funcBody = entry.Value.ToString();
                     string script = string.Format("function {0} {{ {1} }}", funcName, funcBody);
-                    
+
                     ps.Commands.Clear();
                     ps.AddScript(script);
                     ps.Invoke();
-                    
+
                     if (ps.Streams.Error.Count > 0)
                     {
                         DebugLog("INJECT", "Failed to inject function " + funcName + ": " + ps.Streams.Error[0].Exception.Message);
@@ -1509,12 +1514,13 @@ namespace PsUi
         }
 
         // Run the users -Content scriptblock with injected vars/functions
-        private void ExecuteContentScript(ScriptBlock content, Hashtable privateFunctions, 
+        private void ExecuteContentScript(ScriptBlock content, Hashtable privateFunctions,
                                            Dictionary<string, object> callerVariables,
                                            Dictionary<string, string> callerFunctions,
                                            SessionContext session, Runspace runspace,
                                            bool debugMode, bool verboseMode,
-                                           string callerScriptName, int callerScriptLine)
+                                           string callerScriptName, int callerScriptLine, int outerContentLine,
+                                           ContentErrorRelay contentErrors, ActionPreference contentErrorAction)
         {
             // Inject the calling scope's variables
             if (callerVariables != null && callerVariables.Count > 0)
@@ -1531,7 +1537,7 @@ namespace PsUi
                     }
                 }
             }
-            
+
             // Inject the calling scope's functions
             if (callerFunctions != null && callerFunctions.Count > 0)
             {
@@ -1558,6 +1564,7 @@ namespace PsUi
             // Extract original file and line info from the scriptblock's AST for accurate error reporting
             // Fall back to the calling script info if AST doesn't have file info (inline scriptblocks)
             string originalFile = "script";
+            string originalPath = null;
             int originalStartLine = 1;
             try
             {
@@ -1573,13 +1580,14 @@ namespace PsUi
                         {
                             var fileProp = extent.GetType().GetProperty("File");
                             var lineProp = extent.GetType().GetProperty("StartLineNumber");
-                            
+
                             if (fileProp != null)
                             {
                                 var fileVal = fileProp.GetValue(extent) as string;
                                 if (!string.IsNullOrEmpty(fileVal))
                                 {
                                     originalFile = System.IO.Path.GetFileName(fileVal);
+                                    originalPath = fileVal;
                                 }
                             }
                             if (lineProp != null)
@@ -1591,62 +1599,236 @@ namespace PsUi
                 }
             }
             catch { /* AST access failed, use defaults */ }
-            
+
             // If AST didn't have file info, use the calling script's info
             if (originalFile == "script" && !string.IsNullOrEmpty(callerScriptName))
             {
                 originalFile = System.IO.Path.GetFileName(callerScriptName);
-                originalStartLine = callerScriptLine;
+                originalPath = callerScriptName;
+
+                // Inside another window, lines count from that window's content
+                originalStartLine = outerContentLine > 0 ? outerContentLine + originalStartLine - 1 : callerScriptLine;
+            }
+
+            // A nested container runs its own block through Invoke-UiContent, and those blocks come out of the AddScript text below without a file on them, so the session is where they read the file and line from.
+            // It has to name the content block's own opening line. The New-UiWindow call shares that line only until someone continues it over two, and then every nested error points a line further down the file than it happened.
+            if (session != null)
+            {
+                if (!string.IsNullOrEmpty(originalPath)) { session.CallerScriptName = originalPath; }
+                session.CallerScriptLine = originalStartLine;
             }
 
             using (var ps = PowerShell.Create())
             {
                 ps.Runspace = runspace;
-                
+
                 var scriptBuilder = new System.Text.StringBuilder();
                 if (debugMode)
                 {
-                    scriptBuilder.AppendLine("$DebugPreference = 'Continue'");
-                    scriptBuilder.AppendLine("Write-Debug '[PsUi] Debug Mode Enabled (Prepend)'");
+                    scriptBuilder.Append("$DebugPreference = 'Continue'; Write-Debug '[PsUi] Debug Mode Enabled (Prepend)'; ");
                 }
                 if (verboseMode)
                 {
-                    scriptBuilder.AppendLine("$VerbosePreference = 'Continue'");
+                    scriptBuilder.Append("$VerbosePreference = 'Continue'; ");
                 }
-                
-                // Wrap content in try/catch that preserves error details
-                scriptBuilder.AppendLine("try {");
+
+                // Only Stop, as SilentlyContinue would keep them out of $Error
+                bool stopContent = contentErrorAction == ActionPreference.Stop;
+                if (stopContent)
+                {
+                    scriptBuilder.Append("$ErrorActionPreference = 'Stop'; ");
+                }
+
+                bool quiet = contentErrorAction == ActionPreference.SilentlyContinue || contentErrorAction == ActionPreference.Ignore;
+
+                // Nothing ahead of the content gets a line of its own, the try included, so generated line 1 is the line the content block opens on.
+                scriptBuilder.Append("try {");
                 scriptBuilder.Append(content.ToString());
                 scriptBuilder.AppendLine();
                 scriptBuilder.AppendLine("} catch {");
+                // SilentlyContinue would swallow a throw
+                scriptBuilder.AppendLine("    $ErrorActionPreference = 'Stop'");
                 scriptBuilder.AppendLine("    $__psui_err = $_");
                 scriptBuilder.AppendLine("    $__psui_msg = $__psui_err.Exception.Message");
-                // If error is already formatted (from nested Invoke-UiContent), pass it through
                 scriptBuilder.AppendLine("    if ($__psui_msg -match '^\\[.+:\\d+\\]') {");
                 scriptBuilder.AppendLine("        throw $__psui_msg");
                 scriptBuilder.AppendLine("    }");
                 scriptBuilder.AppendLine("    $__psui_info = $__psui_err.InvocationInfo");
-                // Use MyCommand.Name since InvocationName is often empty
-                scriptBuilder.AppendLine("    $__psui_cmd = 'unknown'");
-                scriptBuilder.AppendLine("    if ($__psui_info -and $__psui_info.MyCommand) { $__psui_cmd = $__psui_info.MyCommand.Name }");
                 scriptBuilder.AppendLine("    $__psui_relLine = if ($__psui_info) { $__psui_info.ScriptLineNumber } else { 0 }");
-                scriptBuilder.AppendFormat("    $__psui_file = '{0}'\n", originalFile.Replace("'", "''"));
+
+                // The frame at the live stack's depth is this block's failing line.
+                // The first PsUi frame inside it is the command it called.
+                scriptBuilder.AppendLine("    $__psui_cmd = $null");
+                scriptBuilder.AppendLine("    $__psui_frames = @($__psui_err.ScriptStackTrace -split '\\r?\\n')");
+                scriptBuilder.AppendLine("    $__psui_at = $__psui_frames.Count - @(Get-PSCallStack).Count");
+                scriptBuilder.AppendLine("    if ($__psui_at -ge 0 -and $__psui_frames[$__psui_at] -match ': line (\\d+)$') { $__psui_relLine = [int]$Matches[1] }");
+                scriptBuilder.AppendLine("    for ($__psui_i = $__psui_at - 1; $__psui_i -ge 0; $__psui_i--) {");
+                scriptBuilder.AppendLine("        if ($__psui_frames[$__psui_i] -notmatch '^at (.+?), ') { continue }");
+                scriptBuilder.AppendLine("        if (!(Get-Command -Name $Matches[1] -Module PsUi -ErrorAction Ignore)) { continue }");
+                scriptBuilder.AppendLine("        $__psui_cmd = $Matches[1]");
+                scriptBuilder.AppendLine("        break");
+                scriptBuilder.AppendLine("    }");
+                scriptBuilder.AppendLine("    if (!$__psui_cmd -and $__psui_info -and $__psui_info.MyCommand) { $__psui_cmd = $__psui_info.MyCommand.Name }");
+                string escapedFile = System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent(originalFile);
+                scriptBuilder.AppendFormat("    $__psui_file = '{0}'\n", escapedFile);
                 scriptBuilder.AppendFormat("    $__psui_baseLine = {0}\n", originalStartLine);
                 scriptBuilder.AppendLine("    $__psui_actualLine = $__psui_baseLine + $__psui_relLine - 1");
-                scriptBuilder.AppendLine("    $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] Error in '$__psui_cmd': $__psui_msg\"");
+                scriptBuilder.AppendLine("    $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] $__psui_msg\"");
+                scriptBuilder.AppendLine("    if ($__psui_cmd) { $__psui_formatted = \"[$__psui_file`:$__psui_actualLine] Error in '$__psui_cmd': $__psui_msg\" }");
                 scriptBuilder.AppendLine("    throw $__psui_formatted");
                 scriptBuilder.AppendLine("}");
-                
-                ps.AddScript(scriptBuilder.ToString());
-                ps.Invoke();
 
-                if (ps.Streams.Error.Count > 0)
+                string script = scriptBuilder.ToString();
+                string[] scriptLines = script.Split('\n');
+
+                // PsUi commands only write here under Continue
+                ps.Streams.Error.DataAdded += delegate(object sender, DataAddedEventArgs e)
                 {
-                    var error = ps.Streams.Error[0];
-                    string errorMsg = error.Exception != null ? error.Exception.Message : error.ToString();
-                    throw new RuntimeException(errorMsg, error.Exception);
+                    ErrorRecord record = ps.Streams.Error[e.Index];
+                    if (contentErrors == null) { return; }
+
+                    // Stops the content at the writing line, past any catch in it
+                    if (!contentErrors.Post(LocateContentError(record, runspace, scriptLines, originalFile, originalStartLine)))
+                    {
+                        throw new PipelineStoppedException();
+                    }
+                };
+
+                ps.AddScript(script);
+
+                SetPsUiErrorAction(runspace, true, quiet);
+                try
+                {
+                    ps.Invoke();
+                }
+                finally
+                {
+                    SetPsUiErrorAction(runspace, false, quiet);
+
+                    // The script's Stop is for the build, and -NoAsync actions run here later
+                    if (stopContent) { ResetContentErrorAction(runspace); }
                 }
             }
+        }
+
+        // PsUi's functions never see the content's preference,\ so this reads it
+        private static void SetPsUiErrorAction(Runspace runspace, bool install, bool quiet)
+        {
+            // PsUi's binary module also answers to PsUi and throws on &
+            const string clear = "$ErrorActionPreference = 'Continue'; $psuiModules = @(Get-Module -Name PsUi | Where-Object { $_.ModuleType -eq 'Script' }); " +
+                "foreach ($psuiModule in $psuiModules) { & $psuiModule { Remove-Variable -Name ErrorActionPreference -Scope Script -ErrorAction Ignore } }";
+
+            // Set only keeps the instance when there's no variable there yet
+            const string place = "param($quiet) " + clear + "; $preference = [PsUi.ContentErrorPreference]::new($ExecutionContext.SessionState, $quiet); " +
+                "foreach ($psuiModule in $psuiModules) { $psuiModule.SessionState.PSVariable.Set($preference) }";
+
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddScript(install ? place : clear, true);
+                    if (install) { ps.AddArgument(quiet); }
+                    ps.Invoke();
+                    foreach (ErrorRecord error in ps.Streams.Error)
+                    {
+                        DebugLog("CONTENT", "Setting PsUi's error preference wrote an error: " + error);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Setting PsUi's error preference failed: " + ex.Message);
+            }
+        }
+
+        // Back to a fresh runspace's Continue unless the content picked its own
+        private static void ResetContentErrorAction(Runspace runspace)
+        {
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddScript("if ($global:ErrorActionPreference -eq 'Stop') { $global:ErrorActionPreference = 'Continue' }", true);
+                    ps.Invoke();
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Resetting the window runspace's $ErrorActionPreference failed: " + ex.Message);
+            }
+        }
+
+        // WriteError stamps New-UiWindow's line so the content's goes in front
+        private static ErrorRecord LocateContentError(ErrorRecord record, Runspace runspace, string[] scriptLines, string originalFile, int originalStartLine)
+        {
+            // Already located by a trap or nested window, no second prefix
+            if (System.Text.RegularExpressions.Regex.IsMatch(record.ToString(), @"^\[[^\]\r\n]+:\d+\] "))
+            {
+                return new ErrorRecord(record, null);
+            }
+
+            InvocationInfo info = record.InvocationInfo;
+            string where = null;
+            if (info != null && info.ScriptLineNumber > 0)
+            {
+                if (!string.IsNullOrEmpty(info.ScriptName))
+                {
+                    where = Path.GetFileName(info.ScriptName) + ":" + info.ScriptLineNumber;
+                }
+                else if (IsContentLine(scriptLines, info.ScriptLineNumber, info.Line))
+                {
+                    where = originalFile + ":" + (originalStartLine + info.ScriptLineNumber - 1);
+                }
+            }
+
+            // Write-Error carries its scope's line but DataAdded fires mid statement
+            if (where == null)
+            {
+                System.Management.Automation.Language.IScriptExtent position = FindContentPosition(runspace, scriptLines);
+                if (position != null) { where = originalFile + ":" + (originalStartLine + position.StartLineNumber - 1); }
+            }
+
+            // WriteError restamps
+            var located = new ErrorRecord(record, null);
+            if (where == null) { return located; }
+
+            // Write-Error straight in a block reports a command with no name
+            string command = info != null && info.MyCommand != null ? info.MyCommand.Name : null;
+            string message = string.IsNullOrEmpty(command)
+                ? string.Format("[{0}] {1}", where, record)
+                : string.Format("[{0}] Error in '{1}': {2}", where, command, record);
+
+            located.ErrorDetails = new ErrorDetails(message);
+            if (record.ErrorDetails != null) { located.ErrorDetails.RecommendedAction = record.ErrorDetails.RecommendedAction; }
+            return located;
+        }
+
+        // Captured functions and PsUi internals count lines from their own text
+        private static bool IsContentLine(string[] scriptLines, int lineNumber, string lineText)
+        {
+            if (lineNumber < 1 || lineNumber > scriptLines.Length || lineText == null) { return false; }
+            return string.Equals(scriptLines[lineNumber - 1].TrimEnd('\r', '\n'), lineText.TrimEnd('\r', '\n'), StringComparison.Ordinal);
+        }
+
+        // Top frame first
+        private static System.Management.Automation.Language.IScriptExtent FindContentPosition(Runspace runspace, string[] scriptLines)
+        {
+            try
+            {
+                foreach (CallStackFrame frame in runspace.Debugger.GetCallStack())
+                {
+                    System.Management.Automation.Language.IScriptExtent position = frame.Position;
+                    if (position == null || !string.IsNullOrEmpty(position.File)) { continue; }
+                    if (IsContentLine(scriptLines, position.StartLineNumber, position.StartScriptPosition.Line)) { return position; }
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("CONTENT", "Reading the call stack for a content error's line failed: " + ex.Message);
+            }
+            return null;
         }
 
         // Convert string/Color/Brush to WPF Brush
@@ -1669,31 +1851,49 @@ namespace PsUi
             return null;
         }
 
-        // Apply -WPFProperties hashtable values via reflection
-        private void ApplyWpfProperties(FrameworkElement element, Hashtable properties)
+        // -WPFProperties goes through Set-UiProperties: attached property dot notation, string to type conversion (Cursor = 'Hand').
+        // The runspace is UseCurrentThread and this runs on the window's STA thread.
+        private void ApplyWpfProperties(FrameworkElement element, Hashtable properties, Runspace runspace)
         {
-            if (element == null || properties == null) return;
+            if (element == null || properties == null || properties.Count == 0 || runspace == null) return;
 
-            foreach (DictionaryEntry kvp in properties)
+            // Tag holds the chrome hashtable (theme button, status bar lookups).
+            if (properties.ContainsKey("Tag"))
             {
-                try
-                {
-                    string propName = kvp.Key.ToString();
-                    object propValue = kvp.Value;
+                Console.WriteLine("[PsUi] Warning: New-UiWindow -WPFProperties Tag is reserved (it holds the window chrome). Ignoring.");
+                properties = (Hashtable)properties.Clone();
+                properties.Remove("Tag");
+                if (properties.Count == 0) return;
+            }
 
-                    var propInfo = element.GetType().GetProperty(propName);
-                    if (propInfo != null && propInfo.CanWrite)
+            try
+            {
+                using (var ps = PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddCommand("Set-UiProperties");
+                    ps.AddParameter("Control", element);
+                    ps.AddParameter("Properties", properties);
+                    ps.Invoke();
+
+                    // WriteWarning is unsafe off the cmdlet processing thread.
+                    foreach (WarningRecord warning in ps.Streams.Warning)
                     {
-                        propInfo.SetValue(element, propValue);
+                        Console.WriteLine("[PsUi] Warning: " + warning.Message);
+                    }
+                    foreach (ErrorRecord error in ps.Streams.Error)
+                    {
+                        string msg = error.Exception != null ? error.Exception.Message : error.ToString();
+                        Console.WriteLine("[PsUi] Warning: -WPFProperties: " + msg);
                     }
                 }
-                catch (Exception ex)
-                {
-                    DebugLog("WINDOW", "ApplyWpfProperties failed for '" + kvp.Key + "': " + ex.Message);
-                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog("WINDOW", "ApplyWpfProperties failed: " + ex.Message);
             }
         }
-        
+
         // Window control button templates - kept here to declutter CreateWindowControlButton
         private const string CloseButtonTemplate = @"
 <ControlTemplate xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
@@ -1740,23 +1940,23 @@ namespace PsUi
             const int splashWidth = 280;
             const int splashHeight = 180;
             const int shadowPad = 12;
-            
+
             // Parse theme colors for splash styling
             Color bgColor = Color.FromRgb(255, 255, 255);
             Color fgColor = Color.FromRgb(30, 30, 30);
             Color accentColor = Color.FromRgb(71, 85, 105);
-            
+
             if (colors != null)
             {
                 bgColor = ParseHexColor(colors["WindowBg"] as string, bgColor);
                 fgColor = ParseHexColor(colors["WindowFg"] as string, fgColor);
                 accentColor = ParseHexColor(colors["Accent"] as string, accentColor);
             }
-            
+
             var bgBrush = new SolidColorBrush(bgColor);
             var fgBrush = new SolidColorBrush(fgColor);
             var accentBrush = new SolidColorBrush(accentColor);
-            
+
             // Create borderless splash window
             var splash = new Window
             {
@@ -1771,7 +1971,7 @@ namespace PsUi
                 Topmost = true,
                 ResizeMode = ResizeMode.NoResize
             };
-            
+
             // Shadow container
             var shadowBorder = new Border
             {
@@ -1787,14 +1987,14 @@ namespace PsUi
                 }
             };
             splash.Content = shadowBorder;
-            
-            // Main layout: title at top, logo in center, progress at bottom
+
+            // Main layout puts the title at the top, the logo in the center and progress at the bottom.
             var mainPanel = new Grid();
             mainPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             mainPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             mainPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             shadowBorder.Child = mainPanel;
-            
+
             // Title text at top
             var titleText = new TextBlock
             {
@@ -1807,12 +2007,12 @@ namespace PsUi
             };
             Grid.SetRow(titleText, 0);
             mainPanel.Children.Add(titleText);
-            
+
             // Logo in center - either custom image or generated icon
             UIElement logoElement = CreateSplashLogo(p.Logo, accentBrush, fgBrush);
             Grid.SetRow(logoElement, 1);
             mainPanel.Children.Add(logoElement);
-            
+
             // Indeterminate progress bar at bottom
             var progressBar = new ProgressBar
             {
@@ -1825,16 +2025,16 @@ namespace PsUi
             };
             Grid.SetRow(progressBar, 2);
             mainPanel.Children.Add(progressBar);
-            
+
             // Signal that splash is ready (shown) after layout
             splash.Loaded += (s, e) =>
             {
                 if (splashReady != null) { splashReady.Set(); }
             };
-            
+
             return splash;
         }
-        
+
         // Create logo element for splash screen
         private UIElement CreateSplashLogo(string logoPath, SolidColorBrush accentBrush, SolidColorBrush fgBrush)
         {
@@ -1848,7 +2048,7 @@ namespace PsUi
                     {
                         resolvedPath = Path.GetFullPath(logoPath);
                     }
-                    
+
                     if (File.Exists(resolvedPath))
                     {
                         var bitmap = new System.Windows.Media.Imaging.BitmapImage();
@@ -1857,7 +2057,7 @@ namespace PsUi
                         bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
                         bitmap.EndInit();
                         bitmap.Freeze();
-                        
+
                         return new Image
                         {
                             Source = bitmap,
@@ -1873,11 +2073,11 @@ namespace PsUi
                     DebugLog("SPLASH", "Failed to load custom logo: " + ex.Message);
                 }
             }
-            
-            // Default: generate the >_ icon at larger size
+
+            // By default it generates the >_ icon at a larger size.
             return CreateDefaultSplashIcon(accentBrush);
         }
-        
+
         // Generate the default >_ terminal icon for splash
         private UIElement CreateDefaultSplashIcon(SolidColorBrush accentBrush)
         {
@@ -1888,26 +2088,26 @@ namespace PsUi
                 // Draw rounded rectangle background
                 var bgRect = new Rect(0, 0, 48, 48);
                 dc.DrawRoundedRectangle(accentBrush, null, bgRect, 8, 8);
-                
+
                 // Calculate contrast color for chevron
                 var bgColor = accentBrush.Color;
                 double luminance = (0.299 * bgColor.R + 0.587 * bgColor.G + 0.114 * bgColor.B) / 255;
                 var fgColor = luminance > 0.5 ? Colors.Black : Colors.White;
                 var fgBrush = new SolidColorBrush(fgColor);
-                
+
                 // Draw chevron ">"
                 var chevron = Geometry.Parse("M 10,9 L 27,21 L 10,33 Z");
                 dc.DrawGeometry(fgBrush, null, chevron);
-                
+
                 // Draw underscore "_"
                 var underscore = new Rect(27, 30, 14, 4);
                 dc.DrawRectangle(fgBrush, null, underscore);
             }
-            
+
             // Render to bitmap at 4x for crisp display
             var renderTarget = new System.Windows.Media.Imaging.RenderTargetBitmap(
                 192, 192, 96, 96, PixelFormats.Pbgra32);
-            
+
             var scaledVisual = new DrawingVisual();
             using (var dc = scaledVisual.RenderOpen())
             {
@@ -1915,10 +2115,10 @@ namespace PsUi
                 dc.DrawDrawing(iconVisual.Drawing);
                 dc.Pop();
             }
-            
+
             renderTarget.Render(scaledVisual);
             renderTarget.Freeze();
-            
+
             return new Image
             {
                 Source = renderTarget,
@@ -1928,12 +2128,12 @@ namespace PsUi
                 VerticalAlignment = VerticalAlignment.Center
             };
         }
-        
+
         // Parse hex color string to Color, with fallback
         private static Color ParseHexColor(string hex, Color fallback)
         {
             if (string.IsNullOrEmpty(hex)) { return fallback; }
-            
+
             try
             {
                 if (hex.StartsWith("#")) { hex = hex.Substring(1); }
@@ -1946,7 +2146,7 @@ namespace PsUi
                 }
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("ParseHexColor failed: " + ex.Message); }
-            
+
             return fallback;
         }
     }

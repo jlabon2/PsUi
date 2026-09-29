@@ -1,4 +1,4 @@
-function Add-UiDataGridRowContextMenuItems {
+﻿function Add-UiDataGridRowContextMenuItems {
     <#
     .SYNOPSIS
         Prepends items to the DataGrid context menu.
@@ -21,6 +21,9 @@ function Add-UiDataGridRowContextMenuItems {
 
     $rowMenuItems = [System.Collections.Generic.List[object]]::new()
     $insertIndex  = 0
+
+    $gridSession   = Get-UiSession
+    $gridSessionId = if ($gridSession) { $gridSession.SessionId } else { $null }
 
     # Right click target. WPF never moves CurrentCell or selection on rightclick, and a fresh grid's CurrentCell.Item is DependencyProperty.UnsetValue (not $null, that would be too easy) - resolving the target from CurrentCell at click time acted on the last LEFT clicked row, or fed UnsetValue to the action. ContextMenuOpening fires before the menu shows: walk from the click source to the row and remember it. A click outside the current selection also retargets the selection (Explorer convention).
     $clickState = @{ Item = $null }
@@ -74,14 +77,14 @@ function Add-UiDataGridRowContextMenuItems {
         $actionRef  = $null
         $enabledRef = $null
         $iconName   = $null
-        $syncRef    = $false
+        $noAsyncRef = $false
 
         if ($itemDef -is [scriptblock]) { $actionRef = $itemDef }
         elseif ($itemDef -is [System.Collections.IDictionary]) {
             $actionRef  = $itemDef['Action']
             $enabledRef = $itemDef['Enabled']
             $iconName   = [string]$itemDef['Icon']
-            if ($itemDef.Contains('Sync')) { $syncRef = [bool]$itemDef['Sync'] }
+            $noAsyncRef = Get-UiNoAsyncFlag -Definition $itemDef
         }
 
         if (!$actionRef) {
@@ -106,7 +109,7 @@ function Add-UiDataGridRowContextMenuItems {
 
         $capturedAction  = $actionRef
         $capturedEnabled = $enabledRef
-        $capturedSync    = $syncRef
+        $capturedNoAsync = $noAsyncRef
         $gridRef         = $DataGrid
 
         $capturedLabel = [string]$label
@@ -140,7 +143,7 @@ function Add-UiDataGridRowContextMenuItems {
             # ONE Invoke-UiAction call for the whole batch: a single background runspace loops the rows, so Stop-UiAsync / the status bar's AutoCancel cancel all of them (a runspace per row left Cancel holding only the last one) and the action's AST is scanned once, not N times.
             # -FanOut skips the Remove+Insert container regen workaround. One Items.Refresh at the end covers the whole batch.
             $itemArg = if ($eligible.Count -eq 1) { $eligible[0] } else { $eligible }
-            Invoke-UiAction -Action $capturedAction -Item $itemArg -RefreshTarget $gridRef -Sync:$capturedSync -FanOut:($eligible.Count -gt 1)
+            Invoke-UiAction -Action $capturedAction -Item $itemArg -RefreshTarget $gridRef -NoAsync:$capturedNoAsync -FanOut:($eligible.Count -gt 1) -SessionId $gridSessionId
         }.GetNewClosure())
 
         # Literal bool is a constant - set it once and skip probing on every open. Scriptblocks reevaluate through Tag each time the menu opens (a static IsEnabled would freeze on the first row).

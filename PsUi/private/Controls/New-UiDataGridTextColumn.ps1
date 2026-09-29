@@ -32,6 +32,16 @@ function New-UiDataGridTextColumn {
     }
 
     if ($perColRO) { $isEditable = $false }
+
+    $member   = $FirstItem.PSObject.Properties[$Name]
+    $baseItem = $FirstItem.PSObject.BaseObject
+    if ($member -and !$member.IsSettable) { $isEditable = $false }
+    if ($isEditable -and $member -and $baseItem -isnot [System.Management.Automation.PSCustomObject]) {
+        $lookupName = if ($member -is [System.Management.Automation.PSAliasProperty]) { $member.ReferencedMemberName } else { $Name }
+        $descriptor = [System.ComponentModel.TypeDescriptor]::GetProperties($baseItem).Find($lookupName, $true)
+        if (($FirstItem -isnot [psobject] -and !$descriptor) -or ($descriptor -and $descriptor.IsReadOnly)) { $isEditable = $false }
+    }
+
     $editorType = if ($Column -and $Column.EditorType) { [string]$Column.EditorType } else { 'Auto' }
 
     # Probe rows to pick an editor type. Only runs when EditorType='Auto'. First non null wins, so an enum/datetime column with a null in row 0 still resolves correctly. Cap at 10 rows so a 100k row seed doesn't pay a column build cost proportional to the data size.
@@ -72,7 +82,12 @@ function New-UiDataGridTextColumn {
     $bindPath = $Name
     try {
         $prop = $FirstItem.PSObject.Properties[$Name]
-        if ($prop -is [System.Management.Automation.PSAliasProperty]) { $bindPath = $prop.ReferencedMemberName }
+        if ($prop -is [System.Management.Automation.PSAliasProperty]) {
+            $target   = $FirstItem.PSObject.Properties[$prop.ReferencedMemberName]
+            $bindPath = if ($target) { $target.Name } else { $prop.ReferencedMemberName }
+        }
+        # @{ Name = 'displayname' } binds blank on a plain row otherwise
+        elseif ($prop) { $bindPath = $prop.Name }
     }
     catch { Write-Debug "Alias check failed for '$Name': $_" }
 
@@ -107,6 +122,12 @@ function New-UiDataGridTextColumn {
             $choices = if ($Column -and $Column.Choices) { @($Column.Choices) }
                        elseif ($valueType -and $valueType.IsEnum) { [enum]::GetValues($valueType) }
                        else { @() }
+
+            # String Choices against an enum prop never match SelectedValue, so every non editing cell renders blank. Parse them into the enum, keeping the user's subset instead of falling back to GetValues.
+            if ($valueType -and $valueType.IsEnum -and $choices.Count -gt 0 -and $choices[0] -is [string]) {
+                try { $choices = @($choices | ForEach-Object { [enum]::Parse($valueType, $_, $true) }) }
+                catch { Write-Debug "Column '$Name': Choices don't parse as $($valueType.Name); leaving them as strings." }
+            }
             $col.ItemsSource = $choices
 
             # SelectedValueBinding (not SelectedItemBinding) so a string Choices array against a typed property doesn't write a string back. For enums the default SelectedValuePath is fine. ComboBox handles the value coercion.
@@ -169,6 +190,7 @@ function New-UiDataGridTextColumn {
             $binding = [System.Windows.Data.Binding]::new($bindPath)
             $binding.Mode = if ($isEditable) { [System.Windows.Data.BindingMode]::TwoWay } else { [System.Windows.Data.BindingMode]::OneWay }
             if ($isEditable) { $binding.UpdateSourceTrigger = [System.Windows.Data.UpdateSourceTrigger]::LostFocus }
+            else { $binding.Converter = [PsUi.SingleLineConverter]::new() }
             if ($Column -and $Column.Format) { $binding.StringFormat = [string]$Column.Format }
             $col.Binding    = $binding
             $col.IsReadOnly = !$isEditable

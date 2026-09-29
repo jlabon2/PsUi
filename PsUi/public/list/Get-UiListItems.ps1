@@ -1,9 +1,12 @@
 function Get-UiListItems {
     <#
     .SYNOPSIS
-        Gets all items from a UiList control.
+        Gets all items from a list or dropdown.
+    .DESCRIPTION
+        Returns a snapshot of the list's current contents as a plain array. Items hidden
+        by an active filter are still included.
     .PARAMETER Variable
-        The variable name of the list control.
+        The -Variable name of the list or dropdown.
     .EXAMPLE
         $items = Get-UiListItems 'myList'
     #>
@@ -15,9 +18,9 @@ function Get-UiListItems {
 
     $session = Get-UiSession
     Write-Debug "Retrieving items from list '$Variable'"
-    
+
     $collection = $session.GetListCollection($Variable)
-    
+
     if ($null -eq $collection) {
         Write-Error "List '$Variable' not found."
         return @()

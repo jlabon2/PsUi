@@ -1,13 +1,10 @@
 function Add-ErrorDetailsPanel {
     <#
     .SYNOPSIS
-        Adds the error details expander panel and wires up event handlers for the errors tab.
+        The collapsible details panel under the errors grid, and the handlers for its two toolbar buttons.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [hashtable]$Colors,
-
         [Parameter(Mandatory)]
         [System.Windows.Controls.Grid]$Container,
 
@@ -25,47 +22,50 @@ function Add-ErrorDetailsPanel {
         [System.Windows.Controls.Button]$ExportButton
     )
 
-    # Error details panel (shown when error selected)
-    $errorDetailsPanel = [System.Windows.Controls.Expander]@{
-        Header          = "Error Details (click to expand)"
-        IsExpanded      = $false
+    # WPF's own Expander draws a circled arrow, so this is built the way New-UiExpander builds one.
+    # It's up for as long as the window is so every brush here follows the theme.
+    $errorDetailsPanel = [System.Windows.Controls.Border]@{
         Visibility      = 'Collapsed'
         Margin          = [System.Windows.Thickness]::new(4)
-        Background      = ConvertTo-UiBrush $Colors.ControlBg
-        Foreground      = ConvertTo-UiBrush $Colors.ControlFg
-        BorderBrush     = ConvertTo-UiBrush $Colors.Border
         BorderThickness = [System.Windows.Thickness]::new(1)
+        CornerRadius    = [System.Windows.CornerRadius]::new(4)
     }
+    $errorDetailsPanel.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'ControlBackgroundBrush')
+    $errorDetailsPanel.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, 'BorderBrush')
 
-    # Create header with chevron icon
-    $headerPanel = [System.Windows.Controls.StackPanel]@{
-        Orientation = 'Horizontal'
-    }
+    $detailsStack            = [System.Windows.Controls.StackPanel]::new()
+    $errorDetailsPanel.Child = $detailsStack
+
     $expandIcon = [System.Windows.Controls.TextBlock]@{
-        Text              = [PsUi.ModuleContext]::GetIcon('ChevronRight')
-        FontFamily        = [PsUi.ModuleContext]::ActiveIconFontFamily
-        FontSize          = 12
-        VerticalAlignment = 'Center'
-        Margin            = [System.Windows.Thickness]::new(0, 0, 6, 0)
-        Foreground        = ConvertTo-UiBrush $Colors.ControlFg
+        Text                  = [PsUi.ModuleContext]::GetIcon('ChevronRight')
+        FontFamily            = [PsUi.ModuleContext]::ActiveIconFontFamily
+        FontSize              = 12
+        VerticalAlignment     = 'Center'
+        Margin                = [System.Windows.Thickness]::new(0, 0, 8, 0)
+        RenderTransformOrigin = '0.5,0.5'
     }
+    # The glyph turns rather than swapping to a second one, so the two stay the same width and the label never shifts.
+    $expandIcon.RenderTransform = [System.Windows.Media.RotateTransform]::new(0)
+    $expandIcon.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'SecondaryTextBrush')
+
     $headerText = [System.Windows.Controls.TextBlock]@{
-        Text              = "Error Details"
+        Text              = 'Error Details'
+        FontFamily        = [System.Windows.Media.FontFamily]::new('Segoe UI Variable, Segoe UI')
+        FontSize          = 13
         FontWeight        = 'SemiBold'
         VerticalAlignment = 'Center'
-        Foreground        = ConvertTo-UiBrush $Colors.ControlFg
+    }
+    $headerText.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
+
+    $headerPanel = [System.Windows.Controls.StackPanel]@{
+        Orientation = 'Horizontal'
+        Cursor      = 'Hand'
+        Background  = [System.Windows.Media.Brushes]::Transparent
+        Margin      = [System.Windows.Thickness]::new(10, 8, 10, 8)
     }
     [void]$headerPanel.Children.Add($expandIcon)
     [void]$headerPanel.Children.Add($headerText)
-    $errorDetailsPanel.Header = $headerPanel
-
-    # Rotate chevron on expand/collapse
-    $errorDetailsPanel.add_Expanded({
-        $expandIcon.Text = [PsUi.ModuleContext]::GetIcon('ChevronDown')
-    }.GetNewClosure())
-    $errorDetailsPanel.add_Collapsed({
-        $expandIcon.Text = [PsUi.ModuleContext]::GetIcon('ChevronRight')
-    }.GetNewClosure())
+    [void]$detailsStack.Children.Add($headerPanel)
 
     $errorDetailsText = [System.Windows.Controls.TextBox]@{
         IsReadOnly                  = $true
@@ -75,17 +75,31 @@ function Add-ErrorDetailsPanel {
         AcceptsReturn               = $true
         VerticalScrollBarVisibility = 'Auto'
         MaxHeight                   = 200
-        Background                  = ConvertTo-UiBrush $Colors.ControlBg
-        Foreground                  = ConvertTo-UiBrush $(if ($Colors.ErrorText) { $Colors.ErrorText } else { $Colors.ControlFg })
-        BorderBrush                 = ConvertTo-UiBrush $Colors.Border
+        Visibility                  = 'Collapsed'
+        Margin                      = [System.Windows.Thickness]::new(12, 0, 12, 10)
         Padding                     = [System.Windows.Thickness]::new(4)
     }
     Set-TextBoxStyle -TextBox $errorDetailsText
-    $errorDetailsPanel.Content = $errorDetailsText
+
+    # After Set-TextBoxStyle, which wipes any Foreground set before it, and keyed so a theme switch recolours the text.
+    $errorDetailsText.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, 'ErrorBrush')
+    [void]$detailsStack.Children.Add($errorDetailsText)
+
+    $headerPanel.Add_MouseLeftButtonUp({
+        param($sender, $eventArgs)
+        trap { Write-Debug "Error details toggle: $_"; continue }
+        if ($errorDetailsText.Visibility -eq 'Collapsed') {
+            $errorDetailsText.Visibility      = 'Visible'
+            $expandIcon.RenderTransform.Angle = 90
+        }
+        else {
+            $errorDetailsText.Visibility      = 'Collapsed'
+            $expandIcon.RenderTransform.Angle = 0
+        }
+    }.GetNewClosure())
     [System.Windows.Controls.Grid]::SetRow($errorDetailsPanel, 2)
     [void]$Container.Children.Add($errorDetailsPanel)
 
-    # Wire up copy all button
     $CopyButton.Add_Click({
         if ($ErrorsList.Count -gt 0) {
             $lines = $ErrorsList | ForEach-Object {
@@ -98,7 +112,6 @@ function Add-ErrorDetailsPanel {
         }
     }.GetNewClosure())
 
-    # Wire up export CSV button
     $ExportButton.Add_Click({
         if ($ErrorsList.Count -gt 0) {
             $saveDialog = [Microsoft.Win32.SaveFileDialog]::new()
@@ -114,15 +127,14 @@ function Add-ErrorDetailsPanel {
         }
     }.GetNewClosure())
 
-    # Wire up selection changed to show error details
     $DataGrid.add_SelectionChanged({
         param($sender, $eventArgs)
         $selected = $sender.SelectedItem
         if ($null -ne $selected) {
             $errorDetailsPanel.Visibility = 'Visible'
             $details = [System.Collections.Generic.List[string]]::new()
-            
-            # Try ToDetailedString() for PSErrorRecord wrapper - its more detailed... fall back to manual construction if needed
+
+            # PSErrorRecord carries ToDetailedString, which beats assembling the fields by hand.
             $rawRec = $selected.RawRecord
             if ($null -ne $rawRec -and $rawRec.PSObject.Methods['ToDetailedString']) {
                 $errorDetailsText.Text = $rawRec.ToDetailedString()

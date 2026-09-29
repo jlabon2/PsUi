@@ -71,6 +71,9 @@ function Add-StatusBarAutoWiring {
         $capturedMaxMessages  = if ($bar.Tag['MaxMessages']) { $bar.Tag['MaxMessages'] } else { 100 }
         $capturedExecutor     = $Executor
 
+        # One per bar per run, so OnComplete can tell a failed run from a clean one
+        $capturedRun = @{ Errored = $false }
+
         # The $meta guard repeats in every handler. Tag is always the New-UiStatusBar hashtable (if it ever isn't, something larger is broken). Same reference, mutations write through.
 
         # OnStarted: reveal Cancel button and progress bar (severity already reset above)
@@ -145,10 +148,11 @@ function Add-StatusBarAutoWiring {
 
                 if ($capturedText -and $progressText) { $capturedText.Text = $progressText }
 
-                # Update the small label above the progress bar
-                if ($capturedProgressLabel -and $progressText) {
-                    $capturedProgressLabel.Text       = $progressText
-                    $capturedProgressLabel.Visibility = [System.Windows.Visibility]::Visible
+                # The status text already shows the description, so the label over the bar gets the activity or stays empty
+                if ($capturedProgressLabel) {
+                    $labelText = if ($record.Activity -and $record.Activity -ne $progressText) { $record.Activity } else { '' }
+                    $capturedProgressLabel.Text       = $labelText
+                    $capturedProgressLabel.Visibility = if ($labelText) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
                 }
 
                 if ($capturedProgress) {
@@ -356,6 +360,7 @@ function Add-StatusBarAutoWiring {
 
             Invoke-OnUIThread {
                 $meta = if ($capturedBar.Tag -is [hashtable]) { $capturedBar.Tag } else { @{} }
+                $capturedRun.Errored = $true
                 if ($capturedText) {
                     $capturedText.Text    = $errorMessage
                     $capturedText.ToolTip = if ($fullErrorMsg.Length -gt 60) { $fullErrorMsg } else { $null }
@@ -577,9 +582,12 @@ function Add-StatusBarAutoWiring {
                     $capturedProgressLabel.Text       = ''
                     $capturedProgressLabel.Visibility = [System.Windows.Visibility]::Collapsed
                 }
+
+                # When a run fails its partial bar stays up to show where it stopped, and OnComplete still fires after OnError. Clean runs clear it, even at 100.
                 if ($capturedProgress -and !$meta.ManualBar) {
                     $capturedProgress.IsIndeterminate = $false
-                    if ($capturedProgress.Value -le 0) {
+                    if (!$capturedRun.Errored -or $capturedProgress.Value -le 0) {
+                        $capturedProgress.Value      = 0
                         $capturedProgress.Visibility = [System.Windows.Visibility]::Hidden
                     }
                 }

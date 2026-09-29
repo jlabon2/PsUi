@@ -24,7 +24,10 @@ function Show-UiPromptDialog {
     Write-Debug "Caption='$Caption' FieldCount=$($Descriptions.Count)"
 
     $dialogTitle = if ($Caption) { $Caption } else { "Input Required" }
-    $fieldControls = @{}
+    $firstInput  = $null
+
+    # The result is built off these keys, and plain @{} hands them back in hash order (a new one every process on 7)
+    $fieldControls = [ordered]@{}
 
     # Create dialog window using shared helper with Edit icon
     $editIcon = [PsUi.ModuleContext]::GetIcon('Edit')
@@ -114,6 +117,7 @@ function Show-UiPromptDialog {
         }
 
         [void]$mainStack.Children.Add($inputControl)
+        if (!$firstInput) { $firstInput = $inputControl }
         $fieldControls[$fieldName] = @{
             Control  = $inputControl
             IsSecure = $isSecure
@@ -148,14 +152,7 @@ function Show-UiPromptDialog {
     $cancelBtn.Add_Click({ $window.Tag = $null; $window.Close() })
     [void]$buttonPanel.Children.Add($cancelBtn)
 
-    # Standard window behavior
-    Initialize-UiWindowLoaded -Window $window
-
-    # Focus first field
-    $window.Add_Loaded({
-        $firstField = $fieldControls.Values | Select-Object -First 1
-        if ($firstField) { $firstField.Control.Focus() }
-    }.GetNewClosure())
+    Initialize-UiWindowLoaded -Window $window -FocusElement $firstInput
 
     Set-UiDialogPosition -Dialog $window
 

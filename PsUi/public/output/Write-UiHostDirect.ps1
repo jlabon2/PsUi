@@ -18,7 +18,7 @@ function Write-UiHostDirect {
     .PARAMETER NoNewline
         Don't append a newline.
     .PARAMETER Separator
-        Separator between multiple objects.
+        Accepted so Write-Host calls swap over without edits. Not used.
     .EXAMPLE
         Write-UiHostDirect "This goes to console, not the UI panel"
     .EXAMPLE
@@ -49,6 +49,8 @@ function Write-UiHostDirect {
         $originalFg = [Console]::ForegroundColor
         $originalBg = [Console]::BackgroundColor
 
+        # From a -NoAsync click 5.1 never runs a finally
+        $failure = $null
         try {
             if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
                 [Console]::ForegroundColor = $ForegroundColor
@@ -62,10 +64,10 @@ function Write-UiHostDirect {
             if ($NoNewline) {  [Console]::Write($text)   }
             else { [Console]::WriteLine($text) }
         }
-        finally {
-            # Restore original colors
-            if ($restoreFg) { [Console]::ForegroundColor = $originalFg }
-            if ($restoreBg) { [Console]::BackgroundColor = $originalBg }
-        }
+        catch { $failure = $_ }
+
+        if ($restoreFg) { [Console]::ForegroundColor = $originalFg }
+        if ($restoreBg) { [Console]::BackgroundColor = $originalBg }
+        if ($failure) { throw $failure }
     }
 }

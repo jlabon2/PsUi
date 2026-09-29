@@ -59,7 +59,7 @@ function Show-StreamingOutput {
     $varValues       = $hydrationResult.Variables
     $funcDefs        = $hydrationResult.Functions
     $capturedModules = $hydrationResult.Modules
-    
+
     & $writeDebug "Hydration complete - Vars: $($varValues.Count), Funcs: $($funcDefs.Count), Modules: $($capturedModules.Count)"
 
     if ($debugEnabled -and $varValues.Count -gt 0) {
@@ -100,7 +100,7 @@ function Show-StreamingOutput {
     # HideUntilContent keeps the window invisible until something actually arrives - good for quick async actions where a brief flash of "nothing yet" looks like a bug.
     $showWindowOnData = $HideUntilContent
 
-    # Take ownership of dialog parenting so child Show-Ui* dialogs centre on this window.
+    # Take ownership of dialog parenting so child Show-Ui* dialogs center on this window.
     if ($currentSession) { $currentSession.ActiveDialogParent = $window }
 
     # Catch-all UnhandledException handler. Log and swallow so a stray throw on the UI thread doesn't tear the whole app down.
@@ -138,6 +138,12 @@ function Show-StreamingOutput {
 
     # Esc cancels the running async action - confirms first so a stray keystroke doesn't kill work.
     $executorRef = $Executor
+
+    # -NoWait keeps this window up after the click's session went back
+    $ownerSessionId = if ($currentSession) { $currentSession.SessionId } else { $null }
+    $pushSession    = ${function:Push-UiSession}
+    $popSession     = ${function:Pop-UiSession}
+
     $window.add_PreviewKeyDown({
         param($sender, $eventArgs)
         if ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape) {
@@ -149,11 +155,16 @@ function Show-StreamingOutput {
                 $capturedWindow   = $window
                 $capturedExec     = $executorRef
                 $capturedWasPin   = $wasPinned
+                $capturedOwner    = $ownerSessionId
+                $capturedPush     = $pushSession
+                $capturedPop      = $popSession
                 $unpinTimer          = [System.Windows.Threading.DispatcherTimer]::new()
                 $unpinTimer.Interval = [TimeSpan]::FromMilliseconds(50)
                 $unpinTimer.Add_Tick({
                     $this.Stop()
-                    $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
+                    $sessionToken = & $capturedPush -SessionId $capturedOwner
+                    $confirm      = Show-UiConfirmDialog -Title "Cancel Operation" -Message "Are you sure you want to cancel the running task?"
+                    & $capturedPop -Token $sessionToken
                     if ($capturedWasPin) { $capturedWindow.Topmost = $true }
 
                     if ($confirm -and $capturedExec.IsRunning) {
@@ -181,7 +192,7 @@ function Show-StreamingOutput {
 
     $statusPanel = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
 
-    $statusIndicatorResult = New-StatusIndicator -Colors $colors
+    $statusIndicatorResult = New-StatusIndicator
     $statusIndicator = $statusIndicatorResult.Container
     $statusSpinner   = $statusIndicatorResult.Spinner
     $statusSuccess   = $statusIndicatorResult.Success
@@ -231,15 +242,16 @@ function Show-StreamingOutput {
     }
 
     # Spinner overlay covers the empty tab area until the first record lands.
+    # If the run produces no output this panel stays up for the life of the window, so its background follows the theme
     $loadingPanel = [System.Windows.Controls.Grid]@{
-        Background = ConvertTo-UiBrush $colors.WindowBg
-        Margin     = [System.Windows.Thickness]::new(12)
+        Margin = [System.Windows.Thickness]::new(12)
     }
+    $loadingPanel.SetResourceReference([System.Windows.Controls.Panel]::BackgroundProperty, 'WindowBackgroundBrush')
     $loadingStack = [System.Windows.Controls.StackPanel]@{
         HorizontalAlignment = 'Center'
         VerticalAlignment   = 'Center'
     }
-    $loadingSpinner = New-UiLoadingSpinner -Size 32 -Color $colors.Accent
+    $loadingSpinner = New-UiLoadingSpinner -Size 32 -BrushKey 'AccentBrush'
     $loadingSpinner.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
     [void]$loadingStack.Children.Add($loadingSpinner)
     $loadingLabel = [System.Windows.Controls.TextBlock]@{
@@ -299,7 +311,6 @@ function Show-StreamingOutput {
         $errorsTabState.List      = $result.List
 
         $detailsParams = @{
-            Colors       = $colors
             Container    = $result.Container
             DataGrid     = $result.DataGrid
             ErrorsList   = $result.List
@@ -346,6 +357,7 @@ function Show-StreamingOutput {
         HighlightRunMatches  = $highlightRunMatches
         ConsoleTextBox       = $consoleTextBox
         AutoScrollCheckbox   = $autoScrollCheckbox
+        OwnerSessionId       = $ownerSessionId
     }
 
     # Drops the spinner overlay once content arrives. One shot via $state.LoadingHidden.
@@ -408,6 +420,55 @@ function Show-StreamingOutput {
             $warningsTabState.Tab.Header = if ($warningCount.Value -gt 0) { "Warnings ($($warningCount.Value))" } else { "Warnings" }
         }
     }.GetNewClosure())
+
+    $streamEchoes = @{
+        Error   = @{ Prefix = '[ERROR] ';   Brush = [System.Windows.Media.Brushes]::IndianRed }
+        Warning = @{ Prefix = '[WARNING] '; Brush = [System.Windows.Media.Brushes]::DarkGoldenrod }
+        Verbose = @{ Prefix = '[VERBOSE] '; Brush = [System.Windows.Media.Brushes]::Gray }
+    }
+
+    # Returns how many host lines it wrote
+    $drainConsole = {
+        param([int]$MaxLines, [switch]$LeaveTabs)
+        $records = $Executor.DrainHostQueue($MaxLines)
+        if ($records.Count -eq 0) { return 0 }
+
+        $hostLines = 0
+        foreach ($record in $records) {
+            $echo = if ($record.Stream) { $streamEchoes[$record.Stream] }
+            if ($echo) {
+                [void](& $appendConsoleText ($echo.Prefix + $record.Message) $echo.Brush $null -SkipScroll -State $appendState)
+                continue
+            }
+            [void](Add-OutputLine -Record $record -AppendFunc $appendConsoleText -ColorMap $consoleColorMap -RawColorMap $rawColorMap -State $appendState -SkipScroll)
+            $hostLines++
+        }
+
+        if ($hostLines -gt 0 -and !$LeaveTabs) {
+            if ($HideUntilContent) { & $revealWindow }
+            & $hideLoading
+            if ($consoleTab.Visibility -ne 'Visible') {
+                $consoleTab.Visibility   = 'Visible'
+                $tabControl.SelectedItem = $consoleTab
+            }
+        }
+
+        # OnComplete counts the final drain's host lines itself
+        $unread = if ($LeaveTabs) { $records.Count - $hostLines } else { $records.Count }
+        if ($unread -gt 0 -and $tabControl.SelectedItem -ne $consoleTab) {
+            $tabNotifications.Console.UnreadCount += $unread
+            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
+        }
+
+        # One scroll per batch
+        if ($autoScrollCheckbox.IsChecked) {
+            $state.IsAutoScrolling = $true
+            $consoleTextBox.ScrollToEnd()
+            $state.IsAutoScrolling = $false
+        }
+
+        $hostLines
+    }.GetNewClosure()
 
     # .Count, not truthiness - Match() returns an empty but truthy collection when the member is missing.
     if ($Executor.PSObject.Properties.Match('UiDispatcher').Count -gt 0) {
@@ -491,38 +552,10 @@ function Show-StreamingOutput {
             }
         }
 
-        $records = $Executor.DrainHostQueue(100)
-        $hadHost = $null -ne $records -and $records.Count -gt 0
+        [void](& $drainConsole 100)
 
-        # Both queues empty and the run is done; nothing left to poll.
-        if (!$hadPipeline -and !$hadHost -and $state.ExecutorDone) {
-            $state.HostQueueTimer.Stop()
-            return
-        }
-        if (!$hadHost) { return }
-
-        if ($HideUntilContent) { & $revealWindow }
-        & $hideLoading
-        if ($consoleTab.Visibility -ne 'Visible') {
-            $consoleTab.Visibility   = 'Visible'
-            $tabControl.SelectedItem = $consoleTab
-        }
-
-        foreach ($record in $records) {
-            [void](Add-OutputLine -Record $record -AppendFunc $appendConsoleText -ColorMap $consoleColorMap -RawColorMap $rawColorMap -State $appendState -SkipScroll)
-        }
-
-        # One scroll at the end of the batch, not per record.
-        if ($autoScrollCheckbox.IsChecked) {
-            $state.IsAutoScrolling = $true
-            $consoleTextBox.ScrollToEnd()
-            $state.IsAutoScrolling = $false
-        }
-
-        if ($tabControl.SelectedItem -ne $consoleTab) {
-            $tabNotifications.Console.UnreadCount += $records.Count
-            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-        }
+        # Both queues are empty and the run is done, so there is no more to poll.
+        if (!$hadPipeline -and $Executor.HostQueueCount -eq 0 -and $state.ExecutorDone) { $state.HostQueueTimer.Stop() }
     }.GetNewClosure())
 
     $state.HostQueueTimer.Start()
@@ -602,7 +635,7 @@ function Show-StreamingOutput {
             if ($errorsTabState.Tab.Visibility -eq 'Collapsed') {
                 $errorsTabState.Tab.Visibility = 'Visible'
 
-                # Errors tab grabs focus only when nothing else is showing yet, otherwise the script's output should stay focused
+                # Errors tab grabs focus only when no other tab is showing yet, otherwise the script's output should stay focused
                 if ($consoleTab.Visibility -eq 'Collapsed') { $tabControl.SelectedItem = $errorsTabState.Tab }
             }
 
@@ -610,20 +643,11 @@ function Show-StreamingOutput {
             [void]$errorsTabState.List.Add($displayRecord)
             $errorsTabState.TotalErrors = [int]$errorsTabState.TotalErrors + 1
 
-            # Echo to the console tab too - red text so it stands out from regular output.
-            $displayMessage = if ($errorRecord.Message) { $errorRecord.Message } else { $errorRecord.ToString() }
-            & $appendConsoleText "[ERROR] $displayMessage" ([System.Windows.Media.Brushes]::IndianRed) $null -State $appendState
-
             if ($tabControl.SelectedItem -ne $errorsTabState.Tab) {
                 $tabNotifications.Errors.UnreadCount++
                 $errorsTabState.Tab.Header = "Errors ($([int]$errorsTabState.TotalErrors)) +$($tabNotifications.Errors.UnreadCount)"
             }
             else { $errorsTabState.Tab.Header = "Errors ($([int]$errorsTabState.TotalErrors))" }
-
-            if ($tabControl.SelectedItem -ne $consoleTab) {
-                $tabNotifications.Console.UnreadCount++
-                $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-            }
         }
         catch {
             # Eat any failure in the error handler itself - the handler crashing the window is worse than losing the diagnostic.
@@ -644,39 +668,26 @@ function Show-StreamingOutput {
 
         if ($warningsTabState.Tab.Visibility -eq 'Collapsed') {
             $warningsTabState.Tab.Visibility = 'Visible'
-            # Same focus rule as the errors tab - only steal focus if nothing else is showing.
+            # Only steal focus when no other tab is showing, same as the errors tab.
             $errorsTabVisible = $errorsTabState.Tab -and $errorsTabState.Tab.Visibility -ne 'Collapsed'
             if ($consoleTab.Visibility -eq 'Collapsed' -and !$errorsTabVisible) {
                 $tabControl.SelectedItem = $warningsTabState.Tab
             }
         }
 
-        # Warnings also stream to Console below, so the tab needs to be visible regardless.
+        # The warning's echo goes to the Console as well, so that tab shows regardless
         if ($consoleTab.Visibility -ne 'Visible') { $consoleTab.Visibility = 'Visible' }
 
         $warningCount.Value++
         $warningRun = [System.Windows.Documents.Run]::new("$warningMessage`n")
         [void]$warningsTabState.Paragraph.Inlines.Add($warningRun)
         $warningsTabState.TextBox.ScrollToEnd()
-        & $appendConsoleText "[WARNING] $warningMessage" ([System.Windows.Media.Brushes]::DarkGoldenrod) $null -State $appendState
 
         if ($tabControl.SelectedItem -ne $warningsTabState.Tab) {
             $tabNotifications.Warnings.UnreadCount++
             $warningsTabState.Tab.Header = "Warnings ($($warningCount.Value)) +$($tabNotifications.Warnings.UnreadCount)"
         }
         else { $warningsTabState.Tab.Header = "Warnings ($($warningCount.Value))" }
-
-        if ($tabControl.SelectedItem -ne $consoleTab) {
-            $tabNotifications.Console.UnreadCount++
-            $consoleTab.Header = "Console (+$($tabNotifications.Console.UnreadCount))"
-        }
-    }.GetNewClosure())
-
-    $Executor.add_OnVerbose({
-        param($verboseMessage)
-        if ($state.IsCancelled) { return }
-        if ([string]::IsNullOrWhiteSpace($verboseMessage)) { return }
-        & $appendConsoleText "[VERBOSE] $verboseMessage" ([System.Windows.Media.Brushes]::Gray) $null -State $appendState
     }.GetNewClosure())
 
     # OnDebug goes straight to the real console, not the UI. For diagnosing the async machinery itself, where touching the UI would just hide the bug.
@@ -809,9 +820,9 @@ function Show-StreamingOutput {
         OutputData          = $outputData
         OutputDataByType    = $outputDataByType
         ConsoleColorMap     = $consoleColorMap
-        RawColorMap         = $rawColorMap
         AppendConsoleText   = $appendConsoleText
         AppendState         = $appendState
+        DrainConsole        = $drainConsole
         ConsoleParagraph    = $consoleParagraph
         ConsoleTextBox      = $consoleTextBox
         ConsoleTab          = $consoleTab
@@ -866,13 +877,17 @@ function Show-StreamingOutput {
     $Executor.add_OnComplete({
         & $writeDebug "OnComplete handler fired"
         $state.ExecutorDone = $true
+
+        # Run is over, drop the ActiveExecutor claim now. Dispose stays in the Closing handler, result actions and captures still read this AsyncExecutor.
+        if ($currentSession -and [object]::ReferenceEquals($currentSession.ActiveExecutor, $Executor)) { $currentSession.ActiveExecutor = $null }
         Invoke-OnCompleteHandler -Context $onCompleteContext
     }.GetNewClosure())
 
-    # Cancellation flips the spinner to a warning icon and drops a coloured message into the console so it's clear something stopped the script - not just that it returned nothing.
+    # Cancellation flips the spinner to a warning icon and drops a colored message into the console, so it reads as a script someone stopped rather than one that returned no output.
     $Executor.add_OnCancelled({
         & $writeDebug "OnCancelled handler fired"
         $state.ExecutorDone = $true
+        if ($currentSession -and [object]::ReferenceEquals($currentSession.ActiveExecutor, $Executor)) { $currentSession.ActiveExecutor = $null }
 
         $statusSpinner.Visibility = 'Collapsed'
         $statusWarning.Visibility = 'Visible'
@@ -899,7 +914,9 @@ function Show-StreamingOutput {
             $wasPinned = $window.Topmost
             if ($wasPinned) { $window.Topmost = $false }
 
-            $confirm = Show-UiConfirmDialog -Title "Cancel Operation" -Message "A task is still running. Cancel and close?"
+            $sessionToken = & $pushSession -SessionId $ownerSessionId
+            $confirm      = Show-UiConfirmDialog -Title "Cancel Operation" -Message "A task is still running. Cancel and close?"
+            & $popSession -Token $sessionToken
             if (!$confirm) {
                 if ($wasPinned) { $window.Topmost = $true }
                 $eventArgs.Cancel = $true
@@ -914,13 +931,13 @@ function Show-StreamingOutput {
 
         & $writeDebug "Window closing..."
 
-        # Skip the cancel call on a finished script - otherwise the cancelled UI overlays on top of a successful completion, which reads like a fake error.
+        # Skip the cancel call on a finished script, or the canceled UI overlays a successful completion and reads like a fake error.
         if ($Executor.IsRunning) {
             $state.IsCancelled = $true
             $Executor.Cancel()
         }
 
-        # Hand dialog parenting back to whoever had it. Otherwise the next dialog tries to centre on a closed window and ends up off screen.
+        # Hand dialog parenting back to whoever had it. Otherwise the next dialog tries to center on a closed window and ends up off screen.
         if ($capturedSession -and $capturedSession.ActiveDialogParent -eq $window) {  $capturedSession.ActiveDialogParent = $null   }
 
         # DispatcherTimer keeps a strong reference to its tick handler - leak the window without an explicit Stop() and the closure pins everything it captured.
@@ -932,15 +949,18 @@ function Show-StreamingOutput {
         if ($Executor.PSObject.Methods.Match('Dispose').Count -gt 0) {
             try { $Executor.Dispose() } catch { Write-Debug "Suppressed dispose error: $_" }
         }
+
+        # Window closed mid-run still gives up the claim.
+        if ($capturedSession -and [object]::ReferenceEquals($capturedSession.ActiveExecutor, $Executor)) { $capturedSession.ActiveExecutor = $null }
     }.GetNewClosure())
 
-    # HideUntilContent path: kick off execution now, only show the window if data shows up.
+    # On the HideUntilContent path execution starts now, and the window only shows once data arrives.
     if ($showWindowOnData) {
         & $writeDebug "HideUntilContent mode - starting execution without showing window"
 
         if ($Capture) {  $Executor.CaptureVariables = [string[]]$Capture }
 
-        # Don't wait for window load - in this mode the window won't load until data shows up.
+        # Don't wait for window load since in this mode the window won't load until data shows up.
         if ($Action) {
             & $writeDebug "Starting ExecuteAsync - Action: $($Action.ToString().Length) chars"
             try {
@@ -959,7 +979,7 @@ function Show-StreamingOutput {
             Start-Sleep -Milliseconds 10
         }
 
-        # Final check. Scripts that finish faster than the 50ms tick leave output sitting in the queues. Peek the counts only, the OnComplete drain owns the queues, and draining them here threw the pipeline items away (a fast object only action revealed an empty window with no Results tab).
+        # Final check. Scripts that finish faster than the 50ms tick leave output sitting in the queues. Peek the counts only, the OnComplete drain owns the queues, and draining them here would throw the pipeline items away (a fast object only action revealed an empty window with no Results tab).
         if (!$state.WindowRevealed) {
             $hasOutput = ($Executor.HostQueueCount -gt 0) -or ($Executor.PipelineQueueCount -gt 0)
 
@@ -976,7 +996,7 @@ function Show-StreamingOutput {
                     $statusSuccess.Visibility = 'Visible'
                     $headerTitle.Text         = "$Title - Complete"
                 }
-                catch { }
+                catch { Write-Debug "Header flip failed: $_" }
 
                 $window.Opacity = 1
                 $window.Show()
@@ -1004,14 +1024,14 @@ function Show-StreamingOutput {
         # Never revealed window still holds its runspace + UI thread. Close it explicitly so they release.
         if (!$state.WindowRevealed) {
             & $writeDebug "No output produced - closing hidden window to prevent leak"
-            # Close can race a window that's already torn down - nothing left to do then.
+            # Close can race a window that's already torn down, so there is no work left.
             try { $window.Close() } catch { }
         }
 
         & $writeDebug "HideUntilContent execution complete"
     }
     else {
-        # Standard path: show the window first, kick off execution once it's loaded.
+        # The standard path shows the window first and starts execution once it has loaded.
         $window.Opacity = 0
 
         # CaptureVariables has to be set before the Add_Loaded closure captures the AsyncExecutor.

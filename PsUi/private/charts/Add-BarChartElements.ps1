@@ -9,9 +9,9 @@ function Add-BarChartElements {
     $height     = $Canvas.Height
     $margin     = 50
     $barSpacing = 4
-    $count      = $Data.Count
+    $count      = @($Data).Count
 
-    # Limit bar width for large datasets
+    # Cap stops a short list drawing slabs
     $maxBarWidth = 60
     $minBarWidth = 2
 
@@ -20,8 +20,10 @@ function Add-BarChartElements {
 
     $chartWidth  = $width - ($margin * 2)
     $chartHeight = $height - ($margin * 2)
-    $rawBarWidth = ($chartWidth - ($barSpacing * ($count - 1))) / $count
-    $barWidth    = [math]::Max($minBarWidth, [math]::Min($maxBarWidth, $rawBarWidth))
+
+    # Stepping by the capped width bunches three bars into the left quarter
+    $slotWidth = $chartWidth / $count
+    $barWidth  = [math]::Max($minBarWidth, [math]::Min($maxBarWidth, $slotWidth - $barSpacing))
 
     # Draw Y-axis
     $yAxis = [System.Windows.Shapes.Line]@{
@@ -41,13 +43,14 @@ function Add-BarChartElements {
 
     # Calculate label width for ViewBox sizing
     $showDataLabels = $count -le 30
-    $labelWidth     = if ($showDataLabels) { [math]::Max(10, $barWidth + $barSpacing - 2) } else { 0 }
+    $labelWidth     = if ($showDataLabels) { [math]::Max(10, $slotWidth - 2) } else { 0 }
 
     # Draw bars with hover effects
     for ($i = 0; $i -lt $count; $i++) {
         $item         = $Data[$i]
         $barHeight    = [math]::Max(1, ($item.Value / $maxValue) * $chartHeight)
-        $x            = $margin + ($i * ($barWidth + $barSpacing))
+        $slotCenter   = $margin + ($i * $slotWidth) + ($slotWidth / 2)
+        $x            = $slotCenter - ($barWidth / 2)
         $y            = $height - $margin - $barHeight
         $paletteEntry = $Palette[$i % $Palette.Count]
 
@@ -67,7 +70,7 @@ function Add-BarChartElements {
         # Tooltip with label and value
         $bar.ToolTip = "$($item.Label): $([math]::Round($item.Value, 2))"
 
-        # Hover effect: brighten and scale
+        # Mouse hover brightens the bar and scales it up.
         $bar.Add_MouseEnter({
             param($sender, $eventArgs)
             $sender.Opacity = 1.0
@@ -99,7 +102,7 @@ function Add-BarChartElements {
                 StretchDirection = 'DownOnly'
                 Child            = $label
             }
-            [System.Windows.Controls.Canvas]::SetLeft($viewBox, $x + ($barWidth / 2) - ($labelWidth / 2))
+            [System.Windows.Controls.Canvas]::SetLeft($viewBox, $slotCenter - ($labelWidth / 2))
             [System.Windows.Controls.Canvas]::SetTop($viewBox, $height - $margin + 3)
             [void]$Canvas.Children.Add($viewBox)
         }
@@ -112,7 +115,7 @@ function Add-BarChartElements {
                 FontWeight = 'Medium'
             }
             $valueLabel.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
-            [System.Windows.Controls.Canvas]::SetLeft($valueLabel, $x + ($barWidth / 2) - 10)
+            [System.Windows.Controls.Canvas]::SetLeft($valueLabel, $slotCenter - 10)
             [System.Windows.Controls.Canvas]::SetTop($valueLabel, $y - 16)
             [void]$Canvas.Children.Add($valueLabel)
         }

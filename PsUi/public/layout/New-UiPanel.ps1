@@ -1,7 +1,12 @@
-function New-UiPanel {
+﻿function New-UiPanel {
     <#
     .SYNOPSIS
         Creates a panel container for organizing child controls.
+    .DESCRIPTION
+        The workhorse container. Stacks children vertically or horizontally, or wraps them into
+        responsive columns with -LayoutStyle Wrap (-MaxColumns caps the count). -Header puts it in
+        a themed GroupBox. In a horizontal or wrapped row, buttons beside a labeled input line up
+        with its box.
     .PARAMETER Content
         ScriptBlock containing child controls to render inside the panel.
     .PARAMETER Header
@@ -17,40 +22,43 @@ function New-UiPanel {
     .PARAMETER MaxColumns
         Maximum responsive columns for Wrap layout (1-4). Children resize automatically.
     .PARAMETER HeaderAction
-        Optional hashtable defining a custom action button in the panel header.
-        Requires -Header parameter to be set.
-        Hashtable should contain: Icon (string), Tooltip (string), Action (scriptblock).
+        Optional action button in the panel header. Requires -Header to be set.
+        Pass New-UiHeaderAction output, or the legacy hashtable containing: Icon (string),
+        Tooltip (string), Action (scriptblock).
     .PARAMETER ShowSourceButton
         When used with -Header, automatically adds a "View Source Code" button that displays
         the Content scriptblock in a PowerShell-styled dialog.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
-        Invalid properties will generate warnings but not stop execution.
+        Bad values warn and get skipped. A property name that does not exist on the control is
+        skipped silently (-Verbose shows it). Nothing stops execution.
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         New-UiPanel -Header "Example Panel" -ShowSourceButton -Content {
             New-UiLabel -Text "This code can be viewed by clicking the button"
         }
     .EXAMPLE
-        New-UiPanel -Header "Custom Action" -HeaderAction @{
-            Icon = "Info"
-            Tooltip = "Show Help"
-            Action = { Show-UiMessageDialog -Title "Help" -Message "This is help text" }
-        } -Content {
+        New-UiPanel -Header "Custom Action" -HeaderAction (
+            New-UiHeaderAction -Icon Info -Tooltip 'Show Help' -Action { Show-UiMessageDialog -Message 'Help text' }
+        ) -Content {
             New-UiLabel -Text "Panel content"
         }
+
+        The legacy hashtable form still works:
+        -HeaderAction @{ Icon = 'Info'; Tooltip = 'Show Help'; Action = { ... } }
     .EXAMPLE
-        New-UiPanel -Content { } -WPFProperties @{
-            ToolTip = "Custom tooltip"
-            Cursor = "Hand"
-            Opacity = 0.8
+        # Wrap layout flows children into columns, capped at two here.
+        New-UiPanel -LayoutStyle Wrap -MaxColumns 2 -Content {
+            New-UiToggle -Label 'Wake on LAN' -Variable 'wol'
+            New-UiToggle -Label 'Remote registry' -Variable 'remoteReg'
+            New-UiToggle -Label 'ICMP echo' -Variable 'icmp'
+            New-UiToggle -Label 'SMB v1' -Variable 'smb1'
         }
     .EXAMPLE
         New-UiPanel -Content { } -WPFProperties @{
             "Grid.Row" = 1
             "Grid.Column" = 2
-            Tag = "MyTag"
         }
     #>
     [CmdletBinding()]
@@ -160,7 +168,8 @@ $sourceCode
 
         # If MaxColumns specified, add responsive sizing for child controls inside this panel
         if ($MaxColumns -gt 0) {
-            $panelMaxCols = $MaxColumns  # Capture for closure - completely independent from window
+            # Captured for the closure, and independent of the window's own column count
+            $panelMaxCols = $MaxColumns
             $innerContainer.Add_SizeChanged({
                 param($sender, $eventArgs)
 
@@ -169,10 +178,11 @@ $sourceCode
                 if ($availableWidth -le 0) { return }
 
                 # Calculate column width based on this panel's MaxColumns (NOT window's)
-                $minColumnWidth = 150  # Minimum width per column in wrap panel
-                $possibleCols = [Math]::Max(1, [Math]::Floor($availableWidth / $minColumnWidth))
-                $actualCols = [Math]::Min($possibleCols, $panelMaxCols)
-                $actualCols = [Math]::Max($actualCols, 1)
+                # Minimum width per column in the wrap panel
+                $minColumnWidth = 150
+                $possibleCols   = [Math]::Max(1, [Math]::Floor($availableWidth / $minColumnWidth))
+                $actualCols     = [Math]::Min($possibleCols, $panelMaxCols)
+                $actualCols     = [Math]::Max($actualCols, 1)
 
                 $childWidth = [Math]::Floor(($availableWidth / $actualCols) - 8)
 
@@ -195,7 +205,7 @@ $sourceCode
         $fullWidthConstraint = $FullWidth
     }
 
-    # Build display control (GroupBox wrapper if Header specified)
+    # Build the display control, a GroupBox around it when Header is set
     if ($Header) {
         $displayControl = [System.Windows.Controls.GroupBox]@{
             Content = $innerContainer
@@ -266,8 +276,19 @@ $sourceCode
 
             # Style and click handler
             Set-ButtonStyle -Button $iconButton -IconOnly
-            $actionScript = $HeaderAction.Action
-            $iconButton.Add_Click({ & $actionScript }.GetNewClosure())
+            $actionScript   = $HeaderAction.Action
+            $ownerSessionId = $session.SessionId
+            $pushSession    = ${function:Push-UiSession}
+            $popSession     = ${function:Pop-UiSession}
+            $invokeCallback = ${function:Invoke-UiCallback}
+
+            # The trap's continue still reaches the pop
+            $iconButton.Add_Click({
+                trap { Write-Warning "New-UiPanel header action error: $_"; continue }
+                $sessionToken = & $pushSession -SessionId $ownerSessionId
+                $null         = & $invokeCallback -ScriptBlock $actionScript -Label 'New-UiPanel header action'
+                & $popSession -Token $sessionToken
+            }.GetNewClosure())
 
             [System.Windows.Controls.Grid]::SetColumn($iconButton, 1)
             [void]$headerGrid.Children.Add($iconButton)
@@ -295,15 +316,7 @@ $sourceCode
         Set-UiProperties -Control $displayControl -Properties $WPFProperties
     }
 
-    if ($parent -is [System.Windows.Controls.Panel]) {
-        [void]$parent.Children.Add($displayControl)
-    }
-    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
-        [void]$parent.Items.Add($displayControl)
-    }
-    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
-        $parent.Content = $displayControl
-    }
+    Add-UiControlToParent -Control $displayControl -Parent $parent
 
     # Execute content block with innerContainer as the new parent
     $session.CurrentParent = $innerContainer
@@ -322,6 +335,9 @@ $sourceCode
     
     # Restore parent after successful content execution
     $session.CurrentParent = $oldParent
-    
+
+    # -Type Tab builds a TabControl, which isn't a Panel
+    if ($innerContainer -is [System.Windows.Controls.Panel]) { Set-UiRowAlignment -Panel $innerContainer }
+
     Write-Debug "Content block complete. Added to: $($oldParent.GetType().Name)"
 }

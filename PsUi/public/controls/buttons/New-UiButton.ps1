@@ -1,0 +1,750 @@
+﻿function New-UiButton {
+    <#
+    .SYNOPSIS
+        Creates a styled button with async action support.
+    .DESCRIPTION
+        Creates a themed WPF button that executes actions asynchronously by default,
+        with output streamed to the output window and result actions on what comes
+        back. Can be used standalone or as part of other layouts (toolbars, forms, etc.).
+
+        Use -Action to provide an inline scriptblock, or -File to run an external
+        script file. These parameters are mutually exclusive.
+
+        Yeah, there's a lot of parameters here. Splitting them into separate cmdlets
+        would mean more boilerplate for every button. They group logically:
+        appearance (Text/Icon/Width), execution (Action/NoAsync/NoWait), variable
+        capture (LinkedVariables/Capture), and result handling (ResultActions). You
+        configure all of these together when defining a button, not separately.
+    .PARAMETER Text
+        The button label text.
+    .PARAMETER Action
+        The scriptblock to execute when clicked. Mutually exclusive with -File.
+    .PARAMETER File
+        Path to a script file to execute when clicked. Supports .ps1, .bat, .cmd,
+        .vbs, and .exe files. The file must exist at button creation time.
+        Mutually exclusive with -Action.
+    .PARAMETER ArgumentList
+        Hashtable of arguments to pass to the script file. For .ps1 files, these
+        are splatted as parameters. For other file types, values are passed as
+        command-line arguments.
+    .PARAMETER Icon
+        Optional icon name shown before the text. Use Show-UiGlyphBrowser to browse names.
+    .PARAMETER Accent
+        Use accent color styling for the button.
+    .PARAMETER Width
+        Button width in pixels. Defaults to auto-sizing.
+    .PARAMETER Height
+        Button height in pixels. Defaults to 28.
+    .PARAMETER NoAsync
+        Execute synchronously on the UI thread (blocks UI). Auto-set when the action
+        spawns a window so it renders on the host's UI thread; pass -NoAsync:$false
+        to override. Errors the action writes, a command's stderr included, show
+        in one dialog when it finishes. After ten, the dialog counts the rest instead of
+        listing them.
+    .PARAMETER NoWait
+        Execute async with output window, but don't block the parent window.
+        Other buttons remain clickable while this action runs. The clicked button
+        is still disabled to prevent duplicate execution of the same action.
+    .PARAMETER NoOutput
+        Execute async but don't show output window.
+    .PARAMETER NoInteractive
+        Use fast pooled execution. A prompt inside the action does not fail, it just
+        returns nothing useful: an empty string from Read-Host, an empty SecureString
+        from Read-Host -AsSecureString, no credential object from Get-Credential, and
+        the default answer from a choice prompt. Save it for actions that only move
+        data around.
+    .PARAMETER HideEmptyOutput
+        Show output window only when there's actual content.
+    .PARAMETER ScrollToTop
+        Scrolls console output to the top on completion instead of the bottom. Made for
+        help text, which nobody reads bottom up.
+    .PARAMETER ResultActions
+        Actions offered against selected rows in the output window's results grid, shown as
+        an Actions dropdown. Pass a { New-UiResultAction ... } definition block, an array of
+        New-UiResultAction output, or the legacy hashtable array. Each entry carries Text and
+        Action (required), plus optional Icon, Confirm (asks before the run; a format string
+        where {0} is the selection count), and ObjectType (limit the action to result tabs of
+        matching type). In the action, $_ is the selected row (the whole array on
+        multi-select) and $Selected is always the full array.
+    .PARAMETER SingleSelect
+        If specified, ResultActions work with single selection.
+    .PARAMETER LinkedVariables
+        Variable names to capture from your script's scope.
+    .PARAMETER LinkedFunctions
+        Function names to capture from your script's scope.
+    .PARAMETER LinkedModules
+        Module paths to import in the async runspace.
+    .PARAMETER Capture
+        Variable names to capture from the runspace after execution completes.
+        Captured variables are stored in the session and available to subsequent
+        button actions. With New-UiWindow -ExportOnClose they come back to the
+        calling script after the window closes.
+    .PARAMETER Parameters
+        Hashtable of parameters to pass to the action.
+    .PARAMETER Variables
+        Hashtable of variables to inject into the action.
+    .PARAMETER OutputTitle
+        Title for the output window. Defaults to button text.
+    .PARAMETER GridColumn
+        If specified, sets Grid.Column attached property.
+    .PARAMETER GridRow
+        If specified, sets Grid.Row attached property.
+    .PARAMETER EnabledWhen
+        Conditional enabling based on another control's state. Accepts either:
+        - A control proxy (e.g., $toggleControl): enabled while that control is truthy
+        - A scriptblock (e.g., { $toggle -and $userName }): enabled while the expression is true
+
+        Truthy values: CheckBox=checked, TextBox=non-empty, ComboBox=has selection.
+    .PARAMETER Variable
+        Optional name to register the button for -SubmitButton lookups.
+        When specified, inputs using -SubmitButton with this name will trigger
+        the button's click event when Enter is pressed.
+    .PARAMETER ValidateScript
+        Runs synchronously before the action. Return strings to block it and list them in a
+        'Please fix the following issues' dialog, or nothing to let it run. A throw blocks too,
+        and a written error only warns. It runs before hydration, so it can't see control
+        variables. Check those at the top of -Action instead.
+    .PARAMETER WPFProperties
+        Hashtable of WPF properties to apply to the button.
+    .EXAMPLE
+        New-UiButton -Text "Save" -Icon "Save" -Accent -Action { Save-Data }
+    .EXAMPLE
+        New-UiButton -Text "Run Query" -Action { Get-Process } -HideEmptyOutput
+    .EXAMPLE
+        New-UiButton -Text "Deploy" -File "C:\Scripts\Deploy.ps1" -ArgumentList @{ Environment = 'Prod' }
+    .EXAMPLE
+        New-UiButton -Text "Backup" -File ".\scripts\backup.bat" -NoOutput
+    .EXAMPLE
+        # Capture variables for use in other buttons or after window closes
+        New-UiButton -Text "Load" -Capture services, loadTime -Action {
+            $services = Get-Service | Where-Object Status -eq 'Running'
+            $loadTime = Get-Date
+        }
+        # In another button, $services and $loadTime are now available
+    .EXAMPLE
+        # Return error strings to block the click - returning nothing will let it run.
+        New-UiButton -Text 'Deploy' -ValidateScript {
+            $problems = @()
+            if (!(Test-Path '\\deploy\staging$')) { $problems += 'Staging share is unreachable.' }
+            if (!(Test-Connection prod-web01 -Count 1 -Quiet)) { $problems += 'prod-web01 is not online.' }
+            $problems
+        } -Action { Publish-Build }
+    .EXAMPLE
+        # A horizontal toolbar
+        New-UiPanel -Orientation Horizontal -Content {
+            New-UiButton -Text "Add" -Icon "Add" -Action { Add-Entry }
+            New-UiButton -Text "Delete" -Icon "Delete" -Action { Remove-Entry }
+        }
+    .EXAMPLE
+        # Actions against the results grid selection
+        New-UiButton -Text 'Get Processes' -Action { Get-Process } -ResultActions {
+            New-UiResultAction 'Stop' -Icon Stop -Confirm 'Stop {0} processes?' -Action { $_ | Stop-Process -Force }
+            New-UiResultAction 'Details' -Action { $Selected | Format-List * | Out-String | Write-Host }
+        }
+    .EXAMPLE
+        # Legacy hashtable form, still supported
+        New-UiButton -Text 'Get Processes' -Action { Get-Process } -ResultActions @(
+            @{ Text = 'Stop'; Icon = 'Stop'; Confirm = 'Stop {0} processes?'; Action = { $_ | Stop-Process -Force } }
+        )
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'ScriptBlock')]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Text,
+
+        [Parameter(Mandatory, ParameterSetName = 'ScriptBlock')]
+        [scriptblock]$Action,
+
+        [Parameter(Mandatory, ParameterSetName = 'File')]
+        [string]$File,
+
+        [Parameter(ParameterSetName = 'File')]
+        [hashtable]$ArgumentList,
+
+        [switch]$Accent,
+
+        [int]$Width,
+
+        [int]$Height = 28,
+
+        # Action execution parameters
+        [switch]$NoAsync,
+        [switch]$NoWait,
+        [switch]$NoOutput,
+        [switch]$NoInteractive,
+        [switch]$HideEmptyOutput,
+        [switch]$ScrollToTop,
+        # Untyped so it takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array.
+        [object]$ResultActions,
+        [switch]$SingleSelect,
+        [string[]]$LinkedVariables,
+        [string[]]$LinkedFunctions,
+        [string[]]$LinkedModules,
+        [string[]]$Capture,
+        [hashtable]$Parameters,
+        [hashtable]$Variables,
+        [string]$OutputTitle,
+
+        # Runs synchronously before Action.
+        # Hands back $null or an empty array on success, or an array of error strings on failure.
+        [scriptblock]$ValidateScript,
+
+        # Layout parameters
+        [int]$GridColumn = -1,
+        [int]$GridRow = -1,
+
+        [Parameter()]
+        [object]$EnabledWhen,
+
+        [Parameter()]
+        [string]$Variable,
+
+        [Parameter()]
+        [hashtable]$WPFProperties
+    )
+
+    DynamicParam { Get-IconDynamicParameter -ParameterName 'Icon' }
+
+    begin { $Icon = $PSBoundParameters['Icon'] }
+
+    process {
+
+    # Can't use both. Pick one.
+    if ($NoOutput -and $HideEmptyOutput) {
+        throw "Parameters -NoOutput and -HideEmptyOutput are mutually exclusive. Use only one."
+    }
+
+    # Builder input normalizes to the hashtable array the output window expects. Legacy arrays pass through unchanged.
+    if ($null -ne $ResultActions) {
+        $ResultActions = [hashtable[]](ConvertTo-UiDefinitionArray -InputObject $ResultActions -ParameterName '-ResultActions' -CallerName 'New-UiButton')
+    }
+
+    # Catch bad variable names early instead of failing mid-execution
+    if ($Capture) {
+        foreach ($varName in $Capture) {
+            if (![PsUi.Constants]::IsValidIdentifier($varName)) {
+                throw "Invalid variable name for -Capture: '$varName'. Names must start with a letter or underscore and contain only letters, numbers, underscores, or hyphens."
+            }
+        }
+    }
+
+    # Convert -File parameter to an Action scriptblock
+    if ($PSCmdlet.ParameterSetName -eq 'File') {
+        $Action = ConvertTo-UiFileAction -File $File -ArgumentList $ArgumentList
+    }
+
+    $session = Assert-UiSession -CallerName 'New-UiButton'
+    Write-Debug "Text='$Text', Icon='$Icon', Accent=$Accent, NoAsync=$NoAsync"
+
+    $colors  = Get-ThemeColors
+    $parent  = $session.CurrentParent
+    Write-Debug "Parent: $($parent.GetType().Name)"
+
+    $btnWidth = if ($Width -gt 0) { $Width } else { [double]::NaN }
+    $button = [PsUi.ControlFactory]::CreateButton($Text, $btnWidth, $Height)
+
+    # Configure button content (icon + text or just text)
+    $button.Padding = [System.Windows.Thickness]::new(8, 4, 8, 4)
+    $button.Margin = [System.Windows.Thickness]::new(4)
+
+    $iconText = if ($Icon) { [PsUi.ModuleContext]::GetIcon($Icon) } else { $null }
+
+    if ($iconText) {
+        # Create horizontal stack for icon + text
+        $contentPanel = [System.Windows.Controls.StackPanel]@{
+            Orientation = 'Horizontal'
+            VerticalAlignment = 'Center'
+        }
+
+        $iconBlock = [System.Windows.Controls.TextBlock]@{
+            Text = $iconText
+            FontFamily = [PsUi.ModuleContext]::ActiveIconFontFamily
+            FontSize = 12
+            FontWeight = 'Light'
+            VerticalAlignment = 'Center'
+            Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
+        }
+
+        # Accent buttons use contrasting foreground, regular buttons use accent color for icon
+        if ($Accent) {
+            $iconBlock.Tag = 'AccentButtonIcon'
+            $iconBlock.Foreground = ConvertTo-UiBrush $colors.AccentHeaderFg
+        }
+        else {
+            $iconBlock.Tag = 'AccentBrush'
+            $iconBlock.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'AccentBrush')
+        }
+        [PsUi.ThemeEngine]::RegisterElement($iconBlock)
+
+        [void]$contentPanel.Children.Add($iconBlock)
+
+        $textBlock = [System.Windows.Controls.TextBlock]@{
+            Text              = $Text
+            VerticalAlignment = 'Center'
+            TextTrimming      = 'CharacterEllipsis'
+        }
+        
+        # Accent buttons take a contrasting foreground and everything else takes ButtonForeground.
+        if ($Accent) {
+            $textBlock.Tag        = 'AccentButtonText'
+            $textBlock.Foreground = ConvertTo-UiBrush $colors.AccentHeaderFg
+        }
+        else {
+            $textBlock.Tag = 'ButtonFgBrush'
+            $textBlock.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ButtonForegroundBrush')
+        }
+        
+        [void]$contentPanel.Children.Add($textBlock)
+
+        # Always use ViewBox for icon+text buttons to handle overflow gracefully
+        $viewBox = [System.Windows.Controls.Viewbox]@{
+            StretchDirection = 'DownOnly'
+            Stretch          = 'Uniform'
+        }
+        # WPF throws outright on a negative Max, and a -Width under 16 or a -Height under 8 makes it neg.
+        if ($Width -gt 16)  { $viewBox.MaxWidth  = $Width - 16 }
+        if ($Height -gt 8)  { $viewBox.MaxHeight = $Height - 8 }
+        $viewBox.Child = $contentPanel
+        $button.Content = $viewBox
+    }
+    else {
+        # Just text, so a ViewBox only if it needs scaling.
+        $textBlock = [System.Windows.Controls.TextBlock]@{
+            Text              = $Text
+            TextAlignment     = 'Center'
+            VerticalAlignment = 'Center'
+        }
+        
+        # Accent buttons take a contrasting foreground and everything else takes ButtonForeground.
+        if ($Accent) {
+            $textBlock.Tag        = 'AccentButtonText'
+            $textBlock.Foreground = ConvertTo-UiBrush $colors.AccentHeaderFg
+        }
+        else {
+            $textBlock.Tag = 'ButtonFgBrush'
+            $textBlock.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ButtonForegroundBrush')
+        }
+
+        if ($Width -gt 0 -or $PSBoundParameters.ContainsKey('Height')) {
+            # A fixed size on either axis, so the ViewBox does the scaling. Same neg max issue as the icon path above.
+            $viewBox = [System.Windows.Controls.Viewbox]@{
+                StretchDirection = 'DownOnly'
+                Stretch          = 'Uniform'
+            }
+            if ($Width -gt 16) { $viewBox.MaxWidth  = $Width - 16 }
+            if ($Height -gt 8) { $viewBox.MaxHeight = $Height - 8 }
+            $viewBox.Child = $textBlock
+            $button.Content = $viewBox
+        }
+        else { $button.Content = $textBlock }
+    }
+
+    # Apply grid positioning if specified
+    if ($GridColumn -ge 0) { [System.Windows.Controls.Grid]::SetColumn($button, $GridColumn)}
+    if ($GridRow -ge 0) { [System.Windows.Controls.Grid]::SetRow($button, $GridRow) }
+
+    $ctxParams = @{
+        Action            = $Action
+        LinkedVariables   = $LinkedVariables
+        LinkedFunctions   = $LinkedFunctions
+        LinkedModules     = $LinkedModules
+        ExplicitVariables = $Variables
+    }
+    $actionContext = Get-UiActionContext @ctxParams
+
+    $capturedVars  = $actionContext.CapturedVars
+    $capturedFuncs = $actionContext.CapturedFuncs
+    $resolvedModules = $actionContext.LinkedModules
+
+    # WPF windows on the async runspace's STA thread inevtiably die. If the action calls a window spawner, flip to sync so the spawn lands on the host's UI thread instead.
+    if ($Action -and !$PSBoundParameters.ContainsKey('NoAsync') -and (Test-UiActionOpensWindow -Action $Action)) {
+        Write-Debug "[New-UiButton] The action opens a window, forcing -NoAsync."
+        $NoAsync = $true
+    }
+
+    $handNamed  = @($LinkedVariables) + @($(if ($Variables) { $Variables.Keys }))
+    $scopeNames = @($actionContext.AutoDetectedVars | Where-Object { $_ -notin $handNamed })
+
+    # An async click registers its own AsyncExecutor as ActiveExecutor before the action runs, so a Stop-UiAsync inside it cancels this very button instead of the job. Warn, don't flip, unlike the spawner case above, the action still runs, it just cancels the wrong thing.
+    if (!$NoAsync -and !$PSBoundParameters.ContainsKey('NoAsync') -and $actionContext.AutoDetectedFuncs -contains 'Stop-UiAsync') {
+        Write-Warning "New-UiButton '$Text': the action calls Stop-UiAsync but the button is async, so it will cancel itself instead of the running job. Add -NoAsync to this button."
+    }
+
+    # Store action context in button tag for click handler
+    $displayTitle = if ($OutputTitle) { $OutputTitle } else { $Text }
+
+    $button.Tag = @{
+        Action          = $Action
+        Parameters      = $Parameters
+        WindowRef       = $session.Window
+        SessionId       = $session.SessionId
+        Text            = $displayTitle
+        NoAsync         = $NoAsync
+        NoWait          = $NoWait
+        IsCSharpLoaded  = [PsUi.ModuleContext]::IsInitialized
+        ResultActions   = $ResultActions
+        SingleSelect    = $SingleSelect
+        CapturedVars    = $capturedVars
+        ScopeNames      = $scopeNames
+        CapturedFuncs   = $capturedFuncs
+        LinkedModules   = $resolvedModules
+        Capture         = $Capture
+        NoOutput        = $NoOutput
+        NoInteractive   = $NoInteractive
+        HideEmptyOutput = $HideEmptyOutput
+        ScrollToTop     = $ScrollToTop
+        ValidateScript  = $ValidateScript
+        IsAccent        = $Accent.IsPresent
+    }
+
+    # Apply accent styling AFTER Tag is set (so Set-ButtonStyle can merge IsAccent properly)
+    if ($Accent) { Set-ButtonStyle -Button $button -Accent }
+
+    # Click handler
+    $button.Add_Click({
+        param($sender, $eventArgs)
+        $ctx = $this.Tag
+        # IDictionary check, not just null: a Tag replaced after construction is non-null, sails past a null guard, and the click dies invoking a null Action ("expression after '&'...").
+        if ($ctx -isnot [System.Collections.IDictionary] -or !$ctx.Contains('Action')) {
+            Write-Warning "[New-UiButton] Tag no longer holds the action context (overwritten after construction?) - cannot execute action"
+            return
+        }
+        Write-Debug "Click handler fired, Action is null: $($null -eq $ctx.Action)"
+        $btn = $this
+
+        # The thread's current session is whichever window set it last (like an open child), so the click runs under the one that built the button
+        $sessionToken = Push-UiSession -SessionId $ctx.SessionId
+
+        $originalContent = $btn.Content
+
+        # Capture current button size before swapping content to spinner
+        $originalMinWidth  = $btn.MinWidth
+        $originalMinHeight = $btn.MinHeight
+        if ($btn.ActualWidth -gt 0) { $btn.MinWidth = $btn.ActualWidth }
+        if ($btn.ActualHeight -gt 0) { $btn.MinHeight = $btn.ActualHeight }
+
+        # Run pre-validation script synchronously if provided
+        if ($ctx.ValidateScript) {
+            try {
+                $validationErrors = Invoke-UiCallback -ScriptBlock $ctx.ValidateScript -Label 'ValidateScript'
+                if ($validationErrors -and $validationErrors.Count -gt 0) {
+                    # Use [char]0x2022 for bullet point (PS 5.1 compatible, unlike `u{2022})
+                    $bullet = [char]0x2022
+                    $errorMessage = "Please fix the following issues:`n`n" + (($validationErrors | ForEach-Object { "  $bullet $_" }) -join "`n")
+                    Show-UiMessageDialog -Title 'Validation Error' -Message $errorMessage -Icon Warning -Buttons OK | Out-Null
+                    Pop-UiSession -Token $sessionToken
+                    return
+                }
+            }
+            catch {
+                Show-UiMessageDialog -Title 'Validation Error' -Message "Validation failed: $_" -Icon Error -Buttons OK | Out-Null
+                Pop-UiSession -Token $sessionToken
+                return
+            }
+        }
+
+        $themeColors = Get-ThemeColors
+
+        # Use contrasting spinner color for accent buttons
+        $isAccentButton = $btn.Tag -is [System.Collections.IDictionary] -and $btn.Tag['IsAccent']
+        $spinnerColor = if ($isAccentButton) { $themeColors.AccentHeaderFg } else { $themeColors.Accent }
+        $spinner = New-UiLoadingSpinner -Size 14 -Color $spinnerColor
+        $btn.Content = $spinner
+        $btn.IsEnabled = $false
+
+        $actionErrors = [System.Collections.Generic.List[object]]::new()
+
+        try {
+            $forceSynchronous = $ctx.NoAsync
+
+            if ($forceSynchronous -eq $true -or !$ctx.IsCSharpLoaded) {
+                if ($forceSynchronous -ne $true) { Write-Warning "Async unavailable. Running synchronously." }
+                $null = Invoke-UiCallback -ScriptBlock $ctx.Action -ArgumentList $ctx.Parameters -ErrorList $actionErrors
+                $btn.Content   = $originalContent
+                $btn.MinWidth  = $originalMinWidth
+                $btn.MinHeight = $originalMinHeight
+                $btn.IsEnabled = $true
+
+                if ($actionErrors.Count) {
+                    $listed = Format-UiErrorList -Errors $actionErrors
+                    Show-UiMessageDialog -Title "Error: $($ctx.Text)" -Message $listed -Icon Error -Buttons OK | Out-Null
+                }
+            }
+            else {
+                $executor = [PsUi.AsyncExecutor]::new()
+
+                # Store the AsyncExecutor in the session for Stop-UiAsync cancellation
+                $execSession = [PsUi.SessionManager]::Current
+                if ($execSession) { $execSession.ActiveExecutor = $executor }
+
+                # Give the AsyncExecutor the window's Dispatcher so completions land on the UI thread (critical for NoOutput mode)
+                $executor.UiDispatcher = $btn.Dispatcher
+
+                # Route the full running lifecycle (start, progress, errors, warnings, cancellation, completion) to any -AutoProgress / -AutoCancel status bar
+                if ($execSession) { Add-StatusBarAutoWiring -Executor $executor -Session $execSession -ActionName $ctx.Text }
+
+                $currentThemeColors = Get-ThemeColors
+                $varsWithTheme = if ($ctx.CapturedVars) { $ctx.CapturedVars.Clone() } else { @{} }
+                $varsWithTheme = Remove-UiStoreShadow -Variables $varsWithTheme -AutoNames $ctx.ScopeNames
+                if ($currentThemeColors) {
+                    $varsWithTheme['__WPFThemeColors'] = $currentThemeColors
+                }
+
+                # Inject credentials from session.Variables at CLICK TIME (not capture time)
+                $clickSession = [PsUi.SessionManager]::Current
+                if ($clickSession) {
+                    foreach ($credKvp in $clickSession.Variables.GetEnumerator()) {
+                        $credName = $credKvp.Key
+                        $credWrapper = $credKvp.Value
+                        
+                        # Skip if already in captured vars
+                        if ($varsWithTheme.ContainsKey($credName)) { continue }
+                        
+                        # Credential wrappers need their inner controls extracted
+                        if ($credWrapper -and $credWrapper.PSObject.TypeNames -contains 'PsUi.CredentialControl') {
+                            $userBox = $credWrapper.UsernameBox
+                            $passBox = $credWrapper.PasswordBox
+                            
+                            if ($userBox -and $passBox) {
+                                $username = $userBox.Text
+                                $secPass  = $passBox.SecurePassword
+                                
+                                if (![string]::IsNullOrWhiteSpace($username) -and $secPass.Length -gt 0) {
+                                    $cred = [System.Management.Automation.PSCredential]::new($username, $secPass)
+                                    $varsWithTheme[$credName] = $cred
+                                    Write-Debug "Injected credential '$credName' at click time"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if ($ctx.NoOutput) {
+                    # NoOutput mode alone registers handlers to put the button back and dispose the AsyncExecutor.
+                    # Show-UiOutput modes handle this themselves via the output window lifecycle
+                    $buttonToRestore    = $btn
+                    $contentToRestore   = $originalContent
+                    $minWidthToRestore  = $originalMinWidth
+                    $minHeightToRestore = $originalMinHeight
+                    $executorToDispose  = $executor
+
+                    # Hook window close to prevent zombie background runs.
+                    # If the window closes mid task, cancel the AsyncExecutor so it doesn't crash completing onto the dead UI thread.
+                    #
+                    # GetNewClosure() captures the entire scope into a dynamic module. If you are doing something insane like creating 100 buttons in a loop where the scope has a giant array, congrats - you now have 100 references to that array. 
+                    # For normal forms with 5-20 buttons this is fine. Window close cleans it up. If you hit memory issues, refactor your loop or stop holding massive objects in scope.
+                    $parentWindow = $ctx.WindowRef
+                    if ($parentWindow) {
+                        $closedHandler = [System.EventHandler]{
+                            param($sender, $eventArgs)
+                            if ($executorToDispose.IsRunning) {
+                                try { $executorToDispose.Cancel() } catch { <# Best-effort cleanup #> }
+                            }
+                        }.GetNewClosure()
+                        $parentWindow.Add_Closed($closedHandler)
+                        
+                        # Keep the handler reference, so it can come off again when the task completes
+                        $windowToCleanup = $parentWindow
+                        $handlerToRemove = $closedHandler
+                    }
+
+                    # Add input providers unless NoInteractive was specified
+                    # Without providers the action still runs pooled, Read-Host just returns an empty string
+                    if (!$ctx.NoInteractive) {
+                        $inputParams = @{
+                            Executor     = $executor
+                            DebugEnabled = $false
+                        }
+                        Add-InputProviders @inputParams
+                    }
+
+                    # Unhooks the window handler and puts the button back, then disposes the AsyncExecutor.
+                    # Called from OnComplete, OnError, and OnCancelled to avoid triple copy-paste.
+                    $restoreAndDispose = {
+                        param([string]$CallerName)
+                        if ($windowToCleanup -and $handlerToRemove) {
+                            try { $windowToCleanup.Remove_Closed($handlerToRemove) } catch { <# Window may already be closed #> }
+                        }
+                        try {
+                            if ($buttonToRestore.Dispatcher.HasShutdownStarted) { return }
+                            $buttonToRestore.Dispatcher.Invoke([Action]{
+                                $buttonToRestore.Content   = $contentToRestore
+                                $buttonToRestore.MinWidth  = $minWidthToRestore
+                                $buttonToRestore.MinHeight = $minHeightToRestore
+                                $buttonToRestore.IsEnabled = $true
+                            })
+                        }
+                        catch { Write-Debug "$CallerName UI restore skipped (window closed): $_" }
+                        try { $executorToDispose.Dispose() } catch { Write-Debug "$CallerName dispose error: $_" }
+
+                        # Release ActiveExecutor or it holds the disposed AsyncExecutor forever and the next Stop-UiAsync silently does nothing. If a newer job owns it by now, this run finishing must not clear it. Inline, not a helper since private fns don't resolve inside GetNewClosure handlers outside a real window.
+                        if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $executorToDispose)) { $execSession.ActiveExecutor = $null }
+                    }.GetNewClosure()
+
+                    $executor.add_OnComplete({
+                        & $restoreAndDispose 'OnComplete'
+                    }.GetNewClosure())
+
+                    # An -Intercept bar already badges each error. No dialog needed.
+                    $errorsToBar = [bool]($execSession -and (Test-StatusBarIntercept -Session $execSession))
+
+                    # OnComplete follows every error once a thread picks the run up so a tear down here would dispose it halfway through on a plain Write-Error
+                    $runState = @{ Started = $false }
+                    $executor.add_OnStarted({ $runState.Started = $true }.GetNewClosure())
+
+                    # OnError comes in after the click has returned
+                    $errorSessionId = $ctx.SessionId
+                    $pushSession    = ${function:Push-UiSession}
+                    $popSession     = ${function:Pop-UiSession}
+
+                    $executor.add_OnError({
+                        param($errorRecord)
+                        # No console here so without a bar the error goes in a dialog
+                        if ($errorRecord -and !$errorsToBar) {
+                            try {
+                                if (!$buttonToRestore.Dispatcher.HasShutdownStarted) {
+                                    $errorMsg = $errorRecord.ToString()
+                                    $buttonToRestore.Dispatcher.Invoke([Action]{
+                                        $errorToken = & $pushSession -SessionId $errorSessionId
+                                        Show-UiMessageDialog -Title 'Action Error' -Message $errorMsg -Icon Error
+                                        & $popSession -Token $errorToken
+                                    })
+                                }
+                            }
+                            catch { Write-Debug "OnError dialog skipped (window closed): $_" }
+                        }
+                        if (!$runState.Started) { & $restoreAndDispose 'OnError' }
+                    }.GetNewClosure())
+
+                    $executor.add_OnCancelled({
+                        & $restoreAndDispose 'OnCancelled'
+                    }.GetNewClosure())
+
+                    # Set capture variables if specified
+                    if ($ctx.Capture) {
+                        $executor.CaptureVariables = [string[]]$ctx.Capture
+                    }
+
+                    # Fire and forget. The handlers put the button back when it finishes.
+                    $executor.ExecuteAsync(
+                        $ctx.Action,
+                        $ctx.Parameters,
+                        $varsWithTheme,
+                        $ctx.CapturedFuncs,
+                        [string[]]@($ctx.LinkedModules | Where-Object { $_ })
+                    )
+                    Pop-UiSession -Token $sessionToken
+                    return
+                }
+                else {
+                    # Output window path (HideEmptyOutput and normal share the same flow)
+                    try {
+                        $outParams = @{
+                            Executor                  = $executor
+                            Title                     = $ctx.Text
+                            ParentWindow              = $ctx.WindowRef
+                            Action                    = $ctx.Action
+                            Parameters                = $ctx.Parameters
+                            ResultActions             = $ctx.ResultActions
+                            SingleSelect              = $ctx.SingleSelect
+                            LinkedVariableValues      = $varsWithTheme
+                            LinkedFunctionDefinitions = $ctx.CapturedFuncs
+                            LinkedModules             = $ctx.LinkedModules
+                            Capture                   = $ctx.Capture
+                            NoWait                    = $ctx.NoWait
+                        }
+                        if ($ctx.HideEmptyOutput) { $outParams['HideUntilContent'] = $true }
+                        if ($ctx.ScrollToTop) { $outParams['ScrollToTop'] = $true }
+
+                        $outputWindow = Show-UiOutput @outParams
+
+                        # NoWait mode hooks Closed so the button comes back when the output window closes.
+                        if ($ctx.NoWait -and $outputWindow) {
+                            $buttonToRestore    = $btn
+                            $contentToRestore   = $originalContent
+                            $minWidthToRestore  = $originalMinWidth
+                            $minHeightToRestore = $originalMinHeight
+                            $outputWindow.Add_Closed({
+                                $buttonToRestore.Content   = $contentToRestore
+                                $buttonToRestore.MinWidth  = $minWidthToRestore
+                                $buttonToRestore.MinHeight = $minHeightToRestore
+                                $buttonToRestore.IsEnabled = $true
+                            }.GetNewClosure())
+                            Pop-UiSession -Token $sessionToken
+                            return
+                        }
+                    }
+                    catch {
+                        Write-Warning "Output window error: $($_.Exception.Message)"
+                        # Kill the AsyncExecutor if it is still running
+                        try {
+                            if ($executor.IsRunning) { $executor.Cancel() }
+                            $executor.Dispose()
+                            if ($execSession -and [object]::ReferenceEquals($execSession.ActiveExecutor, $executor)) { $execSession.ActiveExecutor = $null }
+                        } catch { Write-Debug "Output cleanup error: $_" }
+                    }
+                }
+
+                # Restore button after output window closes (whether success or failure)
+                $btn.Content = $originalContent
+                $btn.MinWidth = $originalMinWidth
+                $btn.MinHeight = $originalMinHeight
+                $btn.IsEnabled = $true
+            }
+        }
+        catch {
+            $btn.Content = $originalContent
+            $btn.MinWidth = $originalMinWidth
+            $btn.MinHeight = $originalMinHeight
+            $btn.IsEnabled = $true
+
+            # Log error details for debugging
+            Write-Debug "Action error: $($_.Exception.GetType().Name) - $($_.Exception.Message)"
+            Write-Debug "Stack: $($_.ScriptStackTrace)"
+
+            # Any errors the action wrote before it stopped go first
+            $message = Format-UiErrorList -Errors $actionErrors -Trailing $_.Exception.Message
+            Show-UiMessageDialog -Title "Error: $($ctx.Text)" -Message $message -Icon Error -Buttons OK | Out-Null
+        }
+        Pop-UiSession -Token $sessionToken
+    })
+
+    # Apply custom WPF properties if specified
+    if ($WPFProperties) {
+        # Tag is reserved. The click handler reads its action context off it, so a Tag from the calling script would break the button
+        # Copy before the Remove, because [hashtable] binds the calling script's own table by reference.
+        if ($WPFProperties.ContainsKey('Tag')) {
+            Write-Warning "New-UiButton: -WPFProperties Tag is reserved (stores the click action context). Ignoring."
+            $WPFProperties = @{} + $WPFProperties
+            [void]$WPFProperties.Remove('Tag')
+        }
+        if ($WPFProperties.Count -gt 0) { Set-UiProperties -Control $button -Properties $WPFProperties }
+    }
+
+    # Hook conditional enabling if specified
+    if ($EnabledWhen) { Register-UiCondition -TargetControl $button -Condition $EnabledWhen }
+
+    # Register button by name for -SubmitButton lookups
+    if ($Variable) { $session.RegisterButton($Variable, $button) }
+
+    Write-Debug "Adding to $($parent.GetType().Name)"
+    $addedToParent = $false
+    if ($parent -is [System.Windows.Controls.Panel]) {
+        [void]$parent.Children.Add($button)
+        $addedToParent = $true
+    }
+    elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
+        [void]$parent.Items.Add($button)
+        $addedToParent = $true
+    }
+    elseif ($parent -is [System.Windows.Controls.ContentControl]) {
+        $parent.Content = $button
+        $addedToParent = $true
+    }
+
+    # Only return button if not added to parent (for manual layout scenarios)
+    if (!$addedToParent) {
+        return $button
+    }
+    }
+}

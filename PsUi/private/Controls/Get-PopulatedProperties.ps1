@@ -40,11 +40,11 @@ function Get-PopulatedProperties {
                 if ($value -is [string]) {
 
                     # '[Access Denied]' is the string ConvertTo-SafeDataArray implants when the source property threw.
-                    # Treating it as a real value means columns full of "Access Denied" show up as populated; which defeats HasData.
+                    # Treating it as a real value means columns full of "Access Denied" show up as populated, which defeats HasData.
                     $hasValue = ![string]::IsNullOrWhiteSpace($value) -and $value -ne '[Access Denied]'
                 }
-                elseif ($value -is [System.Collections.ICollection]) { $hasValue = $value.Count -gt 0 }
-                else { $hasValue = $true }
+                # Count reads -1 for a scalar, so only an empty list or dictionary fails (.Count on a hashtable carrying a Count key answered with the key, and a HashSet is no ICollection).
+                else { $hasValue = [PsUi.ValueKind]::Count($value) -ne 0 }
             }
 
             if ($hasValue) { [void]$populated.Add($propName) }

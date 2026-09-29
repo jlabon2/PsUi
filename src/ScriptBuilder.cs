@@ -170,7 +170,7 @@ namespace PsUi
             return string.Format("${{Global:{0}}} = $args[0]", varName);
         }
         
-        // Batch variable injection — one script, one Invoke call for N variables
+        // One script and one Invoke call, however many variables there are.
         public static string BuildBatchVariableInjection(IList<string> varNames)
         {
             if (varNames == null || varNames.Count == 0) return null;
@@ -200,7 +200,7 @@ namespace PsUi
         public static string BuildPwdRestore(string originalPath)
         {
             if (string.IsNullOrEmpty(originalPath)) return string.Empty;
-            string escapedPath = originalPath.Replace("'", "''");
+            string escapedPath = System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent(originalPath);
             return string.Format("Set-Location -LiteralPath '{0}' -ErrorAction SilentlyContinue", escapedPath);
         }
     }

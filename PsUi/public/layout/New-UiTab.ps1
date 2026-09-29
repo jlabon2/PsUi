@@ -1,20 +1,28 @@
 function New-UiTab {
     <#
     .SYNOPSIS
-        Creates a tab item within a TabControl, enabling responsive child layouts.
+        Creates a tab with an optional header icon. Content scrolls if it overflows.
+    .DESCRIPTION
+        Tabs declared at the same level share one TabControl, so a window becomes tabbed just by
+        listing New-UiTab blocks in its Content. -EnabledWhen gates a tab until another control
+        or captured variable turns truthy (locking later tabs until a connection exists, say).
     .PARAMETER Header
         The text label displayed on the tab header.
     .PARAMETER Content
         ScriptBlock containing the tab's child controls.
     .PARAMETER EnabledWhen
-        Control name or session variable name that determines when this tab is enabled.
-        When the referenced value is truthy, the tab is enabled; when falsy, disabled.
-        Supports both control references (e.g., 'showAdvanced') and -Capture variables
-        (e.g., 'VCSAConnection') for gated workflows.
+        Control name, session variable name, or scriptblock. Truthy enables the tab, falsy
+        disables it. Control references ('showAdvanced') and -Capture variables
+        ('VCSAConnection') both work. A scriptblock re-evaluates whenever the controls it
+        names change: { $serverName -and $environment } needs both. A scriptblock reads
+        controls only, never -Capture variables.
+    .PARAMETER Icon
+        Optional icon name shown on the tab header. Use Show-UiGlyphBrowser to browse names.
     .PARAMETER WPFProperties
         Hashtable of additional WPF properties to set on the control.
         Allows setting any valid WPF property not explicitly exposed as a parameter.
-        Invalid properties will generate warnings but not stop execution.
+        Bad values warn and get skipped. A property name that does not exist on the control is
+        skipped silently (-Verbose shows it). Nothing stops execution.
         Supports attached properties using dot notation (e.g., "Grid.Row").
     .EXAMPLE
         New-UiTab -Header "Settings" -EnabledWhen 'isConnected' -Content {
@@ -23,10 +31,12 @@ function New-UiTab {
 
         Creates a tab that is disabled until the 'isConnected' variable is truthy.
     .EXAMPLE
-        New-UiTab -Header "Tab" -Content { } -WPFProperties @{
-            ToolTip = "Custom tooltip"
-            Cursor = "Hand"
-            Opacity = 0.8
+        # Tabs listed together share one TabControl. -Icon puts a glyph on the header
+        New-UiTab -Header 'General' -Icon 'Settings' -Content {
+            New-UiLabel -Text 'General settings'
+        }
+        New-UiTab -Header 'History' -Icon 'History' -Content {
+            New-UiLabel -Text 'Run history'
         }
     #>
     [CmdletBinding()]
@@ -98,12 +108,12 @@ function New-UiTab {
                 while ($queue.Count -gt 0) {
                     $current = $queue.Dequeue()
 
-                    # Look for WrapPanel with IsItemsHost (our custom template)
+                    # Look for the WrapPanel with IsItemsHost, which the custom template puts there
                     if ($current -is [System.Windows.Controls.WrapPanel]) {
                         $headerPanel = $current
                         break
                     }
-                    # Fallback: also check for TabPanel (default template)
+                    # The default template has a TabPanel there instead
                     if ($current -is [System.Windows.Controls.Primitives.TabPanel]) {
                         $headerPanel = $current
                         break
@@ -124,11 +134,36 @@ function New-UiTab {
         }
 
         Set-ResponsiveConstraints -Control $targetTabControl -FullWidth
-        if ($parent -is [System.Windows.Controls.Panel]) { [void]$parent.Children.Add($targetTabControl) }
-        elseif ($parent -is [System.Windows.Controls.ItemsControl]) { [void]$parent.Items.Add($targetTabControl) }
-        elseif ($parent -is [System.Windows.Controls.ContentControl]) { $parent.Content = $targetTabControl }
+        Add-UiControlToParent -Control $targetTabControl -Parent $parent
     }
     $tabItem = [System.Windows.Controls.TabItem]@{ Header = $Header }
+
+    # HeaderTemplate, since a theme switch pins ControlForegroundBrush on any TextBlock without a TemplatedParent and the tab loses its selected colors
+    $iconText = if ($Icon) { [PsUi.ModuleContext]::GetIcon($Icon) } else { $null }
+    if ($iconText) {
+        $textBlockType = [System.Windows.Controls.TextBlock]
+        $centered      = [System.Windows.VerticalAlignment]::Center
+
+        $iconFactory = [System.Windows.FrameworkElementFactory]::new($textBlockType)
+        $iconFactory.SetValue($textBlockType::TextProperty, $iconText)
+        $iconFactory.SetValue($textBlockType::FontFamilyProperty, [PsUi.ModuleContext]::ActiveIconFontFamily)
+        $iconFactory.SetValue($textBlockType::FontSizeProperty, [double]12)
+        $iconFactory.SetValue($textBlockType::VerticalAlignmentProperty, $centered)
+        $iconFactory.SetValue($textBlockType::MarginProperty, [System.Windows.Thickness]::new(0, 0, 6, 0))
+
+        $textFactory = [System.Windows.FrameworkElementFactory]::new($textBlockType)
+        $textFactory.SetBinding($textBlockType::TextProperty, [System.Windows.Data.Binding]::new())
+        $textFactory.SetValue($textBlockType::VerticalAlignmentProperty, $centered)
+
+        $panelFactory = [System.Windows.FrameworkElementFactory]::new([System.Windows.Controls.StackPanel])
+        $panelFactory.SetValue([System.Windows.Controls.StackPanel]::OrientationProperty, [System.Windows.Controls.Orientation]::Horizontal)
+        $panelFactory.AppendChild($iconFactory)
+        $panelFactory.AppendChild($textFactory)
+
+        $headerTemplate            = [System.Windows.DataTemplate]::new()
+        $headerTemplate.VisualTree = $panelFactory
+        $tabItem.HeaderTemplate    = $headerTemplate
+    }
     Set-TabItemStyle -TabItem $tabItem
 
     # Respect LayoutMode from session
@@ -159,19 +194,23 @@ function New-UiTab {
     }
     $tabScrollViewer.Content = $contentPanel
 
-    # Nothing to scroll (or at the edge): re-raise the wheel at the outer ScrollViewer. Skip when the cursor sits over a CaptureScrollWheel DataGrid.
+    # Once this one is at its end the wheel goes on to the outer ScrollViewer.
     $tabScrollViewer.Add_PreviewMouseWheel({
         param($sender, $eventArgs)
+        trap { Write-Debug "Tab wheel routing: $_"; continue }
 
-        # Walk up from the hit tested thing to see if a CaptureScrollWheel DataGrid owns it
         $hit = $eventArgs.OriginalSource -as [System.Windows.DependencyObject]
-        while ($hit) {
-            if ($hit -is [System.Windows.Controls.DataGrid] -and
-                $hit.Tag -is [hashtable] -and
-                $hit.Tag.CaptureScrollWheel) {
-                # let WPF native routing scroll the grid
-                return
-            }
+
+        # A dropdown list or the column picker has in its own popup, but the preview wheel still comes through
+        if ($hit -and ![object]::ReferenceEquals(
+                [System.Windows.PresentationSource]::FromDependencyObject($hit),
+                [System.Windows.PresentationSource]::FromDependencyObject($sender))) {
+            return
+        }
+
+        # Set-UiWheelRouting leaves __WheelCapture on a control that keeps the wheel.
+        while ($hit -and ![object]::ReferenceEquals($hit, $sender)) {
+            if ($hit -is [System.Windows.FrameworkElement] -and $hit.Resources.Contains('__WheelCapture')) { return }
             # OriginalSource can be a ContentElement (WPF Run or a Hyperlink), VisualTreeHelper.GetParent throws on those, so hop to the tree until a Visual shows up
             $hit = if ($hit -is [System.Windows.Media.Visual] -or $hit -is [System.Windows.Media.Media3D.Visual3D]) {
                 [System.Windows.Media.VisualTreeHelper]::GetParent($hit)
@@ -196,21 +235,27 @@ function New-UiTab {
     $tabItem.Content = $tabScrollViewer
     $oldParent = $session.CurrentParent
     $session.CurrentParent = $contentPanel
+    $script:TabOrExpanderDepth = [int]$script:TabOrExpanderDepth + 1
     Write-Debug "Entering content block"
 
-    # Execute content - restore parent outside try/finally for PS 5.1 closure compatibility
+    # Restores stay out of a finally for 5.1, and the one pass loop soaks up a break or continue from -Content
     try {
-        Invoke-UiContent -Content $Content -CallerName 'New-UiTab' -ErrorAction Stop
+        do { Invoke-UiContent -Content $Content -CallerName 'New-UiTab' -ErrorAction Stop } while ($false)
     }
     catch {
         # Restore parent before re-throwing
         $session.CurrentParent = $oldParent
+        $script:TabOrExpanderDepth--
         throw
     }
 
     # Restore parent after successful content execution
     $session.CurrentParent = $oldParent
+    $script:TabOrExpanderDepth--
     Write-Debug "Content block complete"
+
+    # Tab content only sits in rows under a Responsive layout, which New-UiWindow has to set (but New-UiChildWindow gets by default)
+    Set-UiRowAlignment -Panel $contentPanel
 
     # Apply custom WPF properties if specified
     if ($WPFProperties) { Set-UiProperties -Control $tabItem -Properties $WPFProperties }

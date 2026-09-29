@@ -91,9 +91,10 @@ function New-ErrorsTab {
     $lineColumn.Binding = [System.Windows.Data.Binding]::new("LineNumber")
     [void]$errorsDataGrid.Columns.Add($lineColumn)
 
+    # Auto so PermissionDenied and the other long category names don't trim to an ellipsis
     $categoryColumn         = [System.Windows.Controls.DataGridTextColumn]::new()
     $categoryColumn.Header  = "Category"
-    $categoryColumn.Width   = [System.Windows.Controls.DataGridLength]::new(100)
+    $categoryColumn.Width   = [System.Windows.Controls.DataGridLength]::Auto
     $categoryColumn.Binding = [System.Windows.Data.Binding]::new("Category")
     [void]$errorsDataGrid.Columns.Add($categoryColumn)
 

@@ -10,7 +10,7 @@ function Add-DictionaryValuePopupHandler {
         [System.Windows.Controls.DataGrid]$DataGrid
     )
 
-    # Click handler for expanding values - checks Tag for complex types
+    # Opens the popup for a cell whose Tag holds a dictionary.
     $DataGrid.Add_PreviewMouseLeftButtonDown({
         param($sender, $eventArgs)
 
@@ -27,10 +27,9 @@ function Add-DictionaryValuePopupHandler {
         $rawValue  = $textBlock.Tag
         if ($null -eq $rawValue) { return }
 
-        # Only show popup for complex types
-        $isExpandable = ($rawValue -is [System.Collections.IDictionary]) -or
-                        ($rawValue -is [array] -and $rawValue.Count -gt 0)
-        if (!$isExpandable) { return }
+        # Arrays go to the array popup, so the two handlers never open over one cell.
+        if ($rawValue -isnot [System.Collections.IDictionary]) { return }
+        if (![PsUi.ValueKind]::IsExpandable($rawValue)) { return }
 
         $popupColors = Get-ThemeColors
 
@@ -53,7 +52,6 @@ function Add-DictionaryValuePopupHandler {
             MaxHeight       = 350
         }
 
-        # Close popup when mouse leaves
         $popupBorder.Add_MouseLeave({
             param($sender, $eventArgs)
             if ($script:currentDictPopup) {
@@ -71,69 +69,61 @@ function Add-DictionaryValuePopupHandler {
 
         $scrollViewer = [System.Windows.Controls.ScrollViewer]@{
             VerticalScrollBarVisibility   = 'Auto'
-            HorizontalScrollBarVisibility = 'Auto'
+            HorizontalScrollBarVisibility = 'Disabled'
         }
 
         $stackPanel = [System.Windows.Controls.StackPanel]::new()
 
-        # Header showing type info
-        $header = [System.Windows.Controls.TextBlock]@{
-            FontWeight = 'SemiBold'
-            Margin     = [System.Windows.Thickness]::new(0, 0, 0, 8)
-            Foreground = ConvertTo-UiBrush $popupColors.ControlFg
-        }
+        $copyHeader = New-UiPopupCopyHeader -Colors $popupColors
+        $headerRow  = $copyHeader.Panel
+        $header     = $copyHeader.Title
+        $copyState  = $copyHeader.State
 
-        if ($rawValue -is [System.Collections.IDictionary]) {
-            $keyCount    = $rawValue.get_Count()
-            $header.Text = "Hashtable ($keyCount keys):"
-            [void]$stackPanel.Children.Add($header)
+        $copyLines = [System.Collections.Generic.List[string]]::new()
 
-            # Render each key-value pair - format values based on type
-            foreach ($key in $rawValue.Keys) {
-                $val = $rawValue[$key]
-                $displayVal = switch ($val) {
-                    { $_ -is [System.Collections.IDictionary] } { "@{...} ($($_.get_Count()) keys)" }
-                    { $_ -is [array] }  { "[$($_.Count) items]" }
-                    { $_ -is [bool] }   { "`$$_" }
-                    { $_ -is [string] } { "'$_'" }
-                    default { "$_" }
-                }
+        $keyCount    = [PsUi.ValueKind]::Count($rawValue)
+        $header.Text = if ($keyCount -eq 1) { '1 key:' } else { "$keyCount keys:" }
+        [void]$stackPanel.Children.Add($headerRow)
 
-                $kvPanel = [System.Windows.Controls.StackPanel]@{
-                    Orientation = 'Horizontal'
-                    Margin      = [System.Windows.Thickness]::new(0, 2, 0, 2)
-                }
-
-                $keyText = [System.Windows.Controls.TextBlock]@{
-                    Text       = "$key = "
-                    FontWeight = 'SemiBold'
-                    Foreground = ConvertTo-UiBrush $popupColors.ControlFg
-                }
-                [void]$kvPanel.Children.Add($keyText)
-
-                $valText = [System.Windows.Controls.TextBlock]@{
-                    Text        = $displayVal
-                    TextWrapping = 'Wrap'
-                    Foreground  = ConvertTo-UiBrush $popupColors.SecondaryText
-                }
-                [void]$kvPanel.Children.Add($valText)
-                [void]$stackPanel.Children.Add($kvPanel)
+        foreach ($entry in $rawValue.GetEnumerator()) {
+            $key = $entry.Key
+            $val = $entry.Value
+            # Switch on the kind string, not the value, since switch enumerates a list value and runs its clauses per element.
+            $displayVal = switch (Get-UiValueKind -Value $val) {
+                'Null'       { '(null)' }
+                'Bool'       { "`$$val" }
+                'Text'       { "'$val'" }
+                'Dictionary' { "@{...} ($([PsUi.ValueKind]::Count($val)) keys)" }
+                'List'       { "[$([PsUi.ValueKind]::Count($val)) items]" }
+                'Sequence'   { '[sequence]' }
+                default      { [PsUi.ValueKind]::DisplayText($val) }
             }
-        }
-        elseif ($rawValue -is [array]) {
-            $header.Text = "Array ($($rawValue.Count) items):"
-            [void]$stackPanel.Children.Add($header)
 
-            foreach ($item2 in $rawValue) {
-                $itemText = [System.Windows.Controls.TextBlock]@{
-                    Text        = if ($null -eq $item2) { '(null)' } else { $item2.ToString() }
-                    TextWrapping = 'Wrap'
-                    Margin      = [System.Windows.Thickness]::new(0, 2, 0, 2)
-                    Foreground  = ConvertTo-UiBrush $popupColors.ControlFg
-                }
-                [void]$stackPanel.Children.Add($itemText)
+            # In a horizontal StackPanel the value gets infinite width and never wraps, so the key docks left and the value takes the rest.
+            $kvPanel = [System.Windows.Controls.DockPanel]@{
+                Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
             }
+
+            $keyText = [System.Windows.Controls.TextBlock]@{
+                Text              = "$key = "
+                FontWeight        = 'SemiBold'
+                VerticalAlignment = 'Top'
+                Foreground        = ConvertTo-UiBrush $popupColors.ControlFg
+            }
+            [System.Windows.Controls.DockPanel]::SetDock($keyText, 'Left')
+            [void]$kvPanel.Children.Add($keyText)
+
+            $valText = [System.Windows.Controls.TextBlock]@{
+                Text         = $displayVal
+                TextWrapping = 'Wrap'
+                Foreground   = ConvertTo-UiBrush $popupColors.SecondaryText
+            }
+            [void]$kvPanel.Children.Add($valText)
+            [void]$stackPanel.Children.Add($kvPanel)
+            $copyLines.Add("$key = $displayVal")
         }
+
+        $copyState.Text = $copyLines -join [Environment]::NewLine
 
         $scrollViewer.Content = $stackPanel
         $popupBorder.Child    = $scrollViewer

@@ -19,11 +19,11 @@ function Out-CSVDataGrid {
     .PARAMETER TitleText
         Window title.
     .PARAMETER IsFilterable
-        Kept for v2.x call sites. The filter box is always on now, so this switch
-        changes nothing.
+        Kept for scripts written against an earlier build. The filter box is always on now,
+        so this switch changes nothing.
     .PARAMETER IsResizeable
-        Adds the corner resize grip. The window resizes either way - kept for v2.x
-        call sites.
+        Adds the corner resize grip. The window resizes either way. Kept for scripts written
+        against an earlier build.
     .PARAMETER ColumnsToPopupOnSelection
         Column names that pop a separate viewer when clicked. Use for long values
         you can't easily edit inline.
@@ -32,11 +32,7 @@ function Out-CSVDataGrid {
         column name, value is either an array of allowed values or a hashtable
         @{ Values = @(...); DefaultValue = '...' }.
 
-        Example:
-            @{
-                Status   = @('Active', 'Inactive')
-                Priority = @{ Values = @('Low', 'High'); DefaultValue = 'Low' }
-            }
+        Example: @{ Priority = @{ Values = @('Low', 'High'); DefaultValue = 'Low' } }
 
         A column can't be in both this and ColumnsToPopupOnSelection - that throws at startup.
     .PARAMETER ReadOnlyColumns
@@ -52,8 +48,8 @@ function Out-CSVDataGrid {
         Color theme. See Get-UiThemeTemplate for the list. When not given, follows
         the session's active theme if one is loaded, otherwise Light.
     .PARAMETER Delimiter
-        Column separator character. Defaults to comma. Use ';' for semicolon delimited
-        files or "`t" for tab-delimited files.
+        Column separator character. Defaults to comma. Use ';' for semicolon-delimited
+        files or ``"`t"`` for tab-delimited files.
     .PARAMETER NoHeader
         Treat the first row as data, not headers. Columns get named Column1..ColumnN.
     .PARAMETER IconFont
@@ -270,7 +266,9 @@ function Out-CSVDataGrid {
                 break
             }
 
-            $Script:CurrentCSVData = @{}
+            # Ordered, or the dropdown and the first file shown come out in hash order, which 7 reshuffles every run
+            # OrderedDictionary has no ContainsKey, so the lookups below use Contains.
+            $Script:CurrentCSVData = [ordered]@{}
             $Script:HasChanges = $false
 
             foreach ($filePath in $allFiles) {
@@ -291,11 +289,11 @@ function Out-CSVDataGrid {
 
                     # Two files sharing a basename (e.g. -Recurse over folders each holding config.csv) collapsed to one key - the earlier vanished from the combo and Save misfired to the survivor's path. Tag the parent folder on collision so each file keeps its own entry and Path. The key is opaque: it's the combo label and the save lookup key, nothing rebuilds it from the path.
                     $fileName = $baseName
-                    if ($Script:CurrentCSVData.ContainsKey($fileName)) {
+                    if ($Script:CurrentCSVData.Contains($fileName)) {
                         $parentDir = Split-Path -Leaf (Split-Path -Parent $filePath)
                         $fileName  = '{0}  ({1})' -f $baseName, $parentDir
                         $dupIndex  = 2
-                        while ($Script:CurrentCSVData.ContainsKey($fileName)) {
+                        while ($Script:CurrentCSVData.Contains($fileName)) {
                             $fileName = '{0}  ({1} {2})' -f $baseName, $parentDir, $dupIndex
                             $dupIndex++
                         }
@@ -305,6 +303,7 @@ function Out-CSVDataGrid {
                         Data      = [System.Collections.ArrayList]@($csvData)
                         Modified  = $false
                         Delimiter = $Delimiter
+                        NoHeader  = [bool]$NoHeader
                     }
                 }
                 catch {
@@ -335,8 +334,7 @@ function Out-CSVDataGrid {
 
             Set-UIResources -Window $window -Colors $colors
 
-            $appId = "PsUi.CSVEditor." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-            [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+            [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.CSVEditor')
 
             $csvWindowIcon = $null
             try {
@@ -351,7 +349,7 @@ function Out-CSVDataGrid {
             try {
                 $csvGlyph = [PsUi.ModuleContext]::GetIcon('Document')
                 $overlayIcon = New-TaskbarOverlayIcon -GlyphChar $csvGlyph -Color $colors.Accent
-                # Stash the glyph in Resources so the theme handler can redraw it on theme switch.
+                # Stash the glyph in Resources so the theme handler can rebuild the overlay on theme switch.
                 $window.Resources['OverlayGlyph'] = $csvGlyph
             }
             catch { Write-Debug "Taskbar overlay failed: $_" }
@@ -685,7 +683,7 @@ function Out-CSVDataGrid {
                                     $Script:CurrentCSVData[$script:currentFileName].Modified = $true
                                 }
 
-                                # PSCustomObject doesn't notify on property change. Refresh + UpdateLayout + a selection bounce is the smallest combo that reliably redraws the cell.
+                                # PSCustomObject doesn't notify on property change. Refresh + UpdateLayout + a selection bounce is the smallest combo that reliably gets the cell showing the new value.
                                 if ($script:collectionView) { $script:collectionView.Refresh() }
                                 $dataGrid.Items.Refresh()
                                 $dataGrid.UpdateLayout()
@@ -1070,11 +1068,18 @@ function Out-CSVDataGrid {
                                 Path              = $csvInfo.Path
                                 NoTypeInformation = $true
                                 Force             = $true
+                                Encoding          = 'UTF8'
                             }
                             if ($csvInfo.Delimiter) {
                                 $exportParams['Delimiter'] = $csvInfo.Delimiter
                             }
-                            $csvInfo.Data | Export-Csv @exportParams
+                            # Export-Csv always writes a header and 5.1 has no -NoHeader, so a -NoHeader file would come back with the made up Column1..N line on top
+                            if ($csvInfo.NoHeader) {
+                                $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                # Through -Value, since an empty pipe never opens the file and every deleted row would still be on disk
+                                Set-Content -LiteralPath $csvInfo.Path -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                            }
+                            else { $csvInfo.Data | Export-Csv @exportParams }
                             Show-ThemedDialog -Title 'Saved' -Message "Saved: $script:currentFileName" -Buttons OK -Icon Info
                         }
                         catch {
@@ -1096,11 +1101,16 @@ function Out-CSVDataGrid {
                                 Path              = $csvInfo.Path
                                 NoTypeInformation = $true
                                 Force             = $true
+                                Encoding          = 'UTF8'
                             }
                             if ($csvInfo.Delimiter) {
                                 $exportParams['Delimiter'] = $csvInfo.Delimiter
                             }
-                            $csvInfo.Data | Export-Csv @exportParams
+                            if ($csvInfo.NoHeader) {
+                                $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                Set-Content -LiteralPath $csvInfo.Path -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                            }
+                            else { $csvInfo.Data | Export-Csv @exportParams }
                             $savedCount++
                         }
                         catch {
@@ -1126,11 +1136,16 @@ function Out-CSVDataGrid {
                                     Path              = $saveDialog.FileName
                                     NoTypeInformation = $true
                                     Force             = $true
+                                    Encoding          = 'UTF8'
                                 }
                                 if ($csvInfo.Delimiter) {
                                     $exportParams['Delimiter'] = $csvInfo.Delimiter
                                 }
-                                $csvInfo.Data | Export-Csv @exportParams
+                                if ($csvInfo.NoHeader) {
+                                    $lines = @($csvInfo.Data | ConvertTo-Csv -NoTypeInformation -Delimiter $csvInfo.Delimiter | Select-Object -Skip 1)
+                                    Set-Content -LiteralPath $saveDialog.FileName -Value $lines -Encoding UTF8 -Force -ErrorAction Stop
+                                }
+                                else { $csvInfo.Data | Export-Csv @exportParams }
                                 Show-ThemedDialog -Title 'Saved' -Message "Data saved to:`n$($saveDialog.FileName)" -Buttons OK -Icon Info
                             }
                             catch {

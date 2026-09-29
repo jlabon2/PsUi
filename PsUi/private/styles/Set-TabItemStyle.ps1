@@ -8,12 +8,11 @@ function Set-TabItemStyle {
     # Try to use the ModernTabItemStyle from loaded XAML resources
     $styleApplied = $false
     try {
-        if ([System.Windows.Application]::Current -and [System.Windows.Application]::Current.Resources) {
-            if ([System.Windows.Application]::Current.Resources.Contains("ModernTabItemStyle")) {
-                $TabItem.Style = [System.Windows.Application]::Current.Resources["ModernTabItemStyle"]
-                $styleApplied = $true
-                Write-Verbose "Applied ModernTabItemStyle from XAML resources"
-            }
+        $tabItemStyle = [PsUi.ThemeEngine]::FindStyleResource('ModernTabItemStyle')
+        if ($null -ne $tabItemStyle) {
+            $TabItem.Style = $tabItemStyle
+            $styleApplied = $true
+            Write-Verbose "Applied ModernTabItemStyle from XAML resources"
         }
     }
     catch {

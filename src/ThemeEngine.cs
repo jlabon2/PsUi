@@ -18,6 +18,8 @@ namespace PsUi
         private static string _currentThemeName = "Light";
         private static string _modulePath = null;
         private static volatile bool _stylesLoaded = false;
+        private static ResourceDictionary _standaloneResources;
+        private static System.Windows.Threading.Dispatcher _standaloneDispatcher;
         private static readonly List<WeakReference<FrameworkElement>> _registeredElements;
         private static readonly object _elementsLock = new object();
         private const string ThemeMarkerKey = "__PsUi_ThemeMarker__";
@@ -49,6 +51,8 @@ namespace PsUi
                 _registeredElements.Clear();
             }
             _stylesLoaded = false;
+            _standaloneResources = null;
+            _standaloneDispatcher = null;
         }
 
         private static int _registrationsSincePrune = 0;
@@ -243,6 +247,54 @@ namespace PsUi
                 // Re-bind all registered elements to trigger resource refresh
                 RefreshRegisteredElements();
             }
+        }
+
+        // Theme brushes plus the control styles, merged into one window's resources. Released when that window closes so a dead root never answers a later lookup.
+        public static void ApplyStandaloneTheme(Window window, IDictionary colors)
+        {
+            if (window == null || colors == null) return;
+
+            ResourceDictionary themeDict = GenerateResourceDictionary(colors);
+            themeDict[ThemeMarkerKey] = true;
+            window.Resources.MergedDictionaries.Insert(0, themeDict);
+            LoadStylesInto(window.Resources);
+
+            // A dialog raised from a dialog takes the slot while the one underneath is still open, so closing hands the slot back instead of nulling it.
+            // Nulling blinds the outer dialog, which is still open and still holds the only copy of the styles.
+            ResourceDictionary priorResources = _standaloneResources;
+            System.Windows.Threading.Dispatcher priorDispatcher = _standaloneDispatcher;
+
+            _standaloneResources = window.Resources;
+            _standaloneDispatcher = window.Dispatcher;
+
+            window.Closed += delegate
+            {
+                if (_standaloneResources == window.Resources)
+                {
+                    _standaloneResources = priorResources;
+                    _standaloneDispatcher = priorDispatcher;
+                }
+            };
+        }
+
+        // Style lookup for the Set-*Style helpers. Application first, then a standalone dialog's own root. The helpers run while a control is still unparented, so element level TryFindResource would come back empty.
+        public static object FindStyleResource(object key)
+        {
+            if (key == null) return null;
+
+            if (Application.Current != null)
+            {
+                object fromApp = Application.Current.TryFindResource(key);
+                if (fromApp != null) return fromApp;
+            }
+
+            // A Style belongs to the thread that built it. Handing one across would sail through the lookup and throw on assignment, which the helpers catch and report as "style not found" - the wrong trail entirely.
+            if (_standaloneResources != null && _standaloneDispatcher != null &&
+                _standaloneDispatcher.Thread == Thread.CurrentThread)
+            {
+                return _standaloneResources[key];
+            }
+            return null;
         }
 
         // Generate ResourceDictionary from hashtable - maps short keys (WindowBg) to full names (WindowBackgroundBrush)
@@ -799,7 +851,17 @@ namespace PsUi
             else if (element is ProgressBar)
             {
                 ProgressBar progressBar = (ProgressBar)element;
-                progressBar.SetResourceReference(ProgressBar.ForegroundProperty, "AccentBrush");
+
+                // -Severity rides in Tag.BrushTag the same way it does on TextBlock. Hardcoding AccentBrush here left every bar accent blue no matter what New-UiProgress asked for.
+                string barBrushKey = "AccentBrush";
+                Hashtable barTag = progressBar.Tag as Hashtable;
+                if (barTag != null && barTag.ContainsKey("BrushTag"))
+                {
+                    string tagged = barTag["BrushTag"] as string;
+                    if (!string.IsNullOrEmpty(tagged)) { barBrushKey = tagged; }
+                }
+
+                progressBar.SetResourceReference(ProgressBar.ForegroundProperty, barBrushKey);
                 progressBar.SetResourceReference(ProgressBar.BackgroundProperty, "BorderBrush");
             }
         }
@@ -933,15 +995,24 @@ namespace PsUi
             if (string.IsNullOrEmpty(_modulePath)) return;
             if (Application.Current == null || Application.Current.Dispatcher.HasShutdownStarted) return;
 
-            var mergedDicts = Application.Current.Resources.MergedDictionaries;
+            LoadStylesInto(Application.Current.Resources);
+            _stylesLoaded = true;
+        }
+
+        // Same styles, any resource root. A standalone dialog merges them into its own window.
+        public static void LoadStylesInto(ResourceDictionary target)
+        {
+            if (string.IsNullOrEmpty(_modulePath)) return;
+            if (target == null) return;
+
+            var mergedDicts = target.MergedDictionaries;
             
             // Check if styles are already loaded - skip reload to avoid disrupting existing controls
             foreach (ResourceDictionary dict in mergedDicts)
             {
                 if (dict.Contains(StyleMarkerKey))
                 {
-                    // Styles already present, nothing to do
-                    _stylesLoaded = true;
+                    // Styles already present in this dictionary. Do NOT touch _stylesLoaded here - it gates the Application level load in ApplyTheme, and a window scoped load must not convince it the App is done.
                     return;
                 }
             }

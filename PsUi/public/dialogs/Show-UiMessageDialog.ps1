@@ -4,6 +4,8 @@ function Show-UiMessageDialog {
         Displays a themed message dialog with customizable buttons and icons.
     .DESCRIPTION
         Shows a custom WPF dialog that respects the current theme. Replaces standard MessageBox.
+        A message taller than the screen scrolls inside the dialog, which stays away from the
+        taskbar with its buttons in view.
     .PARAMETER Title
         Dialog window title.
     .PARAMETER Message
@@ -16,51 +18,67 @@ function Show-UiMessageDialog {
         When used, displays the message in a PowerShell console-styled code viewer.
         Uses Consolas font, blue background (#012456), white text, and makes the dialog
         larger (700x500) and resizable with horizontal/vertical scrollbars.
-        Ideal for displaying source code or command snippets.
+        For source code and command snippets.
     .PARAMETER CustomButtons
-        Array of hashtables defining custom buttons. Each hashtable should have:
+        Custom buttons, rendered left to right in declaration order. Pass a
+        { New-UiDialogButton ... } definition block, an array of New-UiDialogButton output,
+        or the legacy hashtable array where each hashtable has:
         - Label: The button text (required)
         - Value: The value returned when clicked (required)
-        - IsDefault: If true, this button is the default (optional)
+        - IsDefault: If true, Enter activates this button (optional)
         - IsAccent: If true, button uses accent color (optional)
+        - IsCancel: If true, Esc activates this button (optional)
+
         When provided, the -Buttons parameter is ignored.
     .PARAMETER ThemeColors
         Override theme colors for this dialog. Pass a colors hashtable directly.
     .EXAMPLE
         Show-UiMessageDialog -Title 'Confirmation' -Message 'Are you sure?' -Buttons YesNo -Icon Question
     .EXAMPLE
-        $buttons = @(
-            @{ Label = 'Save'; Value = 'Save'; IsAccent = $true; IsDefault = $true }
-            @{ Label = 'Discard'; Value = 'Discard' }
-            @{ Label = 'Cancel'; Value = 'Cancel' }
-        )
-        Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -CustomButtons $buttons -Icon Question
+        $answer = Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -Icon Question -CustomButtons {
+            New-UiDialogButton 'Save' -Accent -Default
+            New-UiDialogButton 'Discard'
+            New-UiDialogButton 'Cancel' -Cancel
+        }
     .EXAMPLE
         $result = Show-UiMessageDialog -Title 'Success' -Message 'Operation completed!' -Buttons OK -Icon Info
     .EXAMPLE
         Show-UiMessageDialog -Title 'Source Code' -Message $scriptBlock.ToString() -PowerShell
+    .EXAMPLE
+        # Legacy hashtable form, still supported
+        $buttons = @(
+            @{ Label = 'Save'; Value = 'Save'; IsAccent = $true; IsDefault = $true }
+            @{ Label = 'Discard'; Value = 'Discard' }
+            @{ Label = 'Cancel'; Value = 'Cancel'; IsCancel = $true }
+        )
+        Show-UiMessageDialog -Title 'Unsaved Changes' -Message 'Save changes?' -CustomButtons $buttons -Icon Question
     #>
     [CmdletBinding()]
     param(
         [string]$Title = 'Message',
-        
+
         [Parameter(Mandatory)]
         [string]$Message,
-        
+
         [ValidateSet('OK', 'OKCancel', 'YesNo', 'YesNoCancel')]
         [string]$Buttons = 'OK',
-        
+
         [ValidateSet('Info', 'Warning', 'Error', 'Question', 'None')]
         [string]$Icon = 'Info',
 
         [object]$ThemeColors,
-        
+
         [switch]$PowerShell,
 
-        [array]$CustomButtons
+        # Untyped: takes a New-UiDialogButton definition block, an array of definitions, or the legacy hashtable array. [array] would swallow a definition block as a one-element array wrapping the scriptblock.
+        [object]$CustomButtons
     )
 
     Write-Debug "Title='$Title' Buttons='$Buttons' Icon='$Icon' PowerShell=$PowerShell"
+
+    if ($null -ne $CustomButtons) {
+        $CustomButtons = ConvertTo-UiDefinitionArray -InputObject $CustomButtons -ParameterName '-CustomButtons' -CallerName 'Show-UiMessageDialog' -AllowObject
+    }
 
     # Calculate width based on button count - each button is ~90px wide
     $buttonCount   = if ($CustomButtons) { $CustomButtons.Count } else { 3 }
@@ -80,7 +98,7 @@ function Show-UiMessageDialog {
         Height        = if ($PowerShell) { 500 } else { 0 }
         MaxHeight     = if ($PowerShell -or $isBigMessage) { 10000 } else { 800 }
         SizeToContent = if ($PowerShell) { 'Manual' } else { 'Height' }
-        ResizeMode    = if ($PowerShell -or $isBigMessage) { 'CanResizeWithGrip' } else { 'NoResize' }
+        ResizeMode    = if ($PowerShell -or $isBigMessage) { 'CanResize' } else { 'NoResize' }
         AppIdSuffix   = 'Message'
         ThemeColors   = $ThemeColors
     }
@@ -109,7 +127,7 @@ function Show-UiMessageDialog {
         'Question' { $colors.Accent }
         default    { $colors.Accent }
     }
-    
+
     # Button panel at bottom using Grid for left/right alignment
     $buttonBar = [System.Windows.Controls.Grid]::new()
     $buttonBar.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
@@ -117,7 +135,7 @@ function Show-UiMessageDialog {
     [void]$buttonBar.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{ Width = 'Auto' })
     [System.Windows.Controls.DockPanel]::SetDock($buttonBar, 'Bottom')
     [void]$contentPanel.Children.Add($buttonBar)
-    
+
     # Add copy button for informational dialogs (not Question/choice dialogs)
     $showCopyButton = $Icon -in @('Info', 'Warning', 'Error') -or $PowerShell
     if ($showCopyButton) {
@@ -127,7 +145,7 @@ function Show-UiMessageDialog {
             ToolTip             = 'Copy message to clipboard'
             HorizontalAlignment = 'Left'
         }
-        
+
         # Icon + text content for copy button
         $copyContent = [System.Windows.Controls.StackPanel]@{ Orientation = 'Horizontal' }
         $copyIcon = [System.Windows.Controls.TextBlock]@{
@@ -144,19 +162,19 @@ function Show-UiMessageDialog {
         [void]$copyContent.Children.Add($copyIcon)
         [void]$copyContent.Children.Add($copyText)
         $copyBtn.Content = $copyContent
-        
-        # Apply standard styling and wire up click
+
+        # Apply standard styling and hook click
         Set-ButtonStyle -Button $copyBtn
         $copyBtn.Tag = $Message
         $copyBtn.Add_Click({
             [System.Windows.Clipboard]::SetText($this.Tag)
-            
+
             # Brief visual feedback - change icon to checkmark
             $panel     = $this.Content
             $iconBlock = $panel.Children[0]
             $originalIcon = $iconBlock.Text
             $iconBlock.Text = [PsUi.ModuleContext]::GetIcon('Accept')
-            
+
             # Reset after 1.5 seconds
             $timer = [System.Windows.Threading.DispatcherTimer]::new()
             $timer.Interval = [TimeSpan]::FromMilliseconds(1500)
@@ -168,11 +186,11 @@ function Show-UiMessageDialog {
             }.GetNewClosure())
             $timer.Start()
         })
-        
+
         [System.Windows.Controls.Grid]::SetColumn($copyBtn, 0)
         [void]$buttonBar.Children.Add($copyBtn)
     }
-    
+
     # Right-aligned button panel for action buttons
     $buttonPanel = [System.Windows.Controls.StackPanel]@{
         Orientation         = 'Horizontal'
@@ -186,7 +204,7 @@ function Show-UiMessageDialog {
 
         # PowerShell console-styled TextBox
         $codeBox = [System.Windows.Controls.TextBox]@{
-            
+
             Text                          = $Message
             IsReadOnly                    = $true
             AcceptsReturn                 = $true
@@ -202,9 +220,11 @@ function Show-UiMessageDialog {
             BorderBrush                   = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#1E3A5F')
             Padding                       = [System.Windows.Thickness]::new(5)
             Margin                        = [System.Windows.Thickness]::new(0, 0, 0, 12)
-        
+
         }
-        
+
+        $codeBox.Resources[[System.Windows.SystemColors]::ControlBrushKey] = $codeBox.Background
+
         # Add themed context menu for copy/select all
         $codeBox.ContextMenu = New-TextBoxContextMenu -ReadOnly
         [void]$contentPanel.Children.Add($codeBox)
@@ -216,11 +236,11 @@ function Show-UiMessageDialog {
             HorizontalScrollBarVisibility = 'Disabled'
             Padding                       = [System.Windows.Thickness]::new(0, 0, 8, 0)
         }
-        
+
         $messageGrid = [System.Windows.Controls.Grid]::new()
         [void]$messageGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]::new())
         [void]$messageGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]::new())
-        
+
         $hasIcon = $Icon -ne 'None'
         if ($hasIcon) {
             $messageGrid.ColumnDefinitions[0].Width = [System.Windows.GridLength]::new(48)
@@ -244,7 +264,7 @@ function Show-UiMessageDialog {
             [System.Windows.Controls.Grid]::SetColumn($iconBlock, 0)
             [void]$messageGrid.Children.Add($iconBlock)
         }
-        
+
         $messageText = [System.Windows.Controls.TextBlock]@{
             Text              = $Message
             FontSize          = 13
@@ -255,7 +275,7 @@ function Show-UiMessageDialog {
         }
         [System.Windows.Controls.Grid]::SetColumn($messageText, 1)
         [void]$messageGrid.Children.Add($messageText)
-        
+
         $scrollViewer.Content = $messageGrid
         [void]$contentPanel.Children.Add($scrollViewer)
     }
@@ -270,23 +290,23 @@ function Show-UiMessageDialog {
                 Margin   = [System.Windows.Thickness]::new(6, 0, 0, 0)
                 Padding  = [System.Windows.Thickness]::new(14, 4, 14, 4)
             }
-            
+
             if ($btnDef.IsAccent) {
                 Set-ButtonStyle -Button $btn -Accent
             }
             else {
                 Set-ButtonStyle -Button $btn
             }
-            
+
             # Store value AND window reference to avoid closure issues
             $btn.Tag = @{ Value = $btnDef.Value; Window = $window }
             $btn.Add_Click({
                 $this.Tag.Window.Tag = $this.Tag.Value
                 $this.Tag.Window.Close()
             })
-            
+
             [void]$buttonPanel.Children.Add($btn)
-            
+
             if ($btnDef.IsDefault) { $btn.IsDefault = $true }
             if ($btnDef.IsCancel) { $btn.IsCancel = $true }
         }
@@ -347,14 +367,40 @@ function Show-UiMessageDialog {
         }
     }
 
-    # Wire up standard fade-in behavior
+    # Attach the standard fade-in
     Initialize-UiWindowLoaded -Window $window -TitleBarBackground $colors.HeaderBackground -TitleBarForeground $colors.HeaderForeground
+
+    # CenterOnParent places the dialog before SizeToContent has measured it, a long message grows down past the taskbar
+    $fitWindow = $window
+    $window.Add_Loaded({
+        $source = [System.Windows.PresentationSource]::FromVisual($fitWindow)
+        if (!$source) { return }
+        $handle = [System.Windows.Interop.WindowInteropHelper]::new($fitWindow).Handle
+        $area   = [PsUi.WindowManager]::GetWorkAreaForWindow($handle)
+
+        # Device pixels, not DIPs
+        $toDip  = $source.CompositionTarget.TransformFromDevice
+        $top    = $toDip.Transform($area.TopLeft).Y
+        $bottom = $toDip.Transform($area.BottomRight).Y
+
+        # Without UpdateLayout, ActualHeight still reads the old height
+        if ($fitWindow.MaxHeight -gt $bottom - $top) {
+            $fitWindow.MaxHeight = $bottom - $top
+            $fitWindow.UpdateLayout()
+        }
+        if ($fitWindow.Top + $fitWindow.ActualHeight -gt $bottom) {
+            $fitWindow.Top = $bottom - $fitWindow.ActualHeight
+        }
+
+        # CenterOnParent stops at the virtual screen's top, which a taskbar docked up there covers
+        if ($fitWindow.Top -lt $top) { $fitWindow.Top = $top }
+    }.GetNewClosure())
 
     # Position and show
     Set-UiDialogPosition -Dialog $window
     Write-Debug "Showing modal dialog"
     [void]$window.ShowDialog()
-    
+
     $result = $window.Tag
     Write-Debug "Result: $result"
     return $result

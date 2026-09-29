@@ -1,9 +1,7 @@
 function Set-FullWidthConstraint {
     <#
     .SYNOPSIS
-        Applies full-width constraint to a control in WrapPanel contexts.
-        This is used with Set-ResponsiveConstraints to enforce full-width behavior.
-        A bit hacky but works within WPF's layout system.
+        Makes a control span its WrapPanel. A bit hacky but works within WPF's layout system.
     #>
     [CmdletBinding()]
     param(
@@ -11,12 +9,11 @@ function Set-FullWidthConstraint {
         [System.Windows.FrameworkElement]$Control,
         
         [Parameter(Mandatory)]
-        [System.Windows.Controls.Panel]$Parent,
-        
+        [System.Windows.FrameworkElement]$Parent,
+
         [switch]$FullWidth
     )
-    
-    # Only apply if FullWidth is requested and parent is a WrapPanel
+
     if (!$FullWidth) { return }
     if ($Parent -isnot [System.Windows.Controls.WrapPanel]) { return }
     

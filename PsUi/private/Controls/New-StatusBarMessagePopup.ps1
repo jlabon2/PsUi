@@ -146,13 +146,23 @@ function New-StatusBarMessagePopup {
     $outerBorder.SetResourceReference(
         [System.Windows.Documents.TextElement]::ForegroundProperty, 'ControlForegroundBrush')
 
-    # Popup
+    # Line up the right edges of the popup
+    $alignRightEdges = {
+        param($popupSize, $targetSize, $offset)
+        $left = $targetSize.Width - $popupSize.Width
+        [System.Windows.Controls.Primitives.CustomPopupPlacement[]]@(
+            [System.Windows.Controls.Primitives.CustomPopupPlacement]::new([System.Windows.Point]::new($left, -$popupSize.Height), 'Horizontal')
+            [System.Windows.Controls.Primitives.CustomPopupPlacement]::new([System.Windows.Point]::new($left, $targetSize.Height), 'Horizontal')
+        )
+    }
+
     $popup = [System.Windows.Controls.Primitives.Popup]@{
-        PlacementTarget    = $PlacementTarget
-        Placement          = 'Top'
-        StaysOpen          = $false
-        AllowsTransparency = $true
-        Child              = $outerBorder
+        PlacementTarget              = $PlacementTarget
+        Placement                    = 'Custom'
+        CustomPopupPlacementCallback = $alignRightEdges
+        StaysOpen                    = $false
+        AllowsTransparency           = $true
+        Child                        = $outerBorder
     }
 
     # Clear button resets the badge and closes the popup

@@ -27,7 +27,11 @@ function Add-ArrayCellPopupHandler {
         if ($null -eq $textBlock.Tag) { return }
 
         $arrayValue = $textBlock.Tag
-        if ($arrayValue -is [string]) { return }
+        # Dictionaries have their own popup
+        if ($arrayValue -is [string] -or $arrayValue -is [System.Collections.IDictionary]) { return }
+
+        # Refuses a one pass reader without reading it, and an empty list, whose popup would be a header and a copy button over just an empty string
+        if (![PsUi.ValueKind]::IsExpandable($arrayValue)) { return }
 
         $popupColors = Get-ThemeColors
 
@@ -49,7 +53,6 @@ function Add-ArrayCellPopupHandler {
             MaxHeight       = 300
         }
 
-        # Close popup when mouse leaves
         $popupBorder.Add_MouseLeave({
             param($sender, $eventArgs)
             if ($script:currentArrayPopup) {
@@ -65,32 +68,38 @@ function Add-ArrayCellPopupHandler {
         }
         $popupBorder.Effect = $shadow
 
+        # With Auto the panel measures at infinite width, and the TextWrapping on every line below never gets a width to wrap at
         $scrollViewer = [System.Windows.Controls.ScrollViewer]@{
             VerticalScrollBarVisibility   = 'Auto'
-            HorizontalScrollBarVisibility = 'Auto'
+            HorizontalScrollBarVisibility = 'Disabled'
         }
 
         $stackPanel = [System.Windows.Controls.StackPanel]::new()
 
-        $header = [System.Windows.Controls.TextBlock]@{
-            FontWeight = 'SemiBold'
-            Margin     = [System.Windows.Thickness]::new(0, 0, 0, 8)
-            Foreground = ConvertTo-UiBrush $popupColors.ControlFg
-        }
+        $copyHeader = New-UiPopupCopyHeader -Colors $popupColors
+        $headerRow  = $copyHeader.Panel
+        $header     = $copyHeader.Title
+        $copyState  = $copyHeader.State
 
         $items       = @($arrayValue)
-        $header.Text = "$($items.Count) item(s):"
-        [void]$stackPanel.Children.Add($header)
+        $header.Text = if ($items.Count -eq 1) { '1 item:' } else { "$($items.Count) items:" }
+        [void]$stackPanel.Children.Add($headerRow)
 
+        $copyLines = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $items) {
+            # Each line reads the way a cell would show it, so a list of hashtables lists @{a=1} rather than a type name per line.
+            $line = "$(ConvertTo-DisplayValue -Value $item)"
+            $copyLines.Add($line)
+
             $itemText = [System.Windows.Controls.TextBlock]@{
-                Text        = if ($null -eq $item) { '(null)' } else { $item.ToString() }
+                Text         = $line
                 TextWrapping = 'Wrap'
-                Margin      = [System.Windows.Thickness]::new(0, 2, 0, 2)
-                Foreground  = ConvertTo-UiBrush $popupColors.ControlFg
+                Margin       = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                Foreground   = ConvertTo-UiBrush $popupColors.ControlFg
             }
             [void]$stackPanel.Children.Add($itemText)
         }
+        $copyState.Text = $copyLines -join [Environment]::NewLine
 
         $scrollViewer.Content = $stackPanel
         $popupBorder.Child    = $scrollViewer

@@ -63,7 +63,7 @@ function New-UiDataGridFilterController {
                         $value = $null
                         try { $value = $prop.Value } catch { }
                         if ($null -ne $value) {
-                            [void]$sb.Append([string]$value)
+                            [void]$sb.Append([PsUi.ValueKind]::IndexText($value, 25, 512))
                             [void]$sb.Append(' ')
                         }
                     }

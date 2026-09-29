@@ -29,8 +29,11 @@ function Invoke-UiToolValidation {
     $cmdLookup   = $CommandName
     $storedParams = $null
 
+    # The file's function only exists while Run has it dot sourced so Get-Command by name can land on some other command
+    if ($def -and $def.FunctionFile) { $storedParams = $session.Variables['_uiTool_paramInfo'] }
+
     try {
-        $cmdInfo = Get-Command $cmdLookup -ErrorAction Stop
+        if (!$storedParams) { $cmdInfo = Get-Command $cmdLookup -ErrorAction Stop }
     }
     catch {
         # Local function not available globally - use stored param info from session
@@ -38,11 +41,9 @@ function Invoke-UiToolValidation {
         $storedParams = $session.Variables['_uiTool_paramInfo']
     }
 
-    $commonParams = @(
-        'Verbose','Debug','ErrorAction','WarningAction','InformationAction',
-        'ErrorVariable','WarningVariable','InformationVariable',
-        'OutVariable','OutBuffer','PipelineVariable','WhatIf','Confirm','UseTransaction'
-    )
+    $commonParams  = @([System.Management.Automation.Cmdlet]::CommonParameters) + @([System.Management.Automation.Cmdlet]::OptionalCommonParameters)
+    $includeCommon = $def -and $def.IncludeCommon
+    $defaults      = if ($def -and $def.ParameterDefaults) { $def.ParameterDefaults } else { @{} }
 
     # Build current params list from cmdInfo or stored params
     $currentParams = $null
@@ -54,7 +55,7 @@ function Invoke-UiToolValidation {
         $currentParams = [System.Collections.Generic.List[object]]::new()
 
         foreach ($paramName in $cmdInfo.Parameters.Keys) {
-            if ($commonParams -contains $paramName) { continue }
+            if (!$includeCommon -and $commonParams -contains $paramName) { continue }
 
             $param = $cmdInfo.Parameters[$paramName]
             if ($currentSet) {
@@ -71,10 +72,11 @@ function Invoke-UiToolValidation {
             }
 
             $currentParams.Add([PSCustomObject]@{
-                Name        = $paramName
-                Type        = $param.ParameterType
-                IsMandatory = $isMandatoryInSet
-                IsSwitch    = $param.ParameterType -eq [switch]
+                Name         = $paramName
+                Type         = $param.ParameterType
+                IsMandatory  = $isMandatoryInSet
+                IsSwitch     = $param.ParameterType -eq [switch]
+                DefaultValue = $defaults[$paramName]
             })
         }
     }
@@ -127,12 +129,33 @@ function Invoke-UiToolValidation {
 
         try {
             if ($paramDef.IsSwitch) {
+                # If the box is unchecked on a $true default, the switch goes as -Name:$false
                 if ($value -eq $true) { $paramHash[$paramDef.Name] = [switch]::Present }
+                elseif ($paramDef.DefaultValue -is [bool] -and $paramDef.DefaultValue) {
+                    $paramHash[$paramDef.Name] = [switch]$false
+                }
             }
             elseif ($paramDef.Type -eq [string[]]) {
                 if (![string]::IsNullOrWhiteSpace($value)) {
                     $paramHash[$paramDef.Name] = $value -split "`r?`n" | Where-Object { $_.Trim() }
                 }
+            }
+            elseif ($paramDef.Type.IsArray) {
+                # Commas split too since that's how the box shows a default
+                $elementType = $paramDef.Type.GetElementType()
+                $pieces      = @([regex]::Split([string]$value, '[,\r\n]+') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                $typed       = [Array]::CreateInstance($elementType, $pieces.Count)
+                $unreadable  = @(for ($i = 0; $i -lt $pieces.Count; $i++) {
+                    try {
+                        $typed[$i] = [System.Management.Automation.LanguagePrimitives]::ConvertTo($pieces[$i], $elementType)
+                    }
+                    catch { "'$($pieces[$i])'" }
+                })
+
+                if ($unreadable.Count -gt 0) {
+                    $validationErrors.Add("$($paramDef.Name): can't read $($unreadable -join ', ') as $($elementType.Name)")
+                }
+                elseif ($pieces.Count -gt 0) { $paramHash[$paramDef.Name] = $typed }
             }
             elseif ($paramDef.Type -eq [int] -or $paramDef.Type -eq [int32]) {
                 if (![string]::IsNullOrWhiteSpace($value)) {

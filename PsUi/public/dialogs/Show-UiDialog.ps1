@@ -3,7 +3,7 @@ function Show-UiDialog {
     .SYNOPSIS
         Shows a themed message dialog with configurable buttons.
     .DESCRIPTION
-        Convenience wrapper around Show-UiMessageDialog. Automatically picks up
+        Show-UiMessageDialog with less typing. Automatically picks up
         theme colors when called from an async button action.
     .PARAMETER Message
         The message text to display in the dialog body.

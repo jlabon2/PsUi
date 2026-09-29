@@ -1,41 +1,41 @@
 function New-UiTool {
     <#
     .SYNOPSIS
-        Transforms any PowerShell command into a GUI application automatically.
+        Builds a form from a command's parameter metadata.
     .DESCRIPTION
-        New-UiTool introspects a command's parameter metadata and generates a responsive
-        GUI with matching controls for each parameter type. It maps types and validation
-        attributes to visual controls:
+        New-UiTool reads a command's parameter metadata and builds a form with a matching
+        control per parameter:
 
-        - [ValidateSet] → Dropdown
-        - [switch] → Toggle checkbox
-        - [int]/[double] with ValidateRange → Slider
-        - [int]/[double] → Number input
-        - [string] → Text input
-        - [string[]] → Multi-line text area
-        - [datetime] → Date picker
-        - [SecureString] → Password input
-        - [PSCredential] → Credential dialog button
-        - [bool] → Toggle
-        - Mandatory → Required field validation
-        - HelpMessage → Tooltip
+        - [ValidateSet] becomes a dropdown
+        - [switch] and [bool] become toggles
+        - [int]/[double] become number inputs, or a slider when ValidateRange spans 10 steps or fewer
+        - [string] becomes a text input, [string[]] a multi-line text area
+        - [datetime] becomes a date picker
+        - [SecureString] becomes a password input, [PSCredential] a username and password pair
+        - Mandatory parameters gate the run button
+        - .PARAMETER help text becomes the caption under each control
 
-        Execution runs on a background thread via AsyncExecutor, keeping the UI responsive.
-        Results are displayed in a structured output viewer.
+        Execution runs on a background thread, so the window stays alive during long commands.
+        Results land in a sortable output grid.
 
-        This is parsing PowerShell's parameter binder output and building UI from it.
-        If Microsoft adds weird new validation attributes or changes how parameter sets
-        work, this code will need updates. We're fighting the system a bit here since it wasn't 
-        designed for this kind of dynamic UI generation. That said, it works for the common 
-        cases, and "time to GUI" for a script drops to zero. That's the point.
+        All of this reads static parameter metadata. Dynamic parameters and validation that
+        depends on live state don't survive inspection; build those forms by hand with the
+        regular controls. For everything else, "time to GUI" for a script is one line.
     .PARAMETER Command
-        The name of the command to wrap. Can be a cmdlet, function, or alias.
+        The command to wrap: a cmdlet, function, alias, script path, or a CommandInfo object.
+
+        Pass a .ps1 that has no param block and only defines functions, and the form wraps its
+        one function, or the one named after the file. Run dot sources the whole file first, so
+        helper functions in the same file work. New-UiTool refuses a file that runs other code
+        at its top level, since every Run would repeat it.
     .PARAMETER Title
         Window title. Defaults to the command name.
     .PARAMETER Width
-        Window width in pixels. Default 600.
+        Window width in pixels. Standalone windows default to 600. Inside a host window
+        the child opens at 800 unless you pass one.
     .PARAMETER Height
-        Window height in pixels. Default 500.
+        Window height in pixels. Only applied when you pass it. Inside a host window the
+        child otherwise opens at 600, standalone the window sizes itself.
     .PARAMETER ParameterSet
         If the command has multiple parameter sets, specify which one to use.
         If not specified, uses the default parameter set or shows a selector.
@@ -46,9 +46,10 @@ function New-UiTool {
     .PARAMETER IncludeCommonParameters
         Include common parameters like -Verbose, -Debug, etc. Default is false.
     .PARAMETER ResultActions
-        Array of hashtables defining action buttons for the results grid.
-        Each hashtable should have 'Text' (button label) and 'Action' (scriptblock).
-        The scriptblock receives $_ as the selected row(s).
+        Actions offered against selected rows in the results grid. Pass a
+        { New-UiResultAction ... } definition block, an array of New-UiResultAction output,
+        or the legacy hashtable array (Text + Action required; optional: Icon, Confirm, ObjectType
+        optional). The scriptblock receives $_ as the selected row(s).
     .PARAMETER SingleSelect
         When used with ResultActions, limits selection to a single row.
     .PARAMETER HideThemeButton
@@ -89,17 +90,19 @@ function New-UiTool {
 
         Creates a service stopper using a specific parameter set.
     .EXAMPLE
-        New-UiTool -Command 'Get-Process' -ResultActions @(
-            @{ Text = 'Stop'; Icon = 'Stop'; Action = { $_ | Stop-Process -Force } }
-        )
+        New-UiTool -Command 'Get-Process' -ResultActions {
+            New-UiResultAction 'Stop' -Icon Stop -Confirm 'Stop {0} processes?' -Action { $_ | Stop-Process -Force }
+        }
 
-        Creates a process viewer with a Stop button that kills selected processes.
+        Creates a process viewer with a Stop action that kills selected processes after a
+        confirm. The legacy hashtable form still works:
+        -ResultActions @( @{ Text = 'Stop'; Icon = 'Stop'; Action = { $_ | Stop-Process -Force } } )
     .EXAMPLE
-        # Local function - no need to register globally
+        # A local function, so nothing needs registering globally.
         function My-CustomTool { param([string]$Name) Write-Host "Hello $Name" }
         New-UiTool -Command 'My-CustomTool'
 
-        Creates a GUI for a locally-defined function (auto-detected from caller scope).
+        Creates a GUI for a function defined in your script (detected from the calling scope).
     .EXAMPLE
         New-UiTool -Command '.\MyScript.ps1'
 
@@ -107,7 +110,7 @@ function New-UiTool {
     #>
     [CmdletBinding()]
     param(
-        # Command can be: cmdlet name, function name, script path, or CommandInfo object
+        # Takes a cmdlet name, a function name, a script path, or a CommandInfo object.
         [Parameter(Mandatory, Position = 0)]
         [object]$Command,
 
@@ -130,11 +133,12 @@ function New-UiTool {
 
         [switch]$ShowParamType,
 
-        [hashtable[]]$ResultActions,
+        # Untyped, so it takes a New-UiResultAction definition block, an array of definitions, or the legacy hashtable array.
+        [object]$ResultActions,
 
         [switch]$SingleSelect,
 
-        # Input helper parameters - add browse buttons next to TextBox inputs
+        # Input helper parameters put a browse button beside the text box.
         [string[]]$FilePickerParameters = @(),
 
         [string[]]$FolderPickerParameters = @(),
@@ -161,7 +165,12 @@ function New-UiTool {
 
     Write-Debug "Starting for command '$Command', Width=$Width, Height=$Height"
 
-    # Get caller's SessionState for local function lookup
+    # Normalized now, not when the deferred content block runs mid window build. The user's definition block should execute at call time and errors should name this function.
+    if ($null -ne $ResultActions) {
+        $ResultActions = [hashtable[]](ConvertTo-UiDefinitionArray -InputObject $ResultActions -ParameterName '-ResultActions' -CallerName 'New-UiTool')
+    }
+
+    # The calling script's SessionState, so a local function it defined can still be found.
     $callerSessionState = $null
     try {
         $callerScope = (Get-PSCallStack)[1]
@@ -196,19 +205,13 @@ function New-UiTool {
     $uiDef = Get-UiDefinition @defParams
     Write-Debug "Got definition: $($uiDef.Parameters.Count) parameters, sets: $($uiDef.ParameterSets -join ', ')"
 
-    # Store the definition in session context for stateless button access
-    # This lets button handlers read command info without closures
-    try {
-        $existingSession = [PsUi.SessionManager]::Current
-        if ($existingSession) {
-            $existingSession.CurrentDefinition = $uiDef
-        }
-    }
-    catch {
-        Write-Verbose "[New-UiTool] Could not store definition in SessionContext: $_"
-    }
-
     Write-Debug "Introspection complete: $($uiDef.Parameters.Count) parameter(s) detected"
+
+    # No current support for using on PsUi commands and probably won't ever be. Warn rather than refuse, since use for reading parameters is a fair thing to want.
+    # PsUi dot sources a function file itself, so that function's Source reads PsUi too
+    if ($uiDef.CommandInfo -and $uiDef.CommandInfo.Source -eq 'PsUi' -and !$uiDef.FunctionFile) {
+        Write-Warning "$($uiDef.CommandInfo.Name) is a PsUi command. New-UiTool on PsUi's own commands is unsupported and gives unexpected results."
+    }
 
     $cmdInfo               = $uiDef.CommandInfo
     $commandInvocation     = $uiDef.CommandName
@@ -229,11 +232,9 @@ function New-UiTool {
 
     Write-Debug "Rendering UI for '$commandDisplayName'"
 
-    # Three display modes - embed inline while the host is still being built, spawn a child
-    # window from a click handler, or stand up a top-level window if no host exists.
-    # Window.IsLoaded gates the first two: false during build, true after Show().
-    # Get-UiSession not [SessionManager]::Current - the pool can switch threads and
-    # Current is ThreadStatic; Get-UiSession falls back to a per-runspace global.
+    # Three display modes. Embed inline while the host is still being built, spawn a child window from a click handler, or stand up a top level window when there is no host at all.
+    # Window.IsLoaded is what separates the first two, false during the build and true after Show.
+    # Get-UiSession rather than [SessionManager]::Current, because the pool can switch threads and Current is ThreadStatic. Get-UiSession falls back to a global held per runspace.
     $existingSession = try { Get-UiSession } catch { $null }
     $hasWindow       = $existingSession -and $existingSession.Window
     $hostIsLoaded    = $false
@@ -245,7 +246,8 @@ function New-UiTool {
     Write-Debug "Tool dispatch: embedded=$isEmbedded, childWindow=$isChildWindow, hostIsLoaded=$hostIsLoaded"
 
     # Copy variables to avoid GetNewClosure issues with ValidateSet attributes
-    $capturedTheme           = if ($Theme) { $Theme } else { 'Light' }
+    # Auto, the way New-UiWindow defaults, or a tool with no -Theme resets the process theme to Light on its way through Initialize-UITheme.
+    $capturedTheme           = if ($Theme) { $Theme } else { 'Auto' }
     $capturedTitle           = $Title
     $capturedWidth           = $Width
     $capturedHeight          = $Height
@@ -267,7 +269,7 @@ function New-UiTool {
         GroupPicker     = [System.Collections.Generic.List[string]]::new()
         MemberPicker    = [System.Collections.Generic.List[string]]::new()
         OUPicker        = [System.Collections.Generic.List[string]]::new()
-        FilterBuilder   = @{}  # Hashtable: ParamName -> FilterMode
+        FilterBuilder   = @{}
     }
     if ($FilePickerParameters) { $inputHelpers.FilePicker.AddRange($FilePickerParameters) }
     if ($FolderPickerParameters) { $inputHelpers.FolderPicker.AddRange($FolderPickerParameters) }
@@ -360,7 +362,7 @@ function New-UiTool {
             New-UiCard -Header "About" -FullWidth -Content {
                 $colors = Get-ThemeColors
                 $formattedText = ConvertTo-FormattedTextBlock -Text $aboutText -FontSize 12 -Foreground $colors.SecondaryText
-                
+
                 # Add to current parent
                 $session = Get-UiSession
                 $parent = $session.CurrentParent
@@ -377,19 +379,22 @@ function New-UiTool {
         $colors = Get-ThemeColors
 
         $paramsGroupBox = [System.Windows.Controls.GroupBox]::new()
-        $paramsGroupBox.Margin = [System.Windows.Thickness]::new(0,0,0,8)
+        # Lines up with the About card
+        $paramsGroupBox.Margin = [System.Windows.Thickness]::new(4, 0, 4, 8)
 
         if ($hasMultipleSets) {
             $setItems = @($parameterSets)
             $defaultSet = if ($parameterSetName) { $parameterSetName } else { $setItems[0] }
 
             # Re-capture values for the nested OnChange closure (PS 5.1 closure workaround)
-            $capturedHelpers       = $capturedInputHelpers
-            $capturedCmdInfoForOnChange = $cmdInfo
-            $capturedCmdForOnChange = $capturedCommand
-            $capturedExcludesForOnChange = $capturedExcludes
+            $capturedHelpers                  = $capturedInputHelpers
+            $capturedCmdInfoForOnChange       = $cmdInfo
+            $capturedCmdForOnChange           = $capturedCommand
+            $capturedExcludesForOnChange      = $capturedExcludes
             $capturedShowParamTypeForOnChange = $capturedShowParamType
-            $capturedDescriptionsForOnChange = $paramDescriptions
+            $capturedDescriptionsForOnChange  = $paramDescriptions
+            $capturedDefaultsForOnChange      = if ($uiDef.ParameterDefaults) { $uiDef.ParameterDefaults } else { @{} }
+            $capturedIncludeCommonForOnChange = [bool]$uiDef.IncludeCommon
 
             $headerGrid = [System.Windows.Controls.Grid]::new()
             $col1 = [System.Windows.Controls.ColumnDefinition]::new()
@@ -426,10 +431,11 @@ function New-UiTool {
                     return
                 }
 
-                # Use captured CommandInfo directly (don't re-fetch - extracted functions may be gone)
-                $cmdInfo = $capturedCmdInfoForOnChange
-                $commonParams = @('Verbose','Debug','ErrorAction','WarningAction','InformationAction','ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer','PipelineVariable','WhatIf','Confirm','UseTransaction')
-                $excludeList = @($capturedExcludesForOnChange) + $commonParams
+                # The captured CommandInfo, used as is. Fetching it again can miss a function that has since been extracted away.
+                $cmdInfo      = $capturedCmdInfoForOnChange
+                $commonParams = @([System.Management.Automation.Cmdlet]::CommonParameters) + @([System.Management.Automation.Cmdlet]::OptionalCommonParameters)
+                $excludeList  = @($capturedExcludesForOnChange)
+                if (!$capturedIncludeCommonForOnChange) { $excludeList += $commonParams }
 
                 # Get the parameter set definition to check mandatory correctly
                 $paramSetDef = $cmdInfo.ParameterSets | Where-Object { $_.Name -eq $newSet }
@@ -467,14 +473,15 @@ function New-UiTool {
                     }
 
                     $newParams.Add([PSCustomObject]@{
-                        Name        = $paramName
-                        Type        = $param.ParameterType
-                        IsMandatory = $isMandatoryInSet -or $isSetDefiningSwitch
-                        ValidateSet = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
+                        Name          = $paramName
+                        Type          = $param.ParameterType
+                        IsMandatory   = $isMandatoryInSet -or $isSetDefiningSwitch
+                        ValidateSet   = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
                         ValidateRange = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateRangeAttribute] } | Select-Object -First 1
-                        DefaultValue = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.PSDefaultValueAttribute] } | Select-Object -First 1
-                        IsSwitch    = $param.ParameterType -eq [switch]
-                        Position    = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).Position | Where-Object { $_ -ge 0 } | Select-Object -First 1
+                        DefaultValue  = $capturedDefaultsForOnChange[$paramName]
+                        HasDefault    = $capturedDefaultsForOnChange.ContainsKey($paramName)
+                        IsSwitch      = $param.ParameterType -eq [switch]
+                        Position      = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).Position | Where-Object { $_ -ge 0 } | Select-Object -First 1
                     })
                 }
 
@@ -490,7 +497,7 @@ function New-UiTool {
                 $tracker = $sess.GetControl('_uiTool_lastParamSet')
                 if ($tracker) { $tracker.Tag = $newSet }
 
-                # Use cached descriptions (already loaded at startup - no need to re-parse help)
+                # Descriptions were loaded at startup, so the help does not get parsed twice.
                 $descriptions = $capturedDescriptionsForOnChange
 
                 # Determine if we're in wrap mode by checking panel type
@@ -591,7 +598,6 @@ function New-UiTool {
         }
         $paramsGroupBox.Content = $paramsContent
 
-        # Register the inner panel so we can reference it later
         $session.AddControlSafe('_uiTool_paramsContent', $paramsContent)
 
         # Create a hidden tracker for the last selected parameter set (to avoid redundant refreshes)
@@ -616,8 +622,6 @@ function New-UiTool {
         # Store parameter info in session for validation/clear scripts (works for local functions)
         $session.Variables['_uiTool_paramInfo'] = $targetParams
 
-        # Store the definition in session now that session is initialized
-        # This enables stateless button access to command info
         $session.PSBase.CurrentDefinition = $uiDef
 
         New-UiSeparator
@@ -625,13 +629,13 @@ function New-UiTool {
         # Display name for button label
         $cmdDisplayName = $capturedCommandDisplayName
 
-        # Action buttons panel - buttons are stateless, reading from SessionContext.CurrentDefinition
+        # Action buttons panel. The buttons hold no state and read the command off SessionContext.CurrentDefinition.
         New-UiPanel -Orientation Horizontal {
 
-            # Stateless validation script - reads command info from session
+            # Stateless validation script, reading the command off the session.
             $validateScript = { Invoke-UiToolValidation }
 
-            # Stateless run script - reads command info from session
+            # Stateless run script, reading the command off the session.
             $runScript = { Invoke-UiToolAction }
 
             $runBtnParams = @{
@@ -653,12 +657,12 @@ function New-UiTool {
                 $session.Variables['_uiTool_runButton'] = $runBtn
             }
 
-            # Stateless clear script - reads parameter names from session
+            # Stateless clear script, reading the parameter names off the session.
             $clearScript = { Clear-UiToolParameters }
 
             New-UiButton -Text "Clear" -Icon "Delete" -NoAsync -Action $clearScript
 
-            # Stateless help script - reads command info from session
+            # Stateless help script, reading the command off the session.
             $helpScript = { Show-UiToolHelp }
 
             New-UiButton -Text "Help" -Icon "Help" -ScrollToTop -Action $helpScript
@@ -669,21 +673,24 @@ function New-UiTool {
     }.GetNewClosure()
 
     if ($isEmbedded) {
-        # Host build context - drop the controls straight in.
+        # Host build context, so the controls drop straight in.
         & $toolContent
     }
     elseif ($isChildWindow) {
-        # Click handler context - we're on the host UI thread (New-UiButton's AST
-        # flipped us). Default 600x500 is too cramped inside the child window's chrome.
+        # A click handler runs this, already on the host UI thread because New-UiButton's AST scan flipped it to sync.
         $childParams = @{
-            Title  = $capturedTitle
-            Width  = if ($capturedWidthExplicit)  { $capturedWidth }  else { 800 }
-            Height = if ($capturedHeightExplicit) { $capturedHeight } else { 600 }
+            Title = $capturedTitle
+            Width = if ($capturedWidthExplicit) { $capturedWidth } else { 800 }
         }
+
+        # A tier field form left a third of the old fixed 600 empty; now it sizes to content unless its explictly set
+        if ($capturedHeightExplicit) { $childParams.Height = $capturedHeight }
+        else { $childParams.SizeToContent = $true }
+
         New-UiChildWindow @childParams -Content $toolContent
     }
     else {
-        # No host - top-level standalone window.
+        # No host at all, so a top level standalone window.
         $windowParams = @{
             Title           = $capturedTitle
             Width           = $capturedWidth

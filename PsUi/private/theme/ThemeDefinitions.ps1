@@ -1,5 +1,5 @@
 # Store themes in ModuleContext for cross-runspace access
-[PsUi.ModuleContext]::Themes = @{
+$builtInThemes = @{
     # Standard Dark: Deep gray/gunmetal (easier on eyes than pure black)
     Dark = @{
         Type = 'Dark'
@@ -756,6 +756,16 @@
         Link = '#3182CE'
     }
 }
+
+# Built before the theme swap since a second window opening on another thread can read the table in between
+$registeredThemes = [PsUi.ModuleContext]::Themes
+if ($registeredThemes) {
+    foreach ($themeName in $registeredThemes.Keys) {
+        if (!$builtInThemes.ContainsKey($themeName)) { $builtInThemes[$themeName] = $registeredThemes[$themeName] }
+    }
+}
+[PsUi.ModuleContext]::Themes = $builtInThemes
+Remove-Variable -Name builtInThemes, registeredThemes, themeName -ErrorAction Ignore
 
 # Default theme 'Light' is set in ModuleContext.cs - no need to set here
 # (Setting here would reset user's theme when module is imported into async runspaces)

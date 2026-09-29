@@ -319,10 +319,26 @@ namespace PsUi
             }
         }
 
+        // DataAdded fires on the pipeline thread, between the Write-Host records. The UI thread handlers lose that order. Kept off OnHostObserved so -CaptureHost bars count host lines only
+        private void QueueStreamMarker(string stream, string message)
+        {
+            if (!UseQueueMode || string.IsNullOrWhiteSpace(message)) return;
+
+            var marker = new HostOutputRecord(message);
+            marker.Stream = stream;
+            _hostQueue.Enqueue(marker);
+        }
+
         internal void RaiseOnError(PSErrorRecord errorRecord)
         {
             var cts = _cts;
             if (cts != null && cts.IsCancellationRequested) return;
+
+            if (errorRecord != null)
+            {
+                string text = string.IsNullOrEmpty(errorRecord.Message) ? errorRecord.ToString() : errorRecord.Message;
+                QueueStreamMarker("Error", text);
+            }
             MarshalToUi(delegate { if (OnError != null) OnError(errorRecord); });
         }
 
@@ -345,6 +361,7 @@ namespace PsUi
         {
             var cts = _cts;
             if (cts != null && cts.IsCancellationRequested) return;
+            QueueStreamMarker("Warning", value);
             MarshalToUi(delegate { if (OnWarning != null) OnWarning(value); });
         }
 
@@ -352,6 +369,7 @@ namespace PsUi
         {
             var cts = _cts;
             if (cts != null && cts.IsCancellationRequested) return;
+            QueueStreamMarker("Verbose", value);
             MarshalToUi(delegate { if (OnVerbose != null) OnVerbose(value); });
         }
 
@@ -503,10 +521,9 @@ namespace PsUi
         // Doesnt marshal to main UI thread since the dialog handles its own threading.
         public KeyInfo RaiseOnReadKey(ReadKeyOptions options)
         {
-            // Dialog runs on its own STA thread, so we call directly from background thread
-            // This keeps the main UI thread responsive
-            // Note: PipelineStoppedException is NOT caught here - it propagates to stop the script
-            return KeyCaptureDialog.ShowAndCapture("Press any key...");
+            // Dialog runs on its own STA thread, so we call directly from background thread. This keeps the main UI thread responsive,
+            // PipelineStoppedException is not caught here - it propagates to stop the script
+            return KeyCaptureDialog.ShowAndCapture("Press any key...", _capturedSessionId);
         }
 
         // Clear-Host handler - clears the output panel

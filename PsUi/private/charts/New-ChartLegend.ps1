@@ -11,7 +11,8 @@ function New-ChartLegend {
         Margin              = [System.Windows.Thickness]::new(0, 8, 0, 0)
     }
 
-    for ($i = 0; $i -lt $Data.Count; $i++) {
+    $count = @($Data).Count
+    for ($i = 0; $i -lt $count; $i++) {
         $item         = $Data[$i]
         $paletteEntry = $Palette[$i % $Palette.Count]
 

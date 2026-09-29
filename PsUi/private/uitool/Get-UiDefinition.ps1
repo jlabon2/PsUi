@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Introspects a PowerShell command and returns a UI definition schema.
 #>
@@ -25,23 +25,21 @@ function Get-UiDefinition {
         [string[]]$OUPickerParameters = @(),
         [switch]$NoAutoHelpers,
 
-        # Caller's SessionState for local function lookup
+        # The calling script's SessionState, for looking up its local functions.
         [System.Management.Automation.SessionState]$CallerSessionState
     )
 
     # Collect all unique SessionStates from the call stack for function lookup
     # This handles nested scriptblocks (button actions, child windows, etc.)
     $callStackSessionStates = [System.Collections.Generic.List[System.Management.Automation.SessionState]]::new()
-    if ($CallerSessionState) {
-        $callStackSessionStates.Add($CallerSessionState)
-    }
-    
+    if ($CallerSessionState) { $callStackSessionStates.Add($CallerSessionState) }
+
     # Walk up the call stack and collect all unique SessionStates
     try {
         $callStack = Get-PSCallStack
         $flags = [System.Reflection.BindingFlags]'Instance, NonPublic, Public'
         $sbProp = [System.Management.Automation.ScriptBlock].GetProperty('SessionState', $flags)
-        
+
         foreach ($frame in $callStack) {
             if ($frame.InvocationInfo.MyCommand.ScriptBlock -and $sbProp) {
                 $frameState = $sbProp.GetValue($frame.InvocationInfo.MyCommand.ScriptBlock)
@@ -50,7 +48,7 @@ function Get-UiDefinition {
                 }
             }
         }
-        
+
         Write-Debug "Collected $($callStackSessionStates.Count) unique SessionStates from call stack"
     }
     catch {
@@ -84,18 +82,14 @@ function Get-UiDefinition {
                     '_sessionState',
                     [System.Reflection.BindingFlags]'Instance, NonPublic'
                 )
-                if ($field) {
-                    $internal = $field.GetValue($sessionState)
-                }
+                if ($field) { $internal = $field.GetValue($sessionState) }
 
                 if (!$internal) {
                     $prop = $sessionState.GetType().GetProperty(
                         'Internal',
                         [System.Reflection.BindingFlags]'Instance, NonPublic'
                     )
-                    if ($prop) {
-                        $internal = $prop.GetValue($sessionState)
-                    }
+                    if ($prop) { $internal = $prop.GetValue($sessionState) }
                 }
 
                 if ($internal) {
@@ -128,11 +122,13 @@ function Get-UiDefinition {
         return $null
     }
 
-    # Result structure - gets filled in based on what we're parsing
+    # Result structure, filled in from whatever is being parsed.
     $cmdInfo            = $null
     $commandDefinition  = $null
     $commandInvocation  = $null
     $isExternalScript   = $false
+    $functionFile       = $null
+    $fileHelp           = $null
 
     # Resolve the command based on input type
     if ($Command -is [System.Management.Automation.CommandInfo]) {
@@ -145,9 +141,7 @@ function Get-UiDefinition {
             $isExternalScript = $true
             $commandInvocation = $cmdInfo.Path
         }
-        else {
-            $commandInvocation = $cmdInfo.Name
-        }
+        else { $commandInvocation = $cmdInfo.Name }
     }
     elseif ($Command -is [string]) {
         $commandStr = $Command.Trim()
@@ -163,41 +157,35 @@ function Get-UiDefinition {
                 $scriptPath = $resolved.Path
             }
             catch {
-                # Resolve-Path failed - try relative to caller script
-                if ([System.IO.Path]::IsPathRooted($commandStr)) {
-                    $scriptPath = $commandStr
-                }
+                # Resolve-Path failed, so try relative to the calling script.
+                if ([System.IO.Path]::IsPathRooted($commandStr)) { $scriptPath = $commandStr }
                 else {
                     $callerPath = (Get-PSCallStack)[2].ScriptName  # [2] = caller of New-UiTool
                     if ($callerPath) {
                         $callerDir = Split-Path $callerPath -Parent
                         $scriptPath = Join-Path $callerDir $commandStr
                     }
-                    else {
-                        throw "Script not found: $commandStr"
-                    }
+                    else { throw "Script not found: $commandStr" }
                 }
             }
 
-            if (!(Test-Path $scriptPath)) {
-                throw "Script not found: $scriptPath"
-            }
+            if (!(Test-Path $scriptPath)) { throw "Script not found: $scriptPath" }
 
             # Parse AST to check for embedded function definitions
             $scriptContent = Get-Content $scriptPath -Raw -ErrorAction Stop
             $tokens = $null
             $parseErrors = $null
             $ast = [System.Management.Automation.Language.Parser]::ParseInput($scriptContent, [ref]$tokens, [ref]$parseErrors)
-            
-            # Script-level param() block means we can build a UI for it
+
+            # A script level param() block means a UI can be built for it.
             $hasScriptParams = $ast.ParamBlock -and $ast.ParamBlock.Parameters.Count -gt 0
-            
+
             # Find all function definitions in the script
-            $functionDefs = $ast.FindAll({ 
-                param($node) 
-                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] 
+            $functionDefs = $ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
             }, $false)
-            
+
             # If script has its own param block, treat it as a parameterized script
             # even if it contains internal helper functions
             if ($hasScriptParams) {
@@ -210,37 +198,56 @@ function Get-UiDefinition {
                 # Script contains function definitions but no script params - extract the target function
                 $targetFunc = $null
                 $scriptBaseName = [System.IO.Path]::GetFileNameWithoutExtension($scriptPath)
-                
+
+                # function global:Get-Report keeps the scope in its Name, which Get-Command and the file name both lack
+                $scopePrefix = '^(global|local|script|private):'
+
                 if ($functionDefs.Count -eq 1) {
                     # Single function - use it
                     $targetFunc = $functionDefs[0]
                 }
                 else {
                     # Multiple functions - look for one matching the filename
-                    $targetFunc = $functionDefs | Where-Object { $_.Name -eq $scriptBaseName } | Select-Object -First 1
-                    
+                    $targetFunc = $functionDefs | Where-Object { ($_.Name -replace $scopePrefix) -eq $scriptBaseName } | Select-Object -First 1
+
                     if (!$targetFunc) {
                         $funcNames = ($functionDefs | ForEach-Object { $_.Name }) -join ', '
-                        throw "Script '$scriptPath' contains multiple functions ($funcNames). Specify which one by passing the function name after dot-sourcing the file, or rename the file to match the desired function."
+                        throw "Script '$scriptPath' contains multiple functions ($funcNames), and none is named after the file. Rename the file after the one to wrap, and the rest come along as its helpers."
                     }
                 }
-                
-                # Create a temporary function using Invoke-Expression to preserve param block
-                $tempFuncName = "_UiDef_Script_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-                $funcDefText = "function global:$tempFuncName $($targetFunc.Body.Extent.Text)"
-                try {
-                    Invoke-Expression $funcDefText
-                    $cmdInfo = Get-Command $tempFuncName -ErrorAction Stop
-                    $cmdInfo | Add-Member -NotePropertyName 'OriginalName' -NotePropertyValue $targetFunc.Name -Force
-                    $cmdInfo | Add-Member -NotePropertyName 'SourceScriptPath' -NotePropertyValue $scriptPath -Force
+                $targetName = $targetFunc.Name -replace $scopePrefix
+
+                # Run dot sources the whole file before each call so anything at the top level besides definitions would rerun on every click
+                $looseCode = foreach ($block in @($ast.BeginBlock, $ast.ProcessBlock, $ast.EndBlock)) {
+                    if (!$block) { continue }
+                    foreach ($statement in $block.Statements) {
+                        if ($statement -is [System.Management.Automation.Language.FunctionDefinitionAst]) { continue }
+                        if ($statement -is [System.Management.Automation.Language.TypeDefinitionAst]) { continue }
+                        $statement
+                    }
                 }
-                finally {
-                    Remove-Item -Path "function:global:$tempFuncName" -ErrorAction SilentlyContinue
+                if ($looseCode) {
+                    $looseLine = @($looseCode)[0].Extent.StartLineNumber
+                    throw "Script '$scriptPath' runs code outside its functions (line $looseLine), and New-UiTool dot sources the whole file on every Run to bring $targetName and its helpers along. Move that code out of the file, or give the script a param block so it runs as a script."
                 }
-                
-                $commandDefinition = $targetFunc.Extent.Text
-                $commandInvocation = ". '$scriptPath'; $($targetFunc.Name)"
-                $isExternalScript = $false  # Treat as function now
+
+                # Run and Help load the file elsewhere without this session's PSDrives
+                $functionFile = Convert-Path -LiteralPath $scriptPath
+
+                # Child scope, so the file's functions go once this returns
+                $loaded = & {
+                    param($path, $name)
+                    . $path
+                    @{
+                        Command = Get-Command -Name $name -CommandType Function -ErrorAction Stop
+                        Help    = Get-Help -Name $name -Full -ErrorAction SilentlyContinue
+                    }
+                } $functionFile $targetName
+
+                $cmdInfo           = $loaded.Command
+                $fileHelp          = $loaded.Help
+                $commandDefinition = $cmdInfo.Definition
+                $commandInvocation = $cmdInfo.Name
             }
             else {
                 # No functions and no script params - still try as script
@@ -254,24 +261,21 @@ function Get-UiDefinition {
             $localFunc = & $lookupLocalFunction $commandStr
             if ($localFunc) {
                 Write-Debug "Found local function '$commandStr', ParameterSets=$($localFunc.ParameterSets.Count)"
-                
+
                 # Use localFunc directly if it has parameter sets, otherwise create temp function
                 # InvokeCommand.GetCommand sometimes returns FunctionInfo with empty ParameterSets
-                if ($localFunc.ParameterSets.Count -gt 0) {
-                    $cmdInfo = $localFunc
-                }
+                if ($localFunc.ParameterSets.Count -gt 0) { $cmdInfo = $localFunc }
                 else {
-                    # Parameter sets are empty - create temp global function via Invoke-Expression
-                    # so PowerShell properly parses the CmdletBinding/param block
+                    # Parameter sets are empty - create temp global function via Invoke-Expression so PS properly parses the CmdletBinding/param block
                     $sb = $localFunc.ScriptBlock
                     if (!$sb -and $localFunc.Definition) {
                         $sb = [scriptblock]::Create($localFunc.Definition)
                     }
-                    
+
                     if ($sb) {
                         $tempFuncName = "_UiDef_Temp_$([guid]::NewGuid().ToString('N').Substring(0,8))"
                         $funcDefText = "function global:$tempFuncName { $($sb.ToString()) }"
-                        
+
                         try {
                             Invoke-Expression $funcDefText
                             $cmdInfo = Get-Command $tempFuncName -ErrorAction Stop
@@ -282,16 +286,14 @@ function Get-UiDefinition {
                             Write-Debug "Temp function creation failed: $_"
                             $cmdInfo = $localFunc
                         }
-                        finally {
-                            # Clean up temp function to avoid polluting global namespace
-                            Remove-Item -Path "function:global:$tempFuncName" -ErrorAction SilentlyContinue
-                        }
+
+                        # 5.1 throws past a finally when a click opens the tool.
+                        # Remove-Item quietly skips a function:global: path.
+                        Remove-Item -Path "function:\$tempFuncName" -ErrorAction SilentlyContinue
                     }
-                    else {
-                        $cmdInfo = Get-Command $commandStr -ErrorAction SilentlyContinue
-                    }
+                    else { $cmdInfo = Get-Command $commandStr -ErrorAction SilentlyContinue }
                 }
-                
+
                 $commandDefinition = if ($localFunc.Definition) { $localFunc.Definition } else { $localFunc.ScriptBlock.ToString() }
                 $commandInvocation = $commandStr
             }
@@ -308,33 +310,23 @@ function Get-UiDefinition {
         throw "Invalid -Command type. Expected string, CommandInfo, or script path. Got: $($Command.GetType().Name)"
     }
 
-    if (!$cmdInfo) {
-        throw "Command '$Command' not found."
-    }
+    if (!$cmdInfo) { throw "Command '$Command' not found." }
 
     # Display name for scripts shows filename, functions show name
     $commandDisplayName = if ($cmdInfo.PSObject.Properties['OriginalName']) {
         $cmdInfo.OriginalName
     }
-    elseif ($isExternalScript) {
-        [System.IO.Path]::GetFileNameWithoutExtension($cmdInfo.Path)
-    }
-    else {
-        $cmdInfo.Name
-    }
+    elseif ($isExternalScript) { [System.IO.Path]::GetFileNameWithoutExtension($cmdInfo.Path) }
+    else { $cmdInfo.Name }
 
-    # Common parameters to exclude by default
-    $commonParams = @(
-        'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction',
-        'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable',
-        'OutBuffer', 'PipelineVariable', 'WhatIf', 'Confirm', 'UseTransaction'
-    )
+    # Cmdlet's own lists so ProgressAction comes along on 7.4 and up
+    $commonParams = @([System.Management.Automation.Cmdlet]::CommonParameters) + @([System.Management.Automation.Cmdlet]::OptionalCommonParameters)
 
     $excludeList = [System.Collections.Generic.List[string]]::new()
     if ($ExcludeParameters) {
         foreach ($param in $ExcludeParameters) { $excludeList.Add($param) }
     }
-    
+
     if (!$IncludeCommonParameters) {
         foreach ($param in $commonParams) { $excludeList.Add($param) }
     }
@@ -354,34 +346,26 @@ function Get-UiDefinition {
         $paramSetDef = $cmdInfo.ParameterSets | Where-Object { $_.Name -eq $parameterSetName }
     }
 
-    # Extract default values from AST
     $astDefaults = @{}
     try {
-        $scriptBlock = $cmdInfo.ScriptBlock
-        if ($scriptBlock -and $scriptBlock.Ast.ParamBlock) {
-            foreach ($astParam in $scriptBlock.Ast.ParamBlock.Parameters) {
-                $pName = $astParam.Name.VariablePath.UserPath
-                if ($astParam.DefaultValue) {
-                    $defaultText = $astParam.DefaultValue.Extent.Text
+        $defAst = if ($cmdInfo.ScriptBlock) { $cmdInfo.ScriptBlock.Ast } else { $null }
 
-                    $evaluatedValue = $null
-                    try {
-                        if ($defaultText -match '^\s*[\$\@]?\(|^\s*\{') {
-                            $evaluatedValue = $defaultText
-                        }
-                        elseif ($defaultText -match '^\s*[''"].*[''"]$|^\s*\d+$|^\s*\$true$|^\s*\$false$') {
-                            $evaluatedValue = [scriptblock]::Create($defaultText).Invoke()[0]
-                        }
-                        else {
-                            $evaluatedValue = $defaultText
-                        }
-                    }
-                    catch {
-                        $evaluatedValue = $defaultText
-                    }
+        # A function's param block sits down in Body
+        $astParams = if ($defAst -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+            if ($defAst.Body.ParamBlock) { $defAst.Body.ParamBlock.Parameters } else { $defAst.Parameters }
+        }
+        elseif ($defAst -and $defAst.ParamBlock) { $defAst.ParamBlock.Parameters }
 
-                    $astDefaults[$pName] = $evaluatedValue
-                }
+        foreach ($astParam in $astParams) {
+            if (!$astParam.DefaultValue) { continue }
+
+            $pName = $astParam.Name.VariablePath.UserPath
+            try { $astDefaults[$pName] = Get-UiParameterDefault -Ast $astParam.DefaultValue }
+            catch {
+                Write-Debug "Leaving -$pName empty, its default needs code to run: $($astParam.DefaultValue.Extent.Text)"
+
+                # Keeping the key lets HasDefault leave a date picker blank instead of setting it to today
+                $astDefaults[$pName] = $null
             }
         }
     }
@@ -407,18 +391,14 @@ function Get-UiDefinition {
         $isMandatoryInSet = $false
         if ($paramSetDef) {
             $paramInSet = $paramSetDef.Parameters | Where-Object { $_.Name -eq $paramName }
-            if ($paramInSet) {
-                $isMandatoryInSet = $paramInSet.IsMandatory
-            }
+            if ($paramInSet) { $isMandatoryInSet = $paramInSet.IsMandatory }
         }
         else {
-            # Fallback: check [Parameter(Mandatory)] attribute directly
+            # Fall back to reading the [Parameter(Mandatory)] attribute directly
             $mandatoryAttr = $param.Attributes | Where-Object {
                 $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory
             }
-            if ($mandatoryAttr) {
-                $isMandatoryInSet = $true
-            }
+            if ($mandatoryAttr) { $isMandatoryInSet = $true }
         }
 
         # A switch is "set-defining" if its name matches the parameter set name
@@ -426,15 +406,8 @@ function Get-UiDefinition {
         if ($param.ParameterType -eq [switch] -and $parameterSetName) {
             if ($paramName -eq $parameterSetName) {
                 $hasMandatoryParams = $paramSetDef.Parameters | Where-Object { $_.IsMandatory } | Select-Object -First 1
-                if (!$hasMandatoryParams) {
-                    $isSetDefiningSwitch = $true
-                }
+                if (!$hasMandatoryParams) { $isSetDefiningSwitch = $true }
             }
-        }
-
-        $defaultValue = $null
-        if ($astDefaults -and $astDefaults.ContainsKey($paramName)) {
-            $defaultValue = $astDefaults[$paramName]
         }
 
         # Determine control type based on parameter metadata
@@ -448,36 +421,28 @@ function Get-UiDefinition {
             $controlType = 'Dropdown'
             $controlOptions.Items = $validateSet
         }
-        elseif ($param.ParameterType -eq [switch]) {
-            $controlType = 'Toggle'
-        }
-        elseif ($param.ParameterType -eq [bool]) {
-            $controlType = 'Toggle'
-        }
-        elseif ($param.ParameterType -eq [datetime]) {
-            $controlType = 'DatePicker'
-        }
-        elseif ($param.ParameterType -eq [System.Security.SecureString]) {
-            $controlType = 'Password'
-        }
-        elseif ($param.ParameterType -eq [System.Management.Automation.PSCredential]) {
-            $controlType = 'Credential'
-        }
-        elseif ($param.ParameterType -eq [string[]] -or $param.ParameterType -eq [object[]]) {
-            $controlType = 'TextArea'
-        }
+        # Ahead of the number arms in the switch, since a ranged int or double wants a slider rather than a box.
         elseif (($param.ParameterType -eq [int] -or $param.ParameterType -eq [double]) -and $validateRange) {
             $controlType = 'Slider'
             $controlOptions.Minimum = $validateRange.MinRange
             $controlOptions.Maximum = $validateRange.MaxRange
         }
-        elseif ($param.ParameterType -eq [int] -or $param.ParameterType -eq [long]) {
-            $controlType = 'NumberInput'
-            $controlOptions.IsInteger = $true
-        }
-        elseif ($param.ParameterType -eq [double] -or $param.ParameterType -eq [float] -or $param.ParameterType -eq [decimal]) {
-            $controlType = 'NumberInput'
-            $controlOptions.IsInteger = $false
+        else {
+            # Every label is a distinct type, so no value reaches two clauses and none of them needs a break.
+            switch ($param.ParameterType) {
+                ([switch])   { $controlType = 'Toggle' }
+                ([bool])     { $controlType = 'Toggle' }
+                ([datetime]) { $controlType = 'DatePicker' }
+                ([System.Security.SecureString])              { $controlType = 'Password' }
+                ([System.Management.Automation.PSCredential]) { $controlType = 'Credential' }
+                ([string[]]) { $controlType = 'TextArea' }
+                ([object[]]) { $controlType = 'TextArea' }
+                ([int])      { $controlType = 'NumberInput'; $controlOptions.IsInteger = $true }
+                ([long])     { $controlType = 'NumberInput'; $controlOptions.IsInteger = $true }
+                ([double])   { $controlType = 'NumberInput'; $controlOptions.IsInteger = $false }
+                ([float])    { $controlType = 'NumberInput'; $controlOptions.IsInteger = $false }
+                ([decimal])  { $controlType = 'NumberInput'; $controlOptions.IsInteger = $false }
+            }
         }
 
         $parameters.Add([PSCustomObject]@{
@@ -490,7 +455,8 @@ function Get-UiDefinition {
             HelpMessage    = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).HelpMessage | Select-Object -First 1
             ValidateSet    = $validateSet
             ValidateRange  = $validateRange
-            DefaultValue   = $defaultValue
+            DefaultValue   = $astDefaults[$paramName]
+            HasDefault     = $astDefaults.ContainsKey($paramName)
             Aliases        = $param.Aliases
             IsSwitch       = $param.ParameterType -eq [switch]
             Position       = ($param.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }).Position | Where-Object { $_ -ge 0 } | Select-Object -First 1
@@ -502,7 +468,7 @@ function Get-UiDefinition {
                                             @{Expression={if ($null -eq $_.Position) { 999 } else { $_.Position }}},
                                             Name
 
-    # Check for empty parameters - the command has nothing to configure
+    # Check for empty parameters, where the command has no knobs to configure.
     if (!$parameters -or $parameters.Count -eq 0) {
         $cmdDesc = if ($isExternalScript) { "Script '$commandInvocation'" } else { "Command '$commandDisplayName'" }
         throw "$cmdDesc has no parameters. New-UiTool requires a command with configurable parameters to generate a UI."
@@ -510,28 +476,26 @@ function Get-UiDefinition {
 
     # Get help information
     $helpTarget = if ($isExternalScript) { $commandInvocation } else { $commandDisplayName }
-    $helpInfo = Get-Help $helpTarget -Full -ErrorAction SilentlyContinue
+    $helpInfo   = if ($fileHelp) { $fileHelp } else { Get-Help $helpTarget -Full -ErrorAction SilentlyContinue }
+
+    # ConvertTo-FormattedTextBlock renders the emphasis and code ticks on the About card
     $description = if ($helpInfo.Description) {
-        $rawDesc = ($helpInfo.Description | ForEach-Object { $_.Text }) -join ' '
-        
-        # Collapse extra whitespace but preserve markdown for UI rendering
-        $rawDesc = $rawDesc -replace '\s+', ' '
-        $rawDesc.Trim()
+        ConvertFrom-UiHelpMarkdown -Text @($helpInfo.Description | ForEach-Object { $_.Text })
     }
-    else { $null }
+    else {
+        # Fall back to the synopsis, or a command carrying only a .SYNOPSIS opens with an empty About card.
+        # Get-Help makes one up for a command without help, and what it makes up is the syntax line, so that structure gets ignored
+        $synopsis = ("$($helpInfo.Synopsis)" -replace '\s+', ' ').Trim()
+        $ownName  = [regex]::Escape("$($helpInfo.Name)")
+        if ($synopsis -and $synopsis -notmatch "^$ownName(\s+[\[-]|$)") { $synopsis } else { $null }
+    }
 
     # Build parameter descriptions from help
     $paramDescriptions = @{}
     if ($helpInfo.parameters.parameter) {
         foreach ($hp in $helpInfo.parameters.parameter) {
             if ($hp.Description) {
-                $descLines = $hp.Description | ForEach-Object { $_.Text } | Where-Object { $_ -notmatch '^\s*>' }
-                $descText = ($descLines -join ' ').Trim()
-                $descText = $descText -replace '\*\*([^*]+)\*\*', '$1'
-                $descText = $descText -replace '\*([^*]+)\*', '$1'
-                $descText = $descText -replace '`([^`]+)`', '$1'
-                $descText = $descText -replace '\s+', ' '
-
+                $descText = ConvertFrom-UiHelpMarkdown -Text @($hp.Description | ForEach-Object { $_.Text }) -Inline
                 if (![string]::IsNullOrWhiteSpace($descText)) {
                     $paramDescriptions[$hp.Name] = $descText
                 }
@@ -564,22 +528,17 @@ function Get-UiDefinition {
     # Detect command type to determine filter mode
     $cmdName = $cmdInfo.Name
     $filterMode = 'Generic'
-    if ($cmdName -match '^Get-AD|^Set-AD|^New-AD|^Remove-AD') {
-        $filterMode = 'AD'
-    }
-    elseif ($cmdName -match '^Get-Wmi|^Get-Cim|^Invoke-Wmi|^Invoke-Cim') {
-        $filterMode = 'WMI'
-    }
-    elseif ($cmdName -match '^Get-ChildItem$|^Get-Item$|^Copy-Item$|^Move-Item$|^Remove-Item$|^Rename-Item$') {
-        $filterMode = 'File'
-    }
-    else {
-        # For scripts/functions, detect file mode if both Path-like and Filter params exist
-        $paramNames = $parameters | ForEach-Object { $_.Name }
-        $hasPathParam   = $paramNames | Where-Object { $_ -match '^Path$|Directory|Folder' }
-        $hasFilterParam = $paramNames | Where-Object { $_ -match '^Filter$' }
-        if ($hasPathParam -and $hasFilterParam) {
-            $filterMode = 'File'
+    # switch runs every clause that matches, so each one breaks to keep the first match winning.
+    switch -Regex ($cmdName) {
+        '^Get-AD|^Set-AD|^New-AD|^Remove-AD'        { $filterMode = 'AD'; break }
+        '^Get-Wmi|^Get-Cim|^Invoke-Wmi|^Invoke-Cim' { $filterMode = 'WMI'; break }
+        '^Get-ChildItem$|^Get-Item$|^Copy-Item$|^Move-Item$|^Remove-Item$|^Rename-Item$' { $filterMode = 'File'; break }
+        default {
+            # Scripts and functions count as file mode when they take a path and a filter both.
+            $paramNames = $parameters | ForEach-Object { $_.Name }
+            $hasPathParam   = $paramNames | Where-Object { $_ -match '^Path$|Directory|Folder' }
+            $hasFilterParam = $paramNames | Where-Object { $_ -match '^Filter$' }
+            if ($hasPathParam -and $hasFilterParam) { $filterMode = 'File' }
         }
     }
 
@@ -591,29 +550,16 @@ function Get-UiDefinition {
                 continue
             }
 
-            if ($pName -match 'Directory|Folder|FolderPath|DirectoryPath|^Path$|^LiteralPath$') {
-                $inputHelpers.FolderPicker.Add($pName)
-            }
-            elseif ($pName -match 'File|FileName|FilePath') {
-                $inputHelpers.FilePicker.Add($pName)
-            }
-            elseif ($pName -match '^Filter$|^Include$|^Exclude$') {
-                $inputHelpers.FilterBuilder[$pName] = $filterMode
-            }
-            elseif ($pName -match '^OU$|^SearchBase$|^BaseDN$|^SearchRoot$|^TargetOU$|OrganizationalUnit') {
-                $inputHelpers.OUPicker.Add($pName)
-            }
-            elseif ($pName -match '^Owner$|^Manager$|^User$|^UserName$|^SamAccountName$|^UserPrincipalName$|^UPN$') {
-                $inputHelpers.UserPicker.Add($pName)
-            }
-            elseif ($pName -match '^Group$|^GroupName$|^MemberOf$|^GroupDN$') {
-                $inputHelpers.GroupPicker.Add($pName)
-            }
-            elseif ($pName -match '^Member$|^Members$') {
-                $inputHelpers.MemberPicker.Add($pName)
-            }
-            elseif ($pName -match 'ComputerName|Computer|Server|ServerName|HostName|Host|^CN$|MachineName|Machine') {
-                $inputHelpers.ComputerPicker.Add($pName)
+            # FileServer hits the File pattern and the Server pattern both, so the breaks matter more here.
+            switch -Regex ($pName) {
+                'Directory|Folder|FolderPath|DirectoryPath|^Path$|^LiteralPath$'                  { $inputHelpers.FolderPicker.Add($pName); break }
+                'File|FileName|FilePath'                                                          { $inputHelpers.FilePicker.Add($pName); break }
+                '^Filter$|^Include$|^Exclude$'                                                    { $inputHelpers.FilterBuilder[$pName] = $filterMode; break }
+                '^OU$|^SearchBase$|^BaseDN$|^SearchRoot$|^TargetOU$|OrganizationalUnit'           { $inputHelpers.OUPicker.Add($pName); break }
+                '^Owner$|^Manager$|^User$|^UserName$|^SamAccountName$|^UserPrincipalName$|^UPN$'  { $inputHelpers.UserPicker.Add($pName); break }
+                '^Group$|^GroupName$|^MemberOf$|^GroupDN$'                                        { $inputHelpers.GroupPicker.Add($pName); break }
+                '^Member$|^Members$'                                                              { $inputHelpers.MemberPicker.Add($pName); break }
+                'ComputerName|Computer|Server|ServerName|HostName|Host|^CN$|MachineName|Machine'  { $inputHelpers.ComputerPicker.Add($pName); break }
             }
         }
     }
@@ -624,6 +570,7 @@ function Get-UiDefinition {
         CommandInfo       = $cmdInfo
         CommandName       = $commandInvocation
         CommandDefinition = $commandDefinition
+        FunctionFile      = $functionFile
         DisplayName       = $commandDisplayName
         Description       = $description
         HelpUri           = $helpUri
@@ -637,6 +584,8 @@ function Get-UiDefinition {
         # Parameter definitions (the schema)
         Parameters        = $parameters
         ParamDescriptions = $paramDescriptions
+        ParameterDefaults = $astDefaults
+        IncludeCommon     = [bool]$IncludeCommonParameters
 
         # Input helper configuration
         InputHelpers      = $inputHelpers

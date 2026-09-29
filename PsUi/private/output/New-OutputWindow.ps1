@@ -16,7 +16,7 @@ function New-OutputWindow {
 
     # Shadow adds padding around the visible window
     $shadowPadding = 16
-    
+
     # Create borderless transparent window for custom chrome
     $window = [System.Windows.Window]@{
         Title                 = $Title
@@ -41,15 +41,13 @@ function New-OutputWindow {
         catch {
             Write-Verbose "[New-OutputWindow] Could not set Owner: $_"
         }
-        
+
         # Use manual centering - CenterOwner doesn't work reliably with borderless windows
         [PsUi.WindowManager]::CenterOnParent($window, $ParentWindow)
     }
 
-    # Set unique AppUserModelID to separate from PowerShell in taskbar
-    $appId = "PsUi.OutputWindow." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-    [PsUi.WindowManager]::SetWindowAppId($window, $appId)
-    
+    [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.OutputWindow')
+
     # Hook WM_GETMINMAXINFO to enable proper maximize behavior (respects taskbar)
     [PsUi.WindowManager]::EnableBorderlessMaximize($window)
 
@@ -62,12 +60,13 @@ function New-OutputWindow {
     }
     [System.Windows.Shell.WindowChrome]::SetWindowChrome($window, $windowChrome)
 
+    # The window body, up for as long as the window is, so both brushes follow the theme.
     $shadowBorder = [System.Windows.Controls.Border]@{
         Margin          = [System.Windows.Thickness]::new($shadowPadding)
-        Background      = ConvertTo-UiBrush $Colors.WindowBg
-        BorderBrush     = ConvertTo-UiBrush $Colors.Border
         BorderThickness = [System.Windows.Thickness]::new(1)
     }
+    $shadowBorder.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, 'WindowBackgroundBrush')
+    $shadowBorder.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, 'BorderBrush')
 
     $shadow = [System.Windows.Media.Effects.DropShadowEffect]@{
         BlurRadius  = 16
@@ -98,7 +97,7 @@ function New-OutputWindow {
     $titleBarGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]@{ Width = 'Auto' })
     $titleBar.Child = $titleBarGrid
 
-    # Titlebar icon image (set later once we have the icon)
+    # Titlebar icon image, filled in once the icon exists.
     $titleBarIcon = [System.Windows.Controls.Image]@{
         Width             = 16
         Height            = 16
@@ -126,7 +125,7 @@ function New-OutputWindow {
 
     $createWindowBtn = {
         param([string]$Glyph, [scriptblock]$OnClick, [bool]$IsClose = $false)
-        
+
         $btn = [System.Windows.Controls.Button]@{
             Content         = $Glyph
             FontFamily      = [PsUi.ModuleContext]::ActiveIconFontFamily
@@ -139,12 +138,12 @@ function New-OutputWindow {
             Tag             = 'WindowControlButton'
         }
         $btn.OverridesDefaultStyle = $true
-        
+
         # Foreground is set inside the template via TextElement.Foreground on ContentPresenter.
         # Do NOT use SetResourceReference on the button. It creates a local value that overrides template trigger setters after theme changes.
-        
+
         if ($IsClose) {
-            # Close button: red hover with white X, darker red pressed
+            # Red hover with a white X on the close button, darker red when pressed
             $templateXaml = @'
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
     <Border x:Name="border" Background="Transparent">
@@ -194,10 +193,10 @@ function New-OutputWindow {
             $btn.Template = $script:_windowCtrlBtnTemplate
         }
         $btn.Add_Click($OnClick)
-        
+
         # Mark button as hit-testable within WindowChrome area (critical for maximized state)
         [System.Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($btn, $true)
-        
+
         return $btn
     }
 
@@ -217,9 +216,9 @@ function New-OutputWindow {
     }.GetNewClosure() $false
     [void]$buttonPanel.Children.Add($maximizeBtn)
 
-    $closeBtn = & $createWindowBtn ([PsUi.ModuleContext]::GetIcon('ChromeClose')) { 
+    $closeBtn = & $createWindowBtn ([PsUi.ModuleContext]::GetIcon('ChromeClose')) {
         # Just close the window and let the Closing event handler deal with confirmations and closing the ReadKey dialog at the appropriate time.
-        $capturedWindow.Close() 
+        $capturedWindow.Close()
     }.GetNewClosure() $true
     [void]$buttonPanel.Children.Add($closeBtn)
 
@@ -235,7 +234,7 @@ function New-OutputWindow {
             $capturedMaxBtn.Content = [PsUi.ModuleContext]::GetIcon('ChromeRestore')
             $capturedShadow.Margin  = [System.Windows.Thickness]::new(0)
             $capturedShadow.Effect  = $null
-            
+
             # Remove resize borders so titlebar and scrollbars remain clickable
             $capturedChrome.ResizeBorderThickness = [System.Windows.Thickness]::new(0)
         }
@@ -243,7 +242,7 @@ function New-OutputWindow {
             $capturedMaxBtn.Content = [PsUi.ModuleContext]::GetIcon('ChromeMaximize')
             $capturedShadow.Margin  = [System.Windows.Thickness]::new($capturedPadding)
             $capturedShadow.Effect  = $capturedShadowEffect
-            
+
             # Restore resize borders for normal window state
             $capturedChrome.ResizeBorderThickness = [System.Windows.Thickness]::new($capturedPadding + 4)
         }
@@ -251,7 +250,7 @@ function New-OutputWindow {
 
     # Shared drag state for restore-on-drag
     $dragState = @{ StartPoint = $null }
-    
+
     $titleBar.Add_MouseLeftButtonDown({
         param($sender, $eventArgs)
         if ($eventArgs.ClickCount -eq 2) {
@@ -273,35 +272,35 @@ function New-OutputWindow {
             }
         }
     }.GetNewClosure())
-    
+
     $titleBar.Add_MouseMove({
         param($sender, $eventArgs)
         if ($dragState.StartPoint -eq $null) { return }
         if ($eventArgs.LeftButton -ne 'Pressed') { return }
-        
+
         # Check if mouse moved enough to count as a drag (5px threshold)
         $currentPos = $eventArgs.GetPosition($capturedWindow)
         $deltaX = [Math]::Abs($currentPos.X - $dragState.StartPoint.X)
         $deltaY = [Math]::Abs($currentPos.Y - $dragState.StartPoint.Y)
-        
+
         if ($deltaX -gt 5 -or $deltaY -gt 5) {
             $sender.ReleaseMouseCapture()
-            
+
             # Capture screen position and relative X BEFORE restoring
             $screenPos = $capturedWindow.PointToScreen($dragState.StartPoint)
             $relativeX = $dragState.StartPoint.X / $capturedWindow.ActualWidth
-            
+
             $capturedWindow.WindowState = 'Normal'
-            
+
             # Position window so mouse stays on titlebar at same relative X
             $capturedWindow.Left = $screenPos.X - ($capturedWindow.ActualWidth * $relativeX)
             $capturedWindow.Top  = $screenPos.Y - ($capturedPadding + 16)
-            
+
             $dragState.StartPoint = $null
             $capturedWindow.DragMove()
         }
     }.GetNewClosure())
-    
+
     $titleBar.Add_MouseLeftButtonUp({
         param($sender, $eventArgs)
         $dragState.StartPoint = $null
@@ -352,7 +351,6 @@ function New-OutputWindow {
         catch { Write-Debug "Suppressed taskbar running overlay error: $_" }
     }.GetNewClosure())
 
-    # Store references for caller
     $window.Tag = @{
         ShadowBorder = $shadowBorder
         MainGrid     = $mainGrid

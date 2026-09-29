@@ -15,11 +15,11 @@ namespace PsUi
         [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-        
+
         // Icon-related Win32 APIs
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
-        
+
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
@@ -27,40 +27,43 @@ namespace PsUi
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
         private const uint SWP_NOSIZE       = 0x0001;
         private const uint SWP_NOMOVE       = 0x0002;
         private const uint SWP_NOZORDER     = 0x0004;
         private const uint SWP_FRAMECHANGED = 0x0020;
-        
-        // AppUserModelID - allows window to have its own taskbar identity separate from PowerShell
+
+        // AppUserModelID, so the window gets its own taskbar identity rather than sharing PS's
         [DllImport("shell32.dll", SetLastError = true)]
         private static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object propertyStore);
-        
+
         private const int WM_SETICON = 0x0080;
         private const int ICON_SMALL = 0;
         private const int ICON_BIG = 1;
         private const int ICON_SMALL2 = 2;  // Used by Windows 10/11 for titlebar icon
-        
+
         private static readonly Guid PKEY_AppUserModel_ID = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
         private const int VT_LPWSTR = 31;
 
         private const int SW_HIDE = 0;
         private const int SW_SHOW = 5;
-        
+
         // FlashWindowEx for taskbar attention flash
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
-        
+
         // SetWindowLongPtr for setting owner window (keeps dialog above parent)
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-        
+
         [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowLong")]
         private static extern IntPtr SetWindowLong32(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-        
+
         private const int GWL_HWNDPARENT = -8;
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct FLASHWINFO
         {
@@ -70,42 +73,45 @@ namespace PsUi
             public uint uCount;
             public uint dwTimeout;
         }
-        
+
         private const uint FLASHW_STOP = 0;
         private const uint FLASHW_ALL = 3;
         private const uint FLASHW_TIMERNOFG = 12;
-        
+
         // DWM Attributes
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
         private const int DWMWA_CAPTION_COLOR = 35;
         private const int DWMWA_TEXT_COLOR = 36;
-        
+
         // WM_GETMINMAXINFO for borderless maximize - used in ShowUI-Output (respects taskbar)
         private const int WM_GETMINMAXINFO = 0x0024;
-        
-        // Track minimum sizes for borderless windows (hwnd -> minWidth, minHeight)
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, POINT> _windowMinSizes = 
+
+        // Minimum sizes for borderless windows, keyed by hwnd.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, POINT> _windowMinSizes =
             new System.Collections.Concurrent.ConcurrentDictionary<IntPtr, POINT>();
-        
+
         // Track icon handles per window to clean up on repeated SetTaskbarIcon calls
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, IntPtr[]> _windowIconHandles =
             new System.Collections.Concurrent.ConcurrentDictionary<IntPtr, IntPtr[]>();
-        
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, bool> _refreshPending =
+            new System.Collections.Concurrent.ConcurrentDictionary<IntPtr, bool>();
+
         [DllImport("user32.dll")]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-        
+
         [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-        
+
         private const uint MONITOR_DEFAULTTONEAREST = 2;
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
         {
             public int x;
             public int y;
         }
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct MINMAXINFO
         {
@@ -115,7 +121,7 @@ namespace PsUi
             public POINT ptMinTrackSize;
             public POINT ptMaxTrackSize;
         }
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT
         {
@@ -124,7 +130,7 @@ namespace PsUi
             public int Right;
             public int Bottom;
         }
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct MONITORINFO
         {
@@ -140,13 +146,13 @@ namespace PsUi
             try
             {
                 if (hwnd == IntPtr.Zero) return SystemParameters.WorkArea;
-                
+
                 var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                 if (monitor == IntPtr.Zero) return SystemParameters.WorkArea;
-                
+
                 var info = new MONITORINFO();
                 info.cbSize = Marshal.SizeOf(info);
-                
+
                 if (GetMonitorInfo(monitor, ref info))
                 {
                     var work = info.rcWork;
@@ -154,7 +160,7 @@ namespace PsUi
                 }
             }
             catch { /* fall through to default */ }
-            
+
             return SystemParameters.WorkArea;
         }
 
@@ -166,12 +172,12 @@ namespace PsUi
             {
                 var helper = new WindowInteropHelper(window);
                 IntPtr hWnd = helper.EnsureHandle();
-                
+
                 // Set AppUserModelID via IPropertyStore
                 Guid IID_IPropertyStore = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
                 object propStoreObj;
                 int hr = SHGetPropertyStoreForWindow(hWnd, ref IID_IPropertyStore, out propStoreObj);
-                
+
                 if (hr == 0 && propStoreObj != null)
                 {
                     // Reflection avoids defining the full COM interface
@@ -186,7 +192,7 @@ namespace PsUi
                     }
                     Marshal.ReleaseComObject(propStoreObj);
                 }
-                
+
                 System.Diagnostics.Debug.WriteLine("SetWindowAppId: " + appId + " hr=" + hr);
             }
             catch (Exception ex)
@@ -194,7 +200,25 @@ namespace PsUi
                 System.Diagnostics.Debug.WriteLine("SetWindowAppId failed: " + ex.Message);
             }
         }
-        
+
+        // IID_ITaskbarList, and CLSID_TaskbarList below it.
+        [ComImport]
+        [Guid("56FDF342-FD6D-11D0-958A-006097C9A090")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface ITaskbarList
+        {
+            void HrInit();
+            void AddTab(IntPtr hwnd);
+            void DeleteTab(IntPtr hwnd);
+            void ActivateTab(IntPtr hwnd);
+            void SetActiveAlt(IntPtr hwnd);
+        }
+
+        [ComImport]
+        [Guid("56FDF344-FD6D-11D0-958A-006097C9A090")]
+        [ClassInterface(ClassInterfaceType.None)]
+        private class TaskbarListCoClass { }
+
         [ComImport]
         [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -206,14 +230,14 @@ namespace PsUi
             int SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
             int Commit();
         }
-        
+
         [StructLayout(LayoutKind.Sequential, Pack = 4)]
         private struct PROPERTYKEY
         {
             public Guid fmtid;
             public uint pid;
         }
-        
+
         [StructLayout(LayoutKind.Sequential)]
         private struct PROPVARIANT
         {
@@ -234,22 +258,22 @@ namespace PsUi
             // Dark mode affects the system min/max/close button icons
             bool isDark = IsColorDark(backgroundColor);
             int useDarkMode = isDark ? 1 : 0;
-            
+
             // Apply Immersive Dark Mode (Works on Win10 1809+ and Win11)
             DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDarkMode, sizeof(int));
 
             // Custom title bar colors (Win11 only)
-            if (Environment.OSVersion.Version.Build >= 22000) 
+            if (Environment.OSVersion.Version.Build >= 22000)
             {
                 // Convert Color to DWM COLORREF format (0x00BBGGRR)
                 int bg = (backgroundColor.B << 16) | (backgroundColor.G << 8) | backgroundColor.R;
                 int fg = (foregroundColor.B << 16) | (foregroundColor.G << 8) | foregroundColor.R;
-                
+
                 DwmSetWindowAttribute(hWnd, DWMWA_CAPTION_COLOR, ref bg, sizeof(int));
                 DwmSetWindowAttribute(hWnd, DWMWA_TEXT_COLOR, ref fg, sizeof(int));
             }
         }
-        
+
         private static bool IsColorDark(Color color)
         {
             // Standard luminance formula
@@ -257,17 +281,17 @@ namespace PsUi
             return luminance < 0.5;
         }
 
-        // Force taskbar to use the custom icon instead of the PowerShell default
+        // Force the taskbar onto the custom icon instead of the PS default
         public static void SetTaskbarIcon(Window window, BitmapSource iconSource)
         {
             if (iconSource == null) return;
-            
+
             try
             {
                 var helper = new WindowInteropHelper(window);
                 IntPtr hWnd = helper.EnsureHandle();
                 if (hWnd == IntPtr.Zero) return;
-                
+
                 // Destroy previous icon handles if this is a repeated call (prevents handle leak)
                 IntPtr[] previousHandles;
                 if (_windowIconHandles.TryGetValue(hWnd, out previousHandles))
@@ -277,19 +301,19 @@ namespace PsUi
                         if (handle != IntPtr.Zero) DestroyIcon(handle);
                     }
                 }
-                
+
                 // Create HICON from BitmapSource using GDI interop
                 // Scale to standard icon sizes: small (16x16) and big (32x32)
                 var smallIcon = CreateHIcon(iconSource, 16, 16);
                 var bigIcon = CreateHIcon(iconSource, 32, 32);
-                
+
                 if (smallIcon != IntPtr.Zero)
                 {
                     SendMessage(hWnd, WM_SETICON, (IntPtr)ICON_SMALL, smallIcon);
                     // ICON_SMALL2 is used by Windows 10/11 for the titlebar icon
                     SendMessage(hWnd, WM_SETICON, (IntPtr)ICON_SMALL2, smallIcon);
                 }
-                
+
                 if (bigIcon != IntPtr.Zero)
                 {
                     SendMessage(hWnd, WM_SETICON, (IntPtr)ICON_BIG, bigIcon);
@@ -298,15 +322,20 @@ namespace PsUi
                 // Kick the non client area into refreshing. WM_SETICON updates the cached HICON but the titlebar doesn't redraw on its own at runtime. SWP_FRAMECHANGED is the standard workaround.
                 SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-                
+
+                // That reaches the titlebar and Alt+Tab and stops there.
+                // The shell caches the icon it read when it built the button under the window's AppUserModelID.
+                // Without the rebuild below, a theme switch leaves the old icon sitting in the taskbar.
+                if (window.ShowInTaskbar) { ScheduleTaskbarRefresh(window, hWnd); }
+
                 // Track handles for cleanup on window close or repeated calls
                 var iconHandles = new IntPtr[] { smallIcon, bigIcon };
-                
+
                 // Register cleanup handler once (only on first call for this window).
                 // If the process crashes without firing Closed, 2 icon handles leak. Big deal - that's 64 bytes per window. A weak ref + finalizer pattern isn't worth the hassle.
                 bool isFirstCall = previousHandles == null;
                 _windowIconHandles[hWnd] = iconHandles;
-                
+
                 if (isFirstCall)
                 {
                     window.Closed += (sender, args) =>
@@ -324,7 +353,7 @@ namespace PsUi
                         }
                     };
                 }
-                
+
                 System.Diagnostics.Debug.WriteLine("SetTaskbarIcon: small=" + smallIcon + ", big=" + bigIcon);
             }
             catch (Exception ex)
@@ -333,11 +362,51 @@ namespace PsUi
             }
         }
 
+        // One per thread, since every PsUi window owns an STA thread of its own and a COM object made on one cannot be called from another.
+        [ThreadStatic]
+        private static ITaskbarList _taskbarList;
+
+        // A theme switch sets the icon twice while it restyles, and two rebuilds can drop the window's button, so every call before the thread goes idle shares one
+        private static void ScheduleTaskbarRefresh(Window window, IntPtr hWnd)
+        {
+            if (!IsWindowVisible(hWnd) || !_refreshPending.TryAdd(hWnd, true)) { return; }
+            window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(delegate
+            {
+                bool pending;
+                _refreshPending.TryRemove(hWnd, out pending);
+                RefreshTaskbarButton(hWnd);
+            }));
+        }
+
+        // The shell reads the window icon once, when it builds the button, so dropping the tab and adding it back gets a fresh read.
+        // Off screen there is no button to rebuild yet, and AddTab would conjure one early.
+        private static void RefreshTaskbarButton(IntPtr hWnd)
+        {
+            try
+            {
+                if (hWnd == IntPtr.Zero || !IsWindowVisible(hWnd)) { return; }
+
+                if (_taskbarList == null)
+                {
+                    ITaskbarList created = (ITaskbarList)new TaskbarListCoClass();
+                    created.HrInit();
+                    _taskbarList = created;
+                }
+
+                _taskbarList.DeleteTab(hWnd);
+                _taskbarList.AddTab(hWnd);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("RefreshTaskbarButton failed: " + ex.Message);
+            }
+        }
+
         // Small badge on taskbar icon (for status indication)
         public static void SetTaskbarOverlay(Window window, ImageSource overlayIcon, string description = null)
         {
             if (window == null) return;
-            
+
             try
             {
                 // Create TaskbarItemInfo on first use
@@ -345,10 +414,10 @@ namespace PsUi
                 {
                     window.TaskbarItemInfo = new System.Windows.Shell.TaskbarItemInfo();
                 }
-                
+
                 window.TaskbarItemInfo.Overlay = overlayIcon;
                 window.TaskbarItemInfo.Description = description ?? string.Empty;
-                
+
                 System.Diagnostics.Debug.WriteLine("SetTaskbarOverlay: " + (overlayIcon != null ? "set" : "cleared"));
             }
             catch (Exception ex)
@@ -360,23 +429,23 @@ namespace PsUi
         private static IntPtr CreateHIcon(BitmapSource source, int width, int height)
         {
             if (source == null) return IntPtr.Zero;
-            
+
             try
             {
                 // Scale to target size
-                var scaled = new TransformedBitmap(source, 
+                var scaled = new TransformedBitmap(source,
                     new ScaleTransform(
-                        (double)width / source.PixelWidth, 
+                        (double)width / source.PixelWidth,
                         (double)height / source.PixelHeight));
-                
+
                 // Convert to Pbgra32 format for GDI compatibility
                 var formatted = new FormatConvertedBitmap(scaled, PixelFormats.Pbgra32, null, 0);
-                
+
                 // Get pixels into a writable bitmap
                 int stride = width * 4;
                 byte[] pixels = new byte[height * stride];
                 formatted.CopyPixels(pixels, stride, 0);
-                
+
                 // Create GDI bitmap from pixels
                 var bmp = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 IntPtr hIcon;
@@ -386,10 +455,10 @@ namespace PsUi
                         new System.Drawing.Rectangle(0, 0, width, height),
                         System.Drawing.Imaging.ImageLockMode.WriteOnly,
                         System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                    
+
                     Marshal.Copy(pixels, 0, bmpData.Scan0, pixels.Length);
                     bmp.UnlockBits(bmpData);
-                    
+
                     // Get HICON from bitmap
                     hIcon = bmp.GetHicon();
                 }
@@ -412,7 +481,7 @@ namespace PsUi
             var helper = new WindowInteropHelper(window);
             helper.EnsureHandle();
             IntPtr hwnd = helper.Handle;
-            
+
             // Store minimum size for this window handle
             var minSize = new POINT
             {
@@ -420,23 +489,23 @@ namespace PsUi
                 y = (int)window.MinHeight
             };
             _windowMinSizes[hwnd] = minSize;
-            
+
             // Clean up when window closes
             window.Closed += (s, e) => { POINT unused; _windowMinSizes.TryRemove(hwnd, out unused); };
-            
+
             HwndSource source = HwndSource.FromHwnd(hwnd);
             if (source != null)
             {
                 source.AddHook(BorderlessMaximizeHook);
             }
         }
-        
+
         private static IntPtr BorderlessMaximizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg == WM_GETMINMAXINFO)
             {
                 MINMAXINFO mmi = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO));
-                
+
                 // Enforce minimum size if registered
                 POINT minSize;
                 if (_windowMinSizes.TryGetValue(hwnd, out minSize))
@@ -444,27 +513,27 @@ namespace PsUi
                     mmi.ptMinTrackSize.x = minSize.x;
                     mmi.ptMinTrackSize.y = minSize.y;
                 }
-                
+
                 // Get the monitor this window is on for maximize constraints
                 IntPtr monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                 if (monitor != IntPtr.Zero)
                 {
                     MONITORINFO monitorInfo = new MONITORINFO();
                     monitorInfo.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-                    
+
                     if (GetMonitorInfo(monitor, ref monitorInfo))
                     {
                         // Get the work area (excludes taskbar)
                         RECT work = monitorInfo.rcWork;
                         RECT full = monitorInfo.rcMonitor;
-                        
+
                         mmi.ptMaxPosition.x = work.Left - full.Left;
                         mmi.ptMaxPosition.y = work.Top - full.Top;
                         mmi.ptMaxSize.x = work.Right - work.Left;
                         mmi.ptMaxSize.y = work.Bottom - work.Top;
                     }
                 }
-                
+
                 Marshal.StructureToPtr(mmi, lParam, true);
                 handled = true;
             }
@@ -515,15 +584,15 @@ namespace PsUi
         public static void CenterOnParent(Window dialog, Window parent)
         {
             if (dialog == null || parent == null) return;
-            
+
             // Set to manual positioning
             dialog.WindowStartupLocation = WindowStartupLocation.Manual;
-            
+
             // Get parent window bounds (may be on different thread)
             double parentLeft = 0, parentTop = 0, parentWidth = 0, parentHeight = 0;
             bool parentIsMaximized = false;
             bool gotBounds = false;
-            
+
             try
             {
                 if (parent.Dispatcher.CheckAccess())
@@ -553,17 +622,17 @@ namespace PsUi
                 // Parent UI thread unavailable, fall back to screen center
                 gotBounds = false;
             }
-            
+
             if (gotBounds && parentWidth > 0 && parentHeight > 0)
             {
                 // Calculate center position relative to parent
                 double dialogWidth = dialog.Width;
                 double dialogHeight = dialog.Height;
-                
+
                 // Handle NaN (auto-sized dialogs) - use reasonable defaults
                 if (double.IsNaN(dialogWidth)) dialogWidth = 400;
                 if (double.IsNaN(dialogHeight)) dialogHeight = 200;
-                
+
                 // When parent is maximized, its Left/Top are often negative due to window chrome extending beyond the screen edge. Use the work area instead.
                 if (parentIsMaximized)
                 {
@@ -573,45 +642,45 @@ namespace PsUi
                     parentTop = workArea.Top;
                     parentWidth = workArea.Width;
                     parentHeight = workArea.Height;
-                    
+
                     // For maximized parent, there's no visible shadow margin, so center directly but the dialog still has its own shadow margin
                     const double dialogShadowMargin = 16.0;
                     double visibleDialogWidth = dialogWidth - (dialogShadowMargin * 2);
                     double visibleDialogHeight = dialogHeight - (dialogShadowMargin * 2);
-                    
+
                     // Center the visible dialog content on the work area
                     double visibleDialogLeft = parentLeft + (parentWidth - visibleDialogWidth) / 2;
                     double visibleDialogTop = parentTop + (parentHeight - visibleDialogHeight) / 2;
-                    
+
                     dialog.Left = visibleDialogLeft - dialogShadowMargin;
                     dialog.Top = visibleDialogTop - dialogShadowMargin;
                 }
                 else
                 {
-                    // Normal window: both parent and dialog have 16px shadow margins
-                    // We need to center the visible content areas, not the outer window bounds.
+                    // On a normal window both parent and dialog have 16px shadow margins
+                    // Center the visible content areas, not the outer window bounds.
                     const double shadowMargin = 16.0;
                     double visibleParentWidth = parentWidth - (shadowMargin * 2);
                     double visibleParentHeight = parentHeight - (shadowMargin * 2);
                     double visibleDialogWidth = dialogWidth - (shadowMargin * 2);
                     double visibleDialogHeight = dialogHeight - (shadowMargin * 2);
-                    
+
                     double visibleParentLeft = parentLeft + shadowMargin;
                     double visibleParentTop = parentTop + shadowMargin;
-                    
+
                     double visibleDialogLeft = visibleParentLeft + (visibleParentWidth - visibleDialogWidth) / 2;
                     double visibleDialogTop = visibleParentTop + (visibleParentHeight - visibleDialogHeight) / 2;
-                    
+
                     dialog.Left = visibleDialogLeft - shadowMargin;
                     dialog.Top = visibleDialogTop - shadowMargin;
                 }
-                
+
                 // Clamp to screen bounds
                 double screenWidth = SystemParameters.VirtualScreenWidth;
                 double screenHeight = SystemParameters.VirtualScreenHeight;
                 double screenLeft = SystemParameters.VirtualScreenLeft;
                 double screenTop = SystemParameters.VirtualScreenTop;
-                
+
                 if (dialog.Left < screenLeft) dialog.Left = screenLeft;
                 if (dialog.Top < screenTop) dialog.Top = screenTop;
                 if (dialog.Left + dialogWidth > screenLeft + screenWidth)
@@ -631,54 +700,54 @@ namespace PsUi
         public static void FlashTaskbar(Window window)
         {
             if (window == null) return;
-            
+
             try
             {
                 var helper = new WindowInteropHelper(window);
                 var hwnd = helper.Handle;
                 if (hwnd == IntPtr.Zero) return;
-                
+
                 var fi = new FLASHWINFO();
                 fi.cbSize = (uint)Marshal.SizeOf(fi);
                 fi.hwnd = hwnd;
                 fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;  // Flash until foreground
                 fi.uCount = uint.MaxValue;  // Keep flashing
                 fi.dwTimeout = 0;  // Use default cursor blink rate
-                
+
                 FlashWindowEx(ref fi);
             }
             catch { /* ignore - flash is optional */ }
         }
-        
+
         // Stop flashing the taskbar button
         public static void StopFlashTaskbar(Window window)
         {
             if (window == null) return;
-            
+
             try
             {
                 var helper = new WindowInteropHelper(window);
                 var hwnd = helper.Handle;
                 if (hwnd == IntPtr.Zero) return;
-                
+
                 var fi = new FLASHWINFO();
                 fi.cbSize = (uint)Marshal.SizeOf(fi);
                 fi.hwnd = hwnd;
                 fi.dwFlags = FLASHW_STOP;
                 fi.uCount = 0;
                 fi.dwTimeout = 0;
-                
+
                 FlashWindowEx(ref fi);
             }
             catch { /* ignore */ }
         }
-        
+
         // Set the owner window via Win32 - makes child stay above owner without being system-wide Topmost.
         // This works across threads unlike WPF's Owner property.
         public static void SetOwnerWindow(IntPtr childHwnd, IntPtr ownerHwnd)
         {
             if (childHwnd == IntPtr.Zero || ownerHwnd == IntPtr.Zero) return;
-            
+
             try
             {
                 // Use SetWindowLong on 32-bit, SetWindowLongPtr on 64-bit

@@ -1,0 +1,52 @@
+name: wiki-sync
+
+# Syncs one way: docs/wiki in this repo is the source of truth, the GitHub Wiki is the rendered copy.
+# Direct wiki edits get overwritten on the next run. PR docs/wiki instead.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/wiki/**'
+      - 'docs/images/**'
+      - 'docs/pages/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync docs/wiki to the wiki repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki
+          rsync -a --delete --exclude .git docs/wiki/ wiki/
+          find wiki -name '*.md' -exec sed -i -E 's#\.\./\.\./\.\./pages/[^/]+/([^/]+)/#images/\1/#g; s#\.\./images/#images/#g' {} +
+          mkdir -p wiki/images
+          rsync -a docs/images/ wiki/images/
+          # Screenshots from docs/pages ship as images/<Function>/exampleN.png (or .gif). The --delete rsync above wipes the previous run's images/ each time so this step must stay last.
+          shopt -s nullglob
+          for f in docs/pages/*/*/example*.png docs/pages/*/*/example*.gif docs/pages/*/*/overview.png; do
+            d="wiki/images/$(basename "$(dirname "$f")")"
+            mkdir -p "$d"
+            cp "$f" "$d/"
+          done
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Sync from docs/wiki @ ${GITHUB_SHA::7}"
+            git push
+          else
+            echo "Wiki already up to date."
+          fi

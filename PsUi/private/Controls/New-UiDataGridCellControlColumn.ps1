@@ -1,4 +1,4 @@
-function New-UiDataGridCellControlColumn {
+﻿function New-UiDataGridCellControlColumn {
     <#
     .SYNOPSIS
         Builds a DataGridTemplateColumn hosting a Button, Toggle (CheckBox), or Link per cell.
@@ -37,6 +37,11 @@ function New-UiDataGridCellControlColumn {
     if ($Column.MinWidth) { $col.MinWidth = [double]$Column.MinWidth }
 
     $tpl = [System.Windows.DataTemplate]::new()
+
+    $gridSession   = Get-UiSession
+    $gridSessionId = if ($gridSession) { $gridSession.SessionId } else { $null }
+    $pushSession   = ${function:Push-UiSession}
+    $popSession    = ${function:Pop-UiSession}
 
     switch ($CellType) {
 
@@ -95,7 +100,7 @@ function New-UiDataGridCellControlColumn {
 
             # Invoke-UiAction handles execution semantics ($_ binding, refresh, host routing).
             $cellAction = $Column.Action
-            $cellSync   = if ($Column.Contains('Sync')) { [bool]$Column['Sync'] } else { $false }
+            $cellNoAsync = Get-UiNoAsyncFlag -Definition $Column
             $clickHandler = {
                 param($sender, $eventArgs)
                 $row = $sender.DataContext
@@ -107,7 +112,7 @@ function New-UiDataGridCellControlColumn {
                     $grid = [System.Windows.Media.VisualTreeHelper]::GetParent($grid)
                 }
 
-                Invoke-UiAction -Action $cellAction -Item $row -RefreshTarget $grid -Sync:$cellSync
+                Invoke-UiAction -Action $cellAction -Item $row -RefreshTarget $grid -NoAsync:$cellNoAsync -SessionId $gridSessionId
             }.GetNewClosure()
 
             $factory.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]$clickHandler)
@@ -182,8 +187,10 @@ function New-UiDataGridCellControlColumn {
                 $vars = [System.Collections.Generic.List[psvariable]]::new()
                 $vars.Add([psvariable]::new('_', $row))
                 $vars.Add([psvariable]::new('row', $row))
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { [void]$onChange.InvokeWithContext($null, $vars, @($row, $newValue)) }
                 catch { Write-Debug "Toggle OnChange failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure()
 
             $factory.AddHandler([System.Windows.Controls.CheckBox]::ClickEvent, [System.Windows.RoutedEventHandler]$changeHandler)
@@ -237,7 +244,7 @@ function New-UiDataGridCellControlColumn {
             $linkUrl    = if ($Column.Url) { [string]$Column.Url } else { $null }
             $linkAction = $Column.Action
             $allowFile  = [bool]$Column.AllowFileScheme
-            $linkSync   = if ($Column.Contains('Sync')) { [bool]$Column['Sync'] } else { $false }
+            $linkNoAsync = Get-UiNoAsyncFlag -Definition $Column
 
             $tbClick = {
                 param($sender, $eventArgs)
@@ -251,7 +258,7 @@ function New-UiDataGridCellControlColumn {
                         $grid = [System.Windows.Media.VisualTreeHelper]::GetParent($grid)
                     }
 
-                    Invoke-UiAction -Action $linkAction -Item $row -RefreshTarget $grid -Sync:$linkSync
+                    Invoke-UiAction -Action $linkAction -Item $row -RefreshTarget $grid -NoAsync:$linkNoAsync -SessionId $gridSessionId
                     return
                 }
                 if (!$linkUrl) { return }

@@ -1,0 +1,6 @@
+# Compare the pages Build-Docs.ps1 generates under docs/wiki. Checkout must not rewrite line endings on any autocrlf setting or every generated page will fail the docs-check diff.
+# The hand written pages share the folder, so everything stays -text.
+docs/wiki/** -text
+
+# Same deal for the binary cmdlet's MAML
+PsUi/en-US/** -text

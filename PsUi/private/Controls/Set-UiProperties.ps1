@@ -1,8 +1,7 @@
 function Set-UiProperties {
     <#
     .SYNOPSIS
-        Applies custom WPF properties to a control from a hashtable.
-        Uses ConvertTo-WpfValue to translate common types into WPF types.
+        Applies a hashtable of WPF properties to a control, converting the common types in the process.
     #>
     [CmdletBinding()]
     param(
@@ -13,6 +12,20 @@ function Set-UiProperties {
         [hashtable]$Properties
     )
     
+    # Most controls keep their own status in Tag (a click action context or a theme brush key) so setting it elesewhere silently hamstrings the control.
+    # Only a Tag already holding something is defended, so a Tag set on a control that has none already set will land. New-UiButton, New-UiProgress and New-UiStatusBar remove the key before they get here and never reach this.
+    if ($Properties.ContainsKey('Tag') -and $null -ne $Control.Tag) {
+        Write-Warning "[Set-UiProperties] Tag is reserved on $($Control.GetType().Name) and already holds the control's own state. Ignoring."
+        $Properties = @{} + $Properties
+        [void]$Properties.Remove('Tag')
+    }
+
+    # Set-UiRowAlignment leaves a control where the user put it
+    $placesItself = $Properties.ContainsKey('VerticalAlignment') -or $Properties.ContainsKey('Margin')
+    if ($Control -is [System.Windows.FrameworkElement] -and $placesItself) {
+        $Control.Resources['__PsUiPlacedByUser'] = $true
+    }
+
     foreach ($propName in $Properties.Keys) {
         try {
             $propValue = $Properties[$propName]
@@ -33,7 +46,8 @@ function Set-UiProperties {
                 )
                 
                 foreach ($ns in $namespaces) {
-                    $ownerType = [Type]::GetType("$ns.$ownerTypeName")
+                    # -as [type] resolves through PowerShell, which scans loaded assemblies. [Type]::GetType wants an assembly-qualified name and returns $null for every WPF type from here.
+                    $ownerType = "$ns.$ownerTypeName" -as [type]
                     if ($ownerType) { break }
                 }
                 
@@ -51,7 +65,15 @@ function Set-UiProperties {
                     continue
                 }
                 
-                $Control.SetValue($dpField.GetValue($null), $propValue)
+                $dp = $dpField.GetValue($null)
+
+                # Attached values convert like instance properties do. 'DockPanel.Dock' = 'Left' arrives as a string and SetValue wants the enum.
+                if ($null -ne $propValue -and $propValue -isnot $dp.PropertyType) {
+                    $propValue = ConvertTo-WpfValue -Value $propValue -TargetType $dp.PropertyType -PropertyName $propName
+                    if ($null -eq $propValue) { continue }
+                }
+
+                $Control.SetValue($dp, $propValue)
                 Write-Verbose "[Set-UiProperties] Set attached '$propName' = '$propValue'"
             }
             else {

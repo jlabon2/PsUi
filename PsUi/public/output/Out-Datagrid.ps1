@@ -1,14 +1,15 @@
 function Out-Datagrid {
     <#
     .SYNOPSIS
-        Like Out-GridView, but you can read it and theme it.
+        A sortable and filterable data grid.
     .DESCRIPTION
         Pipe objects in and receive a sortable filterable grid. Add -PassThru and you get the
         selected rows back on OK. Closing the window or clicking Cancel returns nothing.
 
-        Filter, sort, copy, export to CSV, and a column picker are in the toolbar.
+        Filter, copy, export to CSV, and a column picker are in the toolbar. Sort by
+        clicking column headers.
 
-        Opens the window in place when the caller can host one directly (ISE, PsUi -Sync
+        Opens the window in place when the calling session can host one directly (ISE, PsUi -NoAsync
         actions). From a console session that can't, spins up a dedicated UI host and shows
         the window there. Either way the call blocks until you close it.
 
@@ -53,7 +54,7 @@ function Out-Datagrid {
     .EXAMPLE
         Get-Service | Out-Datagrid -PassThru | Restart-Service
     .EXAMPLE
-        Get-ChildItem | Out-Datagrid -PassThru -OutputMode Single
+        Get-ChildItem $env:WINDIR\System32 -Filter *.dll | Out-Datagrid -PassThru -OutputMode Single
     .EXAMPLE
         $rowBg   = { if ($_.Status -eq 'Stopped') { '#33FF6B6B' } }
         $dgSplat = @{ RowBackground = $rowBg; DefaultSort = 'Status' }
@@ -188,11 +189,14 @@ function Out-Datagrid {
                     if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
                 }
                 if ($null -ne $sessionId -and $sessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::DisposeSession($sessionId)  }
-                if ($null -ne $priorSessionId -and $priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
-                
-                if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
-                else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
-                
+
+                if ($null -ne $priorSessionId -and ($priorSessionId -eq [Guid]::Empty -or [PsUi.SessionManager]::GetSession($priorSessionId))) {
+                    if ($priorSessionId -ne [Guid]::Empty) { [PsUi.SessionManager]::SetCurrentSession($priorSessionId) }
+
+                    if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+                    else { Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue }
+                }
+
                 if ($iconFontSnap) {
                     [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
                     $iconFontSnap = $null
@@ -226,8 +230,7 @@ function Out-Datagrid {
             Set-UIResources -Window $window -Colors $colors
 
             try {
-                $appId = "PsUi.OutDatagrid." + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-                [PsUi.WindowManager]::SetWindowAppId($window, $appId)
+                [PsUi.WindowManager]::SetWindowAppId($window, 'PsUi.OutDatagrid')
             }
             catch { Write-Debug "SetWindowAppId failed: $_" }
 
@@ -353,13 +356,19 @@ function Out-Datagrid {
             if ($context.NoSafeWrap)    { $gridArgs.NoSafeWrap    = $true }
 
             New-UiDataGrid @gridArgs
+            $gridRef = $session.GetControl('picked')
+
+            # Left at New-UiDataGrid's 300px cap the grid floats centered in the star row, and -Fill doesnt help since it looks for a page ScrollViewer this window doesn't have
+            $gridRef.MaxHeight = [double]::PositiveInfinity
+
+            # The 600px floor pushes the scrollbar off a window under 650 wide
+            $gridRef.MinWidth = 0
 
             $session.CurrentParent = $buttonBar
 
-            # Direct refs for the click actions - Get-UiSession comes back null in WPF click scopes (and isn't resolvable at all on the inline path), which made (Get-UiSession).Window.Close() NullRef at OK time.
+            # Get-UiSession comes back null in WPF click scopes, so the click actions take direct refs.
             $winRef    = $window
             $resultRef = $context.SharedResult
-            $gridRef   = $session.GetControl('picked')
 
             if ($context.PassThru) {
                 New-UiButton -Text 'OK' -NoAsync -Action {
@@ -397,17 +406,21 @@ function Out-Datagrid {
                 if ($callerSessionState) { $ExecutionContext.InvokeCommand.InvokeScript($callerSessionState, $fnRemover, @($fnName)) }
             }
             [PsUi.SessionManager]::DisposeSession($sessionId)
-            if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
-            
-            if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
-            else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
-            
+
+            # The grid's opener can close first and move the thread on
+            if ($priorSessionId -eq [Guid]::Empty -or [PsUi.SessionManager]::GetSession($priorSessionId)) {
+                if ($priorSessionId -ne [Guid]::Empty) {  [PsUi.SessionManager]::SetCurrentSession($priorSessionId)   }
+
+                if ($null -ne $priorGlobalId) {  $Global:__PsUiSessionId = $priorGlobalId  }
+                else {  Remove-Variable -Name __PsUiSessionId -Scope Global -ErrorAction SilentlyContinue  }
+            }
+
             if ($iconFontSnap) {
                 [PsUi.ModuleContext]::RestoreIconFontState($iconFontSnap)
                 $iconFontSnap = $null
             }
 
-            # Emit the final result after cleanup. The MTA path reads this through $ps.Invoke() output. Cross runspace AddArgument marshaling of $context.SharedResult is within the same process so the hashtable mutation usually round-trips, but emit is the contract.
+            # Emit the final result after cleanup. The MTA path reads this through $ps.Invoke() output. AddArgument passes $context.SharedResult in the same process so the hashtable mutation usually round-trips, but the emit is the guarantee.
             [PSCustomObject]@{
                 OK        = [bool]$context.SharedResult.OK
                 Selection = $context.SharedResult.Selection
@@ -422,7 +435,7 @@ function Out-Datagrid {
                 $emitted = & $buildAndShow $ctx
             }
             else {
-                # MTA host (typically pwsh.exe console). Window construction requires STA - spawn one. No parent UI thread to block in this case so the original cross thread theme bug doesn't apply.
+                # An MTA host (eg a ps7 console) gets an STA thread spawned for the window. With no parent UI thread to block, the cross thread theme bug doesn't apply.
                 $modulePath = (Get-Module -Name PsUi).Path
                 if (!$modulePath) {
                     Write-Error "Out-Datagrid: PsUi module path not resolvable; can't spawn STA runspace."

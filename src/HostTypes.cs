@@ -160,6 +160,9 @@ namespace PsUi
         public ConsoleColor? BackgroundColor { get; set; }
         public bool NoNewLine { get; set; }
         
+        // "Warning", "Error" or "Verbose" on a stream marker in the host queue, null on Write-Host output
+        public string Stream { get; set; }
+
         public HostOutputRecord(string message, ConsoleColor? foregroundColor = null, ConsoleColor? backgroundColor = null, bool noNewLine = false)
         {
             Message = message;

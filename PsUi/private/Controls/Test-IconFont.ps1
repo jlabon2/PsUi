@@ -1,7 +1,7 @@
 function Test-IconFont {
     <#
     .SYNOPSIS
-        Returns $true if the FontFamily references a known icon font. Matches both bare names ("Segoe MDL2 Assets") and the fallback chain ("Segoe Fluent Icons, Segoe MDL2 Assets").
+        Returns $true if the FontFamily references a known icon font. Matches both plain names ("Segoe MDL2 Assets") and the fallback chain ("Segoe Fluent Icons, Segoe MDL2 Assets").
     #>
     param([System.Windows.Media.FontFamily]$Font)
 

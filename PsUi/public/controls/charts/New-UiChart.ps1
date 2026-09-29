@@ -1,0 +1,275 @@
+function New-UiChart {
+    <#
+    .SYNOPSIS
+        Creates a bar, line, or pie chart that stretches to fill its parent.
+    .DESCRIPTION
+        Renders bar, line, or pie charts using native WPF canvas drawing.
+        By default, charts stretch to fill the width of their parent container
+        and resize dynamically when the window is resized. When placed in a
+        constrained parent (e.g. a Grid cell with star sizing), the chart
+        scales to fit both width and height proportionally.
+
+        Charts registered with -Variable can be updated from button actions
+        using Update-UiChart, or by assigning new data to the variable directly
+        (the chart catches up automatically on dehydration).
+
+        Omit -Data to create an empty chart with a placeholder, ready to be
+        filled by a button action later.
+
+        Specify -Width and -Height to opt into fixed display size instead.
+        Colors are derived from the active theme's accent and semantic colors.
+    .PARAMETER Type
+        Chart type: Bar, Line, or Pie.
+    .PARAMETER Data
+        Chart data. Omit for an empty placeholder chart. Supported formats:
+        - Ordered hashtable: [ordered]@{ "Label" = Value; ... }
+        - Array of hashtables: @(@{Label="x"; Value=1}, ...)
+        - Pipeline objects with configurable property names
+    .PARAMETER LabelProperty
+        Property name to use as labels when Data contains objects. When omitted, tries
+        "Label", "Name", then "Key".
+    .PARAMETER ValueProperty
+        Property name to use as values when Data contains objects. When omitted, tries
+        "Value", "Count", "Sum", then "Total".
+    .PARAMETER Title
+        Optional chart title displayed above the chart.
+    .PARAMETER XAxisLabel
+        Label for the X-axis (bar and line charts only).
+    .PARAMETER YAxisLabel
+        Label for the Y-axis (bar and line charts only).
+    .PARAMETER Width
+        Fixed display width in pixels. When set, disables auto-stretch.
+    .PARAMETER Height
+        Fixed display height in pixels. When set, disables auto-stretch.
+    .PARAMETER ShowLegend
+        Show legend for pie charts. Default true for pie, ignored for others.
+    .PARAMETER ShowValues
+        Display values on bars, line points, or pie slices.
+    .PARAMETER Variable
+        Variable name to register the chart for later access.
+    .EXAMPLE
+        # Auto sized chart. It stretches to fill available width.
+        New-UiChart -Type Bar -Data ([ordered]@{ "C:" = 120; "D:" = 450; "E:" = 80 }) -Title "Disk Space"
+    .EXAMPLE
+        # Fixed size, from explicit dimensions.
+        New-UiChart -Type Pie -Data ([ordered]@{ "A" = 60; "B" = 40 }) -Width 300 -Height 250
+    .EXAMPLE
+        # Pipeline data with custom properties
+        $vendors = Get-Process | Where-Object Company | Group-Object Company | Sort-Object Count -Descending
+        $vendors[0..4] | New-UiChart -Type Pie -LabelProperty Name -ValueProperty Count
+    .EXAMPLE
+        # Empty chart updated by a button action
+        New-UiChart -Type Bar -Variable 'diskChart' -Title 'Disk Usage'
+        New-UiButton -Text 'Scan' -NoOutput -Action {
+            $disks = [ordered]@{}
+            foreach ($disk in Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3") {
+                $disks[$disk.DeviceID] = [math]::Round($disk.FreeSpace / 1GB)
+            }
+            Update-UiChart -Variable 'diskChart' -Data $disks
+        }
+    .EXAMPLE
+        # Line charts carry a trend over time
+        New-UiChart -Type Line -Title 'Commits per month' -Data ([ordered]@{
+            Mar = 14; Apr = 31; May = 27; Jun = 40; Jul = 22; Aug = 35
+        })
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Bar', 'Line', 'Pie')]
+        [string]$Type,
+
+        [Parameter(ValueFromPipeline)]
+        $Data,
+
+        [string]$LabelProperty,
+
+        [string]$ValueProperty,
+
+        [string]$Title,
+
+        [string]$XAxisLabel,
+
+        [string]$YAxisLabel,
+
+        [int]$Width,
+
+        [int]$Height,
+
+        [switch]$ShowLegend,
+
+        [switch]$ShowValues,
+
+        [string]$Variable
+    )
+
+    begin {
+        $collectedData = [System.Collections.Generic.List[object]]::new()
+    }
+
+    process {
+        if ($null -eq $Data) { return }
+
+        # Collect pipeline input
+        if ($Data -is [System.Collections.IDictionary]) {
+            foreach ($key in $Data.Keys) {
+                $collectedData.Add(@{ Label = $key; Value = $Data[$key] })
+            }
+        }
+        elseif ($Data -is [System.Collections.IList]) {
+            foreach ($item in $Data) { $collectedData.Add($item) }
+        }
+        else {
+            $collectedData.Add($Data)
+        }
+    }
+
+    end {
+        $session = Assert-UiSession -CallerName 'New-UiChart'
+        $parent  = $session.CurrentParent
+
+        # Fixed mode means the dimensions came in explicitly. Auto mode stretches to fill the parent.
+        $fixedSize = $PSBoundParameters.ContainsKey('Width') -or $PSBoundParameters.ContainsKey('Height')
+
+        # Detect a Grid with star rows around this (a FillParent dashboard, for example).
+        # Star grids constrain cell height, so a squarer canvas fills cells better.
+        # Standalone charts use a wider canvas to prevent excessive vertical growth when the Viewbox scales uniformly to fill parent width.
+        $inStarGrid = $false
+        if (!$fixedSize -and $parent -is [System.Windows.Controls.Grid]) {
+            foreach ($rowDef in $parent.RowDefinitions) {
+                if ($rowDef.Height.IsStar) { $inStarGrid = $true; break }
+            }
+        }
+
+        # Canvas internal resolution (Viewbox scales this to the display size).
+        # Wider canvases = shorter charts at full width, better for scrollable content.
+        # Squarer canvases = fill dashboard cells more evenly.
+        if ($inStarGrid) {
+            $defaultWidth  = 600
+            $defaultHeight = 400
+        }
+        else {
+            $defaultWidth  = if ($Type -eq 'Pie') { 700 } else { 900 }
+            $defaultHeight = if ($Type -eq 'Pie') { 420 } else { 360 }
+        }
+
+        $canvasWidth  = if ($PSBoundParameters.ContainsKey('Width'))  { $Width }  else { $defaultWidth }
+        $canvasHeight = if ($PSBoundParameters.ContainsKey('Height')) { $Height } else { $defaultHeight }
+
+        # One dimension given and the other scales to keep the default proportions. The ratio has to come off the defaults above, since the canvas already holds the given number and would divide it by itself.
+        if ($PSBoundParameters.ContainsKey('Width') -and !$PSBoundParameters.ContainsKey('Height')) {
+            $canvasHeight = [int]($Width * ($defaultHeight / $defaultWidth))
+        }
+        if ($PSBoundParameters.ContainsKey('Height') -and !$PSBoundParameters.ContainsKey('Width')) {
+            $canvasWidth = [int]($Height * ($defaultWidth / $defaultHeight))
+        }
+
+        # Determine legend visibility (Pie charts show legend by default)
+        $showLegend = $Type -eq 'Pie' -and ($ShowLegend -or !$PSBoundParameters.ContainsKey('ShowLegend'))
+
+        # DockPanel passes finite height to the Viewbox when available from the parent.
+        # StackPanel throws away height constraints where DockPanel keeps them.
+        # Title docks Top, legend docks Bottom, Viewbox fills remaining space.
+        # Dashboard grids (star rows) constrain cell height, so Stretch fills cells.
+        # Everything else uses Top to prevent infinite vertical expansion.
+        $vertAlign  = if ($inStarGrid) { 'Stretch' } else { 'Top' }
+        $horizAlign = if ($fixedSize) { 'Left' } else { 'Stretch' }
+
+        $container = [System.Windows.Controls.DockPanel]@{
+            LastChildFill       = $true
+            HorizontalAlignment = $horizAlign
+            VerticalAlignment   = $vertAlign
+            Margin              = [System.Windows.Thickness]::new(8)
+        }
+
+        # The help promises -Width and -Height give a fixed display size and turn auto stretch off, so they have to reach the container. Setting only the canvas leaves the Viewbox scaling the chart to whatever the parent offers.
+        if ($PSBoundParameters.ContainsKey('Width'))  { $container.Width  = $Width }
+        if ($PSBoundParameters.ContainsKey('Height')) { $container.Height = $Height }
+
+        # Store chart config so Invoke-ChartRedraw knows how to re-render
+        $container.Tag = @{
+            ControlType   = 'Chart'
+            ChartType     = $Type
+            ShowValues    = $ShowValues.IsPresent
+            ShowLegend    = $showLegend
+            XAxisLabel    = $XAxisLabel
+            YAxisLabel    = $YAxisLabel
+            LabelProperty = $LabelProperty
+            ValueProperty = $ValueProperty
+        }
+
+        # Title docked to top
+        if ($Title) {
+            $titleBlock = [System.Windows.Controls.TextBlock]@{
+                Text                = $Title
+                FontSize            = 16
+                FontWeight          = 'SemiBold'
+                HorizontalAlignment = 'Center'
+                Margin              = [System.Windows.Thickness]::new(0, 0, 0, 8)
+            }
+            $titleBlock.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'ControlForegroundBrush')
+            [System.Windows.Controls.DockPanel]::SetDock($titleBlock, [System.Windows.Controls.Dock]::Top)
+            [void]$container.Children.Add($titleBlock)
+        }
+
+        # Canvas draws at internal resolution, Viewbox scales to display size
+        $canvas = [System.Windows.Controls.Canvas]@{
+            Width      = $canvasWidth
+            Height     = $canvasHeight
+            Background = [System.Windows.Media.Brushes]::Transparent
+        }
+
+        $viewbox = [System.Windows.Controls.Viewbox]@{
+            Stretch = 'Uniform'
+            Child   = $canvas
+        }
+
+        # Viewbox has to be the last child, since DockPanel gives that one all the space left over.
+        [void]$container.Children.Add($viewbox)
+
+        # Hand Invoke-ChartRedraw the raw collection: it runs ConvertTo-ChartData itself with the Tag's property names. Converting here too fed it Label/Value rows a custom -LabelProperty second pass dropped to zero.
+        Invoke-ChartRedraw -Container $container -NewData $collectedData
+
+        # The dehydrate pass fires this when a button action reassigns $chartVar, and it reads the data back off DataProperty.
+        $containerRef = $container
+        $redrawCallback = [Action]{
+            $storedData = [PsUi.UiHydration]::GetData($containerRef)
+            Invoke-ChartRedraw -Container $containerRef -NewData $storedData
+        }.GetNewClosure()
+        [PsUi.UiHydration]::SetOnDataChanged($container, $redrawCallback)
+
+        # Register with session for variable access and hydration
+        if ($Variable) { $session.AddControlSafe($Variable, $container) }
+
+        # Add to current parent
+        if ($parent -is [System.Windows.Controls.Panel]) {
+            [void]$parent.Children.Add($container)
+        }
+        elseif ($parent -is [System.Windows.Controls.ItemsControl]) {
+            [void]$parent.Items.Add($container)
+        }
+        elseif ($parent -is [System.Windows.Controls.ContentControl] -and $null -eq $parent.Content) {
+            $parent.Content = $container
+        }
+
+        # WrapPanel parents size children to their content width, so charts need explicit Width to fill the available space and track parent resizes.
+        # Other parents (StackPanel vertical, Grid with star columns) constrain width naturally, so the Viewbox Uniform stretch fits within those bounds.
+        # Horizontal StackPanels hand children their desired width, so charts in side-by-side layouts want New-UiGrid -Columns 2 instead.
+        if (!$fixedSize -and $parent -is [System.Windows.Controls.WrapPanel]) {
+            $chartRef  = $container
+            $parentRef = $parent
+
+            $parentRef.Add_SizeChanged({
+                param($sender, $sizeArgs)
+                $available = $sender.ActualWidth - 20
+                if ($available -gt 50) { $chartRef.Width = $available }
+            }.GetNewClosure())
+
+            if ($parentRef.ActualWidth -gt 0) {
+                $container.Width = $parentRef.ActualWidth - 20
+            }
+        }
+
+        return $container
+    }
+}

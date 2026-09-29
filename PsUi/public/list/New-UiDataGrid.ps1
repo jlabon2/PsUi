@@ -8,7 +8,7 @@ function New-UiDataGrid {
         explicitly with -Columns.
 
         Cells can be text, checkbox, dropdown, date picker, or button/checkbox/link
-        controls. OnCellEdit / OnRowEdit WPF events fire when edits commit.
+        controls. OnCellEdit / OnRowEdit callbacks run when edits commit.
 
         A toolbar with basic filter, copy, export, and column picker is on by default,
         opt out of any with the matching -No* switch.
@@ -23,40 +23,47 @@ function New-UiDataGrid {
     .PARAMETER ItemsSource
         Point the grid at a collection you own. After the call, $list.Add() from anywhere
         lands in the grid, whether from a button action or the console.
-        Long story short, it'll accept *most* generally used PowerShell lists. 
         Accepted inputs:
-          - any list like collection: array, ArrayList, List<T>, ObservableCollection, the
-            PsUi async collection. All get wrapped and attached, PsUi walks the calling scope
-            and repoints every variable holding the original at the new wrap.
+          - any of the usual list types: array, ArrayList, List<T>, ObservableCollection, the
+            PsUi async collection. Everything except the async collection gets wrapped, and
+            PsUi walks the calling scope to repoint every variable holding the original at
+            the wrap. The async collection already is the wrap, so it binds as is.
           - [ref] to any of the above
+
         The variable bind can't reach:
           - a collection held by a property: $obj.Items
           - a collection held inside a hashtable or dictionary: $state.list
           - a collection passed as a literal expression: -ItemsSource (Get-Thing)
           - a variable rebound to a different value after the call: $list = Get-Process
           - a variable captured by a closure built before the call
-        In all of those, the grid still binds but you have no handle - use a local
-        variable or [ref] (or skip the variable bind entirely with -NoBind).
-        Can't be combined with -Items.
+
+        In all of those the grid still binds, but you have no handle. Use a local variable, or
+        pass an ObservableCollection, which the grid follows wherever it lives. A [ref] helps
+        only when it points at a variable: a [ref] built from a property or a hashtable entry
+        fills the holder and leaves the original where it was, and the grid warns when it spots
+        one. Can't be combined with -Items.
     .PARAMETER NoBind
         Skip the variable bind step. -ItemsSource still wraps the collection and points the grid
-        at the wrap, but the variable you passed in keeps its original value. Mutations from
-        outside the wrap won't reach the grid. Drive it through [ref] or the
-        Set-/Add-/Clear-UiDataGridItems helpers. Off by default.
+        at the wrap, but the variable you passed in keeps its original value, and a [ref] keeps
+        pointing where it pointed. The two only stay in step while the mirror holds, so an
+        ObservableCollection carries its own changes across and a plain list does not. Drive it
+        through Set-UiDataGridItems, Add-UiDataGridItem and Clear-UiDataGridItems. Off by default.
     .PARAMETER Columns
         How to lay out columns. Three options:
           - omit it: auto-generate from the first row
           - string[]: limit auto-generated columns to these property names, in this order
-          - hashtable[]: full control. Each hashtable can set Name, Header, Width, Format,
-            ReadOnly, Editable ($true/$false/scriptblock/property name), EditorType
+          - full control: a { New-UiColumn ... } definition block, an array of New-UiColumn
+            output, or the equivalent hashtables. Each column can set Name, Header, Width,
+            Format, ReadOnly, Editable ($true/$false/scriptblock/property name), EditorType
             (Auto/Text/CheckBox/ComboBox/DatePicker), Choices, Validator, plus
             Type=Button/Toggle/Link for live controls in the cell (with Text, Icon, Action,
             Binding, OnChange, Url as needed). Button and Link actions run in a background
-            runspace by default. Set Sync = $true on the column hashtable for actions that
-            have to stay on the UI thread (dialogs or clipboard work). Link cells default to
-            http/https/mailto/tel schemes only. Set AllowFileScheme = $true on the column
-            hashtable to permit file: URLs (off by default because {Prop} substitution into
-            a file: template lets row content launch arbitrary executables).
+            runspace by default; -NoAsync (or NoAsync = $true in the hashtable form) keeps one on
+            the UI thread (dialogs or clipboard work). Link cells default to
+            http/https/mailto/tel schemes only; -AllowFileScheme permits file: URLs (off by
+            default because {Prop} substitution into a file: template lets row content
+            launch arbitrary executables). Property-name strings and full column
+            definitions mix in one array.
     .PARAMETER Height
         Height cap in pixels. Defaults to 300. The grid scrolls internally once row count
         pushes past it. Pass -Fill to lift the cap and grow with the window.
@@ -67,9 +74,8 @@ function New-UiDataGrid {
     .PARAMETER Fill
         Grow to the rest of the window's available height, lifting the -Height cap. The grid
         claims whatever space the window has left below it and resizes with the window. Use
-        when the DataGrid is the dominant content. Two -Fill grids in the same panel split
-        unevenly (first one claims, second gets leftovers). For an even split, wrap them in
-        New-UiGrid -Rows '*,*' -Fill so the row layout handles the split natively.
+        when the DataGrid is the dominant content. Several -Fill controls in one window split
+        the leftover height evenly, each held to its own -MinFillHeight and -MaxFillHeight.
     .PARAMETER MaxFillHeight
         Cap on -Fill growth in pixels. Defaults to no cap. Useful on 4K / multi-monitor setups
         where unbounded fill looks too tall.
@@ -80,9 +86,9 @@ function New-UiDataGrid {
         Single (one row), Extended (Ctrl/Shift multi-select, default), or None (rows still
         highlight on click but OnSelectionChanged won't fire).
     .PARAMETER DefaultPropertiesOnly
-        Respect $item.PSStandardMembers.DefaultDisplayPropertySet, hiding non-default props
-        initially. Hidden ones come back via the column-picker. Off by default for embedded
-        grids - showing everything is usually what makes sense there.
+        Show only the object's default display properties, in the set's order, and hide the
+        rest behind the column picker. Files show Mode, LastWriteTime, Length and Name, and
+        folders the same without Length. Without it every column shows with the defaults first.
     .PARAMETER HideEmptyColumns
         Hide columns where every value is null or empty.
     .PARAMETER NoArrayPopup
@@ -93,8 +99,10 @@ function New-UiDataGrid {
         Skip the protective wrap done on input objects. Faster on big clean datasets, but one
         throwing property getter takes the whole grid down.
     .PARAMETER Editable
-        Make the whole grid editable. Text cells get a themed editor and write back to the
-        underlying property. Percolumn Editable=$false in a column hashtable wins.
+        Make the whole grid editable. Text cells write back to the property, and Editable = $false
+        on a column wins. A property without a setter, or marked [ReadOnly], stays read-only.
+        Edits reach the objects you passed in, -Items grids included, so editing a file's
+        timestamps changes the file on disk.
     .PARAMETER OnCellEdit
         Runs after a cell edit commits. Usage: param($row, $columnName, $newValue, $oldValue)
         $newValue is the editor's raw value (string from TextBox, bool from CheckBox, date from
@@ -130,17 +138,22 @@ function New-UiDataGrid {
         Don't mark empty cells. By default null / empty-string cells get a subtle diagonal
         hatch so empty data is easier to spot at a glance. Only applies to text columns.
     .PARAMETER CaptureScrollWheel
-        Keep mouse-wheel events inside the grid instead of getting grabbed by the parent. The PsUi
-        default lets the wheel reach the outer window so it scrolls under the cursor. Turn this
-        on for grids tall enough or with enough meaningful data to need their own scroll.
+        Keep every mouse-wheel event inside the grid, ends included. Same as -ScrollWheel Capture.
+    .PARAMETER ScrollWheel
+        Says what gets the wheel while the cursor is over the grid. Page, the default, hands every
+        wheel event to the page, so a window full of them still scrolls. Edge scrolls the grid's
+        own rows until it reaches the top or bottom and gives the page the wheel from there.
+        Capture holds on at the ends as well, so the page stays put while the cursor is here.
+        A -Fill grid starts on Edge instead, since it holds the viewport and the page behind it
+        has almost no scroll of its own left. Pass -ScrollWheel to override that.
     .PARAMETER OnSelectionChanged
-        Runs when the selected row(s) change.  Usage: param($selectedItems)
+        Runs when the selected row(s) change. Usage: param($selectedItems)
         Example: -OnSelectionChanged { param($sel) Write-Host "Selected $($sel.Count) row(s)" }
     .PARAMETER OnDoubleClick
         Runs on row double-click. Usage: param($row)
         Example: -OnDoubleClick { param($r) Show-UiMessageDialog -Message ($r|Out-String) }
     .PARAMETER EnabledWhen
-        Variable name (or scriptblock) - grid is enabled while it's truthy.
+        Variable name (or scriptblock). The grid is enabled while it's truthy.
     .PARAMETER WPFProperties
         Extra properties to set on the grid (or its toolbar host if there's a toolbar).
         Hashtable of property name to value.
@@ -148,8 +161,10 @@ function New-UiDataGrid {
         Scriptblock that builds the expandable detail panel under the selected row.
         `$_`/`$row` inside are the row data. Runs on the UI thread when the row expands, use
         Invoke-UiAsync inside for anything slow.
-        Example: -RowDetailsTemplate { New-UiLabel -Text $_.Description; New-UiLabel -Text $_.Notes}
-        Example: -RowDetailsTemplate { New-UiTextArea -Default ($_|Out-String) -ReadOnly }
+
+        Example: `{ New-UiLabel -Text $_.Description; New-UiLabel -Text $_.Notes }`
+
+        Example: `{ New-UiTextArea -Default ($_|Out-String) -ReadOnly }`
     .PARAMETER RowBackground
         Scriptblock that colors rows. Returns a color string (e.g. '#33FF6B6B') or `$null`.
         `$_`/`$row` is the row data. Runs as rows scroll into view.
@@ -172,34 +187,34 @@ function New-UiDataGrid {
         Fixed pixel row height. Default sizes rows to their content.
     .PARAMETER RowContextMenu
         Custom items to add to the right-click menu, shown above the standard Copy/Export
-        entries. Pass a hashtable mapping a label to an action. The action is either:
+        entries. Pass a { New-UiMenuItem ... } definition block (menu order follows call
+        order), or the legacy hashtable mapping a label to an action, where the action is:
           - a scriptblock: { Restart-Service $_.Name }
-          - a hashtable: @{ Action = {}; Enabled = {} or $bool; Icon = 'Name'; Sync = $false }
+          - a hashtable: @{ Action = {}; Enabled = {} or $bool; Icon = 'Name'; NoAsync = $false }
+
         Inside the action, $_ is the row being acted upon. The grid refreshes itself after
         the action runs, so $_.Status = 'Stopped' actually shows up. Write-Host goes
         wherever PsUi normally puts host output (the output window, the active status bar).
+
         Multi-select: if the right-click lands on a row that's part of a multi-selection,
-        the action fans out across every selected row (Excel / Explorer convention). Right-
-        clicking outside the selection acts on just the click target. Enabled is any passes
-        for menu enablement (menu stays enabled while at least one selected row qualifies)
-        and per-row during the fan-out (ineligible rows are skipped silently).
+        the action fans out across every selected row (Excel / Explorer convention).
+        Right-clicking outside the selection acts on just the click target. With a
+        multi-selection, Enabled runs twice: once for the menu (enabled while at least one
+        of the first 20 selected rows qualifies; bigger selections enable without probing
+        and the click still filters) and once per row as the action fans out (ineligible
+        rows are skipped silently).
+
         Actions run in a background runspace by default so the UI stays responsive during
-        slow work (Restart-Service, Invoke-WebRequest, etc.). Set Sync = $true for actions
-        that have to stay on the UI thread (Show-UiMessageDialog or clipboard stuff).
-        Background action variable capture: PsUi grabs the values of variables your action
-        mentions by name and copies them into the background runspace. A local secret with a
-        name that collides with something in the action body ($cred is the common) gets
-        copied too. Set Sync = $true to skip the variable copy.
-        Example: -RowContextMenu @{
-            'Restart' = @{
-                Action  = { Restart-Service $_.Name }
-                Icon    = 'Refresh'
-                Enabled = { $_.Status -eq 'Stopped' }
-            }
-            'Details' = { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }
-        }
+        slow work (Restart-Service, Invoke-WebRequest, etc.). Use -NoAsync on New-UiMenuItem
+        (NoAsync = $true in the hashtable form) for actions that have to stay on the UI thread
+        (Show-UiMessageDialog or clipboard stuff).
+
+        Background action variable capture: PsUi grabs the values of the variables your action
+        mentions by name and injects them into the background runspace. A local secret with a
+        name that collides with something in the action body ($cred is the common one) rides
+        along too. Sync actions skip the injection entirely.
     .PARAMETER SanitizeFormulas
-        Prefix exported / copied cells whose first character is =/+/-/@/tab/CR with an
+        Prefix exported / copied cells whose first character is =/+/-/@/tab/CR/LF with an
         apostrophe so Excel (assuming it's the default) treats them as literal text. Off by
         default. Clean data roundtrips (export then re-import) stay byte identical without
         this. Flip it on when the grid is showing values from untrusted sources (user-supplied
@@ -214,12 +229,12 @@ function New-UiDataGrid {
         }
     .EXAMPLE
         # Editable grid with mixed cell types
-        New-UiDataGrid -Variable svc -Items (Get-Service | Select Name, Status, StartType) -Editable -Columns @(
-            @{ Name='Name'; ReadOnly=$true }
-            @{ Name='Status'; Editable=$true }
-            @{ Name='StartType'; Editable=$true; EditorType='ComboBox'; Choices='Automatic','Manual','Disabled' }
-            @{ Header='Restart'; Type='Button'; Text='Restart'; Action={ Restart-Service $_.Name } }
-        ) -OnCellEdit {
+        New-UiDataGrid -Variable svc -Items (Get-Service) -Editable -Columns {
+            New-UiColumn Name -ReadOnly
+            New-UiColumn Status -Editable $true
+            New-UiColumn StartType -Editable $true -EditorType ComboBox -Choices 'Automatic', 'Manual', 'Disabled'
+            New-UiColumn -Header 'Restart' -Type Button -Text 'Restart' -Action { Restart-Service $_.Name }
+        } -OnCellEdit {
             param($row, $col, $new, $old)
             Write-Host "$($row.Name): $col $old -> $new"
         }
@@ -237,44 +252,63 @@ function New-UiDataGrid {
         }
         New-UiDataGrid @gridParams
     .EXAMPLE
-        # Cell-embedded controls: Toggle (two-way), Button (per-row), Link (clickable URL)
+        # Controls that live in a cell are Toggle (two way), Button (per row) and Link (a clickable URL).
         $rows = @(
             [pscustomobject]@{ Name='node-a'; Online=$true;  Url='https://node-a.local' }
             [pscustomobject]@{ Name='node-b'; Online=$false; Url='https://node-b.local' }
         )
-        New-UiDataGrid -Variable nodes -Items $rows -Editable -Columns @(
-            @{ Name='Name'; ReadOnly=$true }
-            @{ Header='Enabled'; Type='Toggle'; Binding='Online'; OnChange={ Write-Host "$($_.Name) -> $($_.Online)" } }
-            @{ Header='Ping';    Type='Button'; Text='Ping'; Icon='NetworkAdapter'; Action={ Test-Connection $_.Name -Count 1 } }
-            @{ Header='Open';    Type='Link';   Text='Open'; Url='{Url}' }
-        )
+        New-UiDataGrid -Variable nodes -Items $rows -Editable -Columns {
+            New-UiColumn Name -ReadOnly
+            New-UiColumn -Header 'Enabled' -Type Toggle -Binding Online -OnChange { Write-Host "$($_.Name) -> $($_.Online)" }
+            New-UiColumn -Header 'Ping' -Type Button -Text 'Ping' -Icon NetworkAdapter -Action { Test-Connection $_.Name -Count 1 }
+            New-UiColumn -Header 'Open' -Type Link -Text 'Open' -Url '{Url}'
+        }
     .EXAMPLE
-        # Live updates via -ItemsSource. Bare ArrayList works because PsUi binds $rows to
-        # the wrap - $rows after the call IS the thread-safe collection, so $rows.Add() from
+        # Live updates via -ItemsSource. A plain ArrayList works because PsUi binds $rows to
+        # the wrap - $rows after the call IS the threadsafe list, so $rows.Add() from
         # a button action lands in the grid without ceremony.
         $rows = [System.Collections.ArrayList]::new()
         New-UiWindow -Title 'Live feed' -Content {
             New-UiDataGrid -Variable feed -ItemsSource $rows -Fill
-            New-UiButton -Text 'Add row' -Action {
+            New-UiButton -Text 'Add row' -NoOutput -Action {
                 [void]$rows.Add([pscustomobject]@{ Time = Get-Date; Value = Get-Random })
             }
         }
+    .EXAMPLE
+        # Right-click actions per row
+        New-UiDataGrid -Variable svc -Items (Get-Service) -RowContextMenu {
+            New-UiMenuItem 'Restart' -Icon Refresh -Action { Restart-Service $_.Name } -Enabled { $_.Status -eq 'Stopped' }
+            New-UiMenuItem 'Details' -NoAsync -Action { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }
+        }
+    .EXAMPLE
+        # Legacy hashtable forms (still supported), columns and menu items alike
+        New-UiDataGrid -Variable svc -Items (Get-Service) -Columns @(
+            @{ Name='Name'; ReadOnly=$true }
+            @{ Header='Restart'; Type='Button'; Text='Restart'; Action={ Restart-Service $_.Name } }
+        ) -RowContextMenu ([ordered]@{
+            'Restart' = @{ Action = { Restart-Service $_.Name }; Icon = 'Refresh'; Enabled = { $_.Status -eq 'Stopped' } }
+            'Details' = @{ Action = { Show-UiMessageDialog -Message ($_ | Format-List | Out-String) }; NoAsync = $true }
+        })
     .NOTES
-        Variable binding: -ItemsSource wraps your collection in a thread-safe one and repoints
+        Variable binding: -ItemsSource wraps your list in a threadsafe one and repoints
         the scope variables that hold the original at the wrap. End result, $list IS the
         wrap afterwards. Five cases the rebind can't reach (see -ItemsSource). When none
         of your scope variables get rebound, a warning fires. Pass -NoBind to opt out and manage
         the binding yourself.
 
         Async by default actions: cell embedded Button actions and -RowContextMenu items run
-        in a background runspace so slow work doesn't freeze the grid. Set Sync = $true on
-        the column / menu hashtable for actions that have to stay on the UI thread (dialogs
-        and clipboard work).
+        in a background runspace so slow work doesn't freeze the grid. Use -NoAsync on
+        New-UiColumn / New-UiMenuItem (NoAsync = $true in the hashtable forms) for actions that
+        have to stay on the UI thread (dialogs and clipboard work). The switch answers to -Sync
+        and the hashtables to Sync = $true, which is what both were called before.
 
         First-row column seeding: if the grid starts empty and rows arrive later, columns are
         built from the first row with readable properties. Once columns exist, additional
         properties on later rows won't add columns. Pass -Columns explicitly for grids whose
         schema isn't uniform across rows.
+
+        Plain .NET objects in an -ItemsSource list don't carry what PowerShell adds, such as
+        PSPath, Mode or a process's CPU, so those columns start hidden.
     #>
     [CmdletBinding()]
     param(
@@ -368,10 +402,14 @@ function New-UiDataGrid {
 
         [double]$RowHeight,
 
-        # IDictionary, not [hashtable]: a [hashtable] constraint silently converts [ordered]@{} to Hashtable and scrambles the declared menu order.
-        [System.Collections.IDictionary]$RowContextMenu,
+        # Untyped, so it takes a New-UiMenuItem definition block or array, or the legacy IDictionary keyed by label. No [hashtable] constraint on the legacy form: it silently converts [ordered]@{} to Hashtable and scrambles the declared menu order.
+        $RowContextMenu,
 
-        [switch]$SanitizeFormulas
+        [switch]$SanitizeFormulas,
+
+        # Last in the list, so it takes no position an existing positional call already uses.
+        [ValidateSet('Page', 'Edge', 'Capture')]
+        [string]$ScrollWheel = 'Page'
     )
 
     begin {  $accumulated = [System.Collections.Generic.List[object]]::new() }
@@ -387,7 +425,7 @@ function New-UiDataGrid {
         }
 
         if ($PSBoundParameters.ContainsKey('ItemsSource') -and $NoSafeWrap) {
-            Write-Warning "New-UiDataGrid: -NoSafeWrap has no effect with -ItemsSource. The caller's collection is bound as-is; the safe-wrap pass only runs on the -Items path."
+            Write-Warning "New-UiDataGrid: -NoSafeWrap has no effect with -ItemsSource. The collection is used as it is, and the safe wrap pass only runs on the -Items path."
         }
 
         $session = Assert-UiSession -CallerName 'New-UiDataGrid'
@@ -395,6 +433,34 @@ function New-UiDataGrid {
         $colors  = Get-ThemeColors
 
         Write-Debug "Creating data grid '$Variable' items=$($accumulated.Count) editable=$Editable"
+
+        # Builder input for -Columns (New-UiColumn block or array) normalizes here. Plain property name strings stay legal in the mix. Empty coerces back to $null so the auto column path still triggers.
+        if ($null -ne $Columns) {
+            $Columns = ConvertTo-UiDefinitionArray -InputObject $Columns -ParameterName '-Columns' -CallerName 'New-UiDataGrid' -AllowString
+            if ($Columns.Count -eq 0) { $Columns = $null }
+        }
+
+        # Builder input for -RowContextMenu folds into the ordered form keyed by label that the menu builder already eats. The legacy IDictionary passes through whole.
+        if ($null -ne $RowContextMenu) {
+            $RowContextMenu = ConvertTo-UiDefinitionArray -InputObject $RowContextMenu -ParameterName '-RowContextMenu' -CallerName 'New-UiDataGrid' -PassThruDictionary
+            if ($RowContextMenu -isnot [System.Collections.IDictionary]) {
+                $folded = [ordered]@{}
+                foreach ($menuDef in $RowContextMenu) {
+                    if (!$menuDef['Text']) {
+                        throw "New-UiDataGrid: each -RowContextMenu item needs a Text key. Use New-UiMenuItem, or the legacy [ordered]@{ 'Label' = @{ Action = ... } } form."
+                    }
+                    if ($folded.Contains([string]$menuDef['Text'])) {
+                        throw "New-UiDataGrid: duplicate -RowContextMenu label '$($menuDef['Text'])'. Menu items are keyed by label, and labels must be unique (case-insensitive)."
+                    }
+
+                    # Copy all but Text so absent Sync/Enabled stay absent. The menu builder reads .Contains() on them.
+                    $itemDef = @{}
+                    foreach ($key in $menuDef.Keys) { if ($key -ne 'Text') { $itemDef[$key] = $menuDef[$key] } }
+                    $folded[[string]$menuDef['Text']] = $itemDef
+                }
+                $RowContextMenu = $folded
+            }
+        }
 
         # Resolve the backing collection
         $collection     = $null
@@ -404,28 +470,10 @@ function New-UiDataGrid {
         if ($PSBoundParameters.ContainsKey('ItemsSource')) {
             $uiDispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
 
-            # PS 5.1 $obj -is [Open`1] throws "Late bound operations cannot be performed on fields with types for which Type.ContainsGenericParameters is true."
-            # Check the inheritance and match the generic type definition by FullName instead.
-            $kindOf = {
-                param($Obj)
-                if ($null -eq $Obj)                                             { return 'Null' }
-                if ($Obj -is [System.Management.Automation.PSReference])        { return 'Ref' }
-                $t = $Obj.GetType()
-                while ($null -ne $t) {
-                    if ($t.IsGenericType) {
-                        $def = $t.GetGenericTypeDefinition().FullName
-                        if ($def -eq 'PsUi.AsyncObservableCollection`1')                  { return 'PsUiObservable' }
-                        if ($def -eq 'System.Collections.ObjectModel.ObservableCollection`1') { return 'WpfObservable' }
-                    }
-                    $t = $t.BaseType
-                }
-                return 'Other'
-            }
-
-            # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's bare ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
+            # Plain ol' ObservableCollection<T> isn't threadsafe. Helpers fired from async button actions live on a background runspace. Calling .Add() on the user's unwrapped ObservableCollection from there throws "This type of CollectionView does not support changes to its SourceCollection from a thread different from the Dispatcher thread."
             # Only PsUi.AsyncObservableCollection is safe to bind directly. Everything else gets wrapped + mirrored.
-            $itemsSourceKind = & $kindOf $ItemsSource
-            switch ($itemsSourceKind) {
+            $itemsSourceType = Get-UiCollectionType -Obj $ItemsSource
+            switch ($itemsSourceType) {
                 'Null' {
                     $collection = [PsUi.GridOwnedCollection[object]]::new()
                     $isOwned    = $true
@@ -451,22 +499,51 @@ function New-UiDataGrid {
                 # [ref] promotion
                 'Ref' {
                     $orig     = $ItemsSource.Value
-                    $origKind = & $kindOf $orig
-                    if ($origKind -eq 'PsUiObservable') {
+                    $origType = Get-UiCollectionType -Obj $orig
+                    if ($origType -eq 'PsUiObservable') {
                         try { $orig.UpdateDispatcher() } catch { Write-Debug "UpdateDispatcher failed: $_" }
                         $collection = $orig
                     }
                     else {
-                        $wrapper           = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher)
-                        $ItemsSource.Value = $wrapper
-                        $collection        = $wrapper
+                        $origName = if ($null -eq $orig) { 'null' } else { $orig.GetType().Name }
+                        try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($orig, $uiDispatcher) }
+                        catch {
+                            throw "New-UiDataGrid -ItemsSource takes a list. The [ref] points at a $origName, which is not one, and PowerShell cannot read it as a sequence either."
+                        }
+
+                        # Without this an ObservableCollection behind [ref]$state.Rows seeds the grid once and never reaches it again.
+                        if ($orig -is [System.Collections.IList] -and !$orig.IsReadOnly -and !$orig.IsFixedSize) {
+                            $wrapper.AttachMirror($orig)
+                            $mirrorAttached = $true
+                        }
+                        $collection = $wrapper
+
+                        if (!$NoBind) {
+                            try { $ItemsSource.Value = $wrapper } catch { Write-Debug "[ref] target refused the wrap: $_" }
+
+                            # [ArrayList]$rows behind the ref converts the wrap, so the read back is a copy the grid never sees again.
+                            $landed = $ItemsSource.Value
+                            if (!([object]::ReferenceEquals($landed, $wrapper))) {
+                                $landedDesc = if ($null -eq $landed) { 'refused it and kept its null' } else { "converted it into a fresh $($landed.GetType().Name) the grid cannot see" }
+                                Write-Warning "New-UiDataGrid -ItemsSource: the variable behind the [ref] is type constrained, so PowerShell $landedDesc. Drop the type, or use -NoBind and drive the grid with Add-UiDataGridItem."
+                            }
+                            # [ref]$state.Rows stops at the holder, and an ObservableCollection there still reaches the grid through the mirror, so warning about it would be wrong.
+                            elseif (!(Test-UiRefWritesThrough -Reference $ItemsSource) -and
+                                    $orig -isnot [System.Collections.Specialized.INotifyCollectionChanged]) {
+                                Write-Warning 'New-UiDataGrid -ItemsSource: only a [ref] to a variable can be repointed, so a [ref] built from a property still holds the original list. Add through the [ref] .Value.'
+                            }
+                        }
                     }
                     break
                 }
 
                 # Value type collection (ArrayList, List<T>, array, anything else IEnumerable).
                   default {
-                    $wrapper = [PsUi.AsyncObservableCollection[object]]::new($ItemsSource, $uiDispatcher)
+                    try { $wrapper = [PsUi.AsyncObservableCollection[object]]::new($ItemsSource, $uiDispatcher) }
+                    catch {
+                        throw "New-UiDataGrid -ItemsSource takes a list. A $($ItemsSource.GetType().Name) is not one, and PowerShell cannot read it as a sequence either."
+                    }
+
                     if ($ItemsSource -is [System.Collections.IList] -and !$ItemsSource.IsReadOnly -and !$ItemsSource.IsFixedSize) {
                         $wrapper.AttachMirror($ItemsSource)
                         $mirrorAttached = $true
@@ -476,13 +553,14 @@ function New-UiDataGrid {
             }
 
             # Walk up the scopes, repoint every variable that ref equals the original at the wrap.
-            # $list.Add() from outside now lands on the threadsafe collection. Ref/PsUiObservable are handled above. Null branch has nothing to wrap.
+            # $list.Add() from outside now lands on the threadsafe collection. Ref/PsUiObservable are handled above. The Null branch has no collection to wrap.
             if (!$NoBind -and
-                $itemsSourceKind -in 'WpfObservable', 'Other' -and
+                $itemsSourceType -in 'WpfObservable', 'Other' -and
                 $null -ne $collection -and
                 !([object]::ReferenceEquals($collection, $ItemsSource))) {
 
-                $promotedNames = [System.Collections.Generic.List[string]]::new()
+                $promotedNames  = [System.Collections.Generic.List[string]]::new()
+                $convertedNames = [System.Collections.Generic.List[string]]::new()
                 for ($scopeIdx = 1; $scopeIdx -lt 50; $scopeIdx++) {
                     try {
                         $scopeVars = Get-Variable -Scope $scopeIdx -ErrorAction Stop
@@ -491,34 +569,49 @@ function New-UiDataGrid {
                     catch { Write-Debug "Variable bind scope $scopeIdx walk failed: $_"; continue }
 
                     foreach ($psVar in $scopeVars) {
-                        # $psVar.Value can throw for lazy loaded variables (disposed COM, missing registry, etc). Catch per variable so one misbehaving slot doesn't kill the rest of the scope.
+                        # $psVar.Value can throw for lazy loaded variables (disposed COM, missing registry, etc). Catch per variable so one misbehaving variable doesn't kill the rest of the scope.
                         $matched = $false
                         try { $matched = [object]::ReferenceEquals($psVar.Value, $ItemsSource) }
                         catch { Write-Debug "Variable bind read of '$($psVar.Name)' failed: $_"; continue }
                         if ($matched) {
                             try {
                                 Set-Variable -Name $psVar.Name -Value $collection -Scope $scopeIdx -Force -ErrorAction Stop
-                                [void]$promotedNames.Add("`$$($psVar.Name)@$scopeIdx")
+
+                                $landed = $collection
+                                try { $landed = Get-Variable -Name $psVar.Name -Scope $scopeIdx -ValueOnly -ErrorAction Stop }
+                                catch { Write-Debug "Variable bind read back of '$($psVar.Name)' failed: $_" }
+
+                                if ([object]::ReferenceEquals($landed, $collection)) {
+                                    [void]$promotedNames.Add("`$$($psVar.Name)@$scopeIdx")
+                                }
+                                else {
+                                    $landedDesc = if ($null -eq $landed) { 'which refused it and holds null' } else { "now a fresh $($landed.GetType().Name)" }
+                                    [void]$convertedNames.Add("`$$($psVar.Name), $landedDesc")
+                                }
                             }
                             catch { Write-Debug "Variable bind rewrite of '$($psVar.Name)' at scope $scopeIdx failed: $_" }
                         }
                     }
                 }
-                if ($promotedNames.Count -gt 0) {
-                    Write-Debug "Variables bound: $($promotedNames -join ', ')"
+                if ($convertedNames.Count -gt 0) {
+                    Write-Warning "New-UiDataGrid -ItemsSource: a type constrained target converted the threadsafe collection on assignment, and the grid never sees the copy ($($convertedNames -join ', ')). Drop the type, or use -NoBind and drive the grid with Add-UiDataGridItem."
                 }
-                else {
+
+                if ($promotedNames.Count -gt 0) { Write-Debug "Variables bound: $($promotedNames -join ', ')" }
+                
+                # The conversion branch above already warned about this variable.
+                elseif ($convertedNames.Count -eq 0) {
                     Write-Debug "Variables bound: nothing matched"
-                    # Zero rewrite usually means -ItemsSource got fed a property access ($obj.Items) or an unbound expression (eg Get-Garbage). The grid still binds against the wrap but you have no handle - Add-/Set-/Clear-UiDataGridItems and outside $list.Add() drop on the floor with no obvious clue why.
-                    Write-Warning 'New-UiDataGrid -ItemsSource: could not repoint any caller variable to the autowrapped collection. Use a local variable or [ref] so $list.Add() and the helpers stay connected to the grid.'
+                    # Zero rewrites usually means a property access ($obj.Items) or an expression without a variable behind it.
+                    Write-Warning 'New-UiDataGrid -ItemsSource: could not repoint any script variable to the autowrapped collection. Use a local variable or [ref] so $list.Add() and the helpers stay connected to the grid.'
                 }
             }
             elseif ($NoBind -and
-                    $itemsSourceKind -in 'WpfObservable', 'Other' -and
+                    $itemsSourceType -in 'WpfObservable', 'Other' -and
                     $null -ne $collection -and
                     !([object]::ReferenceEquals($collection, $ItemsSource))) {
-                # You asked for explicit binding management. Skip the scope rewrite. The wrap is still attached to the grid, but your $list keeps pointing at the original.
-                Write-Debug "Variable bind skipped (-NoBind). Caller's variable still points at the original collection."
+                # -NoBind leaves $list on the original with the wrap still attached to the grid.
+                Write-Debug "Variable bind skipped (-NoBind). The variable still points at the original collection."
             }
         }
         else {
@@ -526,7 +619,7 @@ function New-UiDataGrid {
             $safeItems = if ($NoSafeWrap -or $rawItems.Count -eq 0) { $rawItems }
                          else { @(ConvertTo-SafeDataArray -DataArray $rawItems) }
 
-            # Flatten to PSCustomObject so WPF binding stops pretending PowerShell added properties don't exist. The snapshot tucks a cached _SearchText on each row for the filter and keeps the original at $row._BaseObject. Skip on empty input - Mandatory binding chokes.
+            # Flatten to PSCustomObject so WPF binding stops pretending PS added properties don't exist. The snapshot tucks a cached _SearchText on each row for the filter and keeps the original at $row._BaseObject. Skip on empty input - Mandatory binding chokes.
             $snapItems = if ($null -eq $safeItems -or $safeItems.Count -eq 0) { @() }
             else { @(ConvertTo-UiDataGridSnapshot -Items $safeItems -BuildSearchIndex) }
 
@@ -591,14 +684,15 @@ function New-UiDataGrid {
         $colInfo = Build-UiDataGridColumns @colBuildParams
 
         # Prerender flood guard. Threshold and clause come from Get-UiGridFloodWarning, shared with the column picker's $confirmFlood (New-ColumnVisibilityPopup.ps1) so the two can't drift.
-        # Suppressed when -DefaultPropertiesOnly is on or -Columns was handpicked. PSCustomObject input has no DefaultDisplayPropertySet ($defaultCount = 0), so the dialog drops the "Load defaults" option and offers cancel only.
+        # Off under -DefaultPropertiesOnly or handpicked -Columns. Without a default set every column counts as a default, and the dialog offers "Cancel load" or "Continue".
         $flood         = Get-UiGridFloodWarning
         $cellThreshold = $flood.CellThreshold
-        $allCount      = [int]$colInfo.AllProperties.Count
         $defaultCount  = [int]$colInfo.DefaultProperties.Count
         $rowCount      = [int]$collection.Count
-        $cellCount     = $rowCount * $allCount
-        $hasDefaults   = ($defaultCount -gt 0 -and $defaultCount -lt $allCount)
+
+        $allCount    = [int]$colInfo.AllProperties.Count - [int]$colInfo.PsOnlyProperties.Count
+        $cellCount   = $rowCount * $allCount
+        $hasDefaults = ($defaultCount -gt 0 -and $defaultCount -lt $allCount)
 
         if ($cellCount -gt $cellThreshold -and
             !$DefaultPropertiesOnly -and
@@ -645,8 +739,8 @@ function New-UiDataGrid {
             catch { Write-Debug "Flood prompt at construction failed: $_" }
         }
 
-        # Tag carries the bookkeeping the column picker reaches for on each visibility toggle.
-        # StretchLastColumn is the gate that reruns Set-LastDataColumnStar, and it still honours the original -NoStretchLastColumn switch passed at construction.
+        # Tag carries the state the column picker reads on each visibility toggle.
+        # StretchLastColumn is the gate that reruns Set-LastDataColumnStar, and it still honors the original -NoStretchLastColumn switch passed at construction.
         $dataGrid.Tag = @{
             AllProperties       = $colInfo.AllProperties
             DefaultProperties   = $colInfo.DefaultProperties
@@ -654,14 +748,11 @@ function New-UiDataGrid {
             Collection          = $collection
             StretchLastColumn   = !$NoStretchLastColumn
             IsOwned             = $isOwned
-            # New-UiTab's PreviewMouseWheel reads this and lets the wheel through when set.
-            CaptureScrollWheel  = [bool]$CaptureScrollWheel
             # Export / copy paths consult this and quote prefix Excel formula triggers.
             SanitizeFormulas    = [bool]$SanitizeFormulas
         }
 
         # Resize unlock already attached inside New-StyledDataGrid (skipped under -NoStretchLastColumn: no star, no lockout).
-
         # No starter data means no row to read property names from. Watch for the first add, seed columns, then drop the sub so later Adds don't reenter the guard.
         if ($colInfo.AllProperties.Count -eq 0 -and $collection -is [System.Collections.Specialized.INotifyCollectionChanged]) {
             $seedState = @{
@@ -684,7 +775,7 @@ function New-UiDataGrid {
                     $seedState.Handler = $null
                 }
 
-                # Rebind to a local: nested .GetNewClosure() only captures the immediate scope's locals, not what the outer closure itself captured.
+                # Rebind to a local, since a nested .GetNewClosure() captures only the immediate scope's locals and never what the outer closure captured.
                 $localState = $seedState
                 [void]$seedState.DataGrid.Dispatcher.BeginInvoke(
                     [System.Windows.Threading.DispatcherPriority]::Background,
@@ -692,15 +783,15 @@ function New-UiDataGrid {
                         if ($localState.DataGrid.Columns.Count -gt 0) { return }
 
                         Write-Debug "New-UiDataGrid: seeding columns from first arrived row"
-                        $items = [System.Collections.Generic.List[object]]::new()
-                        foreach ($entry in $localState.Collection) { [void]$items.Add($entry) }
+                        # List[object] unwraps each row, the column build checks for it
+                        $items = @($localState.Collection)
                         if ($items.Count -eq 0) { return }
 
                         # Detach ItemsSource for the whole surgery. Building columns on a LIVE grid corrupts the ItemContainerGenerator's change bookkeeping ("ItemsControl is inconsistent with its items source" on every layout pass after), and DeferRefresh is no answer - Build's BeginInit/EndInit refreshes the ItemCollection, which throws on a defer pending view.
-                        # Unbound, there is no view processing to corrupt. Reattaching is a fresh bind, same as construction. Adds landing mid surgery are absorbed by it.
+                        # Without an ItemsSource attached there is no view processing to corrupt, and the reattach is a fresh bind that absorbs any adds landing mid surgery.
                         #
                         # No try/finally: PS's CheckActionPreference NREs on try block exit when the scriptblock runs off pipeline (this is a Dispatcher delegate), and the hijacked unwind SKIPS finally - the grid stayed detached, showing zero rows forever. trap handles the error path. The tail reattach handles success. Same pattern as Add-UiDataGridRowDetails.
-                        # $seedGrid is a plain local on purpose. $rebind below closes over it, and an inner GetNewClosure only captures THIS scope's locals - reaching for $localState (an outer closure capture) in there hands back $null and the reattach silently does nothing, leaving the grid empty forever.
+                        # An inner GetNewClosure only captures THIS scope's locals ($rebind reads $null for anything else and the reattach never runs).
                         $seedGrid    = $localState.DataGrid
                         $savedSource = $seedGrid.ItemsSource
                         $savedView   = $savedSource -as [System.ComponentModel.ICollectionView]
@@ -733,7 +824,7 @@ function New-UiDataGrid {
                         $rebuildParams.Items = $items
                         $newInfo = Build-UiDataGridColumns @rebuildParams
 
-                        # First arriving row had nothing readable - rearm so a later row can try.
+                        # The first row to arrive had no readable property, so rearm for a later one.
                         if (!$newInfo -or $newInfo.AllProperties.Count -eq 0) {
                             if ($localState.SelfRef -and !$localState.Handler) {
                                 $localState.Handler = $localState.SelfRef
@@ -764,7 +855,7 @@ function New-UiDataGrid {
                             }
                         }
 
-                        # Known cosmetic: the last column star set during the unbound build renders at natural width after the rebind (dead space to its right). Some DataGrid internal width state doesn't reengage stars after an ItemsSource cycle - deferred star reapply and reactive arm suspension don't fix it, don't retry them. Freeze and filter behave. Leaving it.
+                        # The last column's star width renders natural after the rebind, leaving dead space to its right. Neither a deferred star reapply nor reactive arm suspension fixes it.
                         & $rebind
                     }.GetNewClosure())
             }.GetNewClosure()
@@ -786,7 +877,7 @@ function New-UiDataGrid {
                 if ($cleanup.Done) { return }
                 $window = [System.Windows.Window]::GetWindow($this)
                 if (!$window) { return }
-                # Rebind to a local: PS .GetNewClosure() only captures the immediate parent scope.
+                # Rebind to a local, since .GetNewClosure() captures only the immediate parent scope.
                 # Without this hop the inner Closed scriptblock sees an empty $cleanup.
                 $localCleanup = $cleanup
                 $window.Add_Closed({
@@ -802,6 +893,7 @@ function New-UiDataGrid {
                 }.GetNewClosure())
                 $cleanup.Done = $true
             }.GetNewClosure()
+
             # Initialized fallback - grids built and disposed without ever loading still get the detach hook. Double hook protection lives in $cleanup.Done.
             $dataGrid.Add_Loaded($hookCleanup)
             $dataGrid.Add_Initialized($hookCleanup)
@@ -809,18 +901,21 @@ function New-UiDataGrid {
 
         if (!$NoArrayPopup)      { Add-ArrayCellPopupHandler -DataGrid $dataGrid }
         if (!$NoDictionaryPopup) { Add-DictionaryValuePopupHandler -DataGrid $dataGrid }
+        if ($Editable) { Add-UiDataGridEditHandling -Grid $dataGrid -Columns $Columns -OnCellEdit $OnCellEdit -OnRowEdit $OnRowEdit }
 
-        if ($Editable) {
-            Add-UiDataGridEditHandling -Grid $dataGrid -Columns $Columns -OnCellEdit $OnCellEdit -OnRowEdit $OnRowEdit
-        }
+        $gridSessionId = $session.SessionId
+        $pushSession   = ${function:Push-UiSession}
+        $popSession    = ${function:Pop-UiSession}
 
         if ($OnSelectionChanged -and $SelectionMode -ne 'None') {
             $selHandler = $OnSelectionChanged
             $dataGrid.Add_SelectionChanged({
                 param($sender, $eventArgs)
-                $selected = @($sender.SelectedItems)
+                $selected     = @($sender.SelectedItems)
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { & $selHandler $selected }
                 catch { Write-Debug "OnSelectionChanged failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure())
         }
 
@@ -830,8 +925,10 @@ function New-UiDataGrid {
                 param($sender, $eventArgs)
                 $row = $sender.SelectedItem
                 if ($null -eq $row) { return }
+                $sessionToken = & $pushSession -SessionId $gridSessionId
                 try { & $dblHandler $row }
                 catch { Write-Debug "OnDoubleClick failed: $($_.Exception.Message)" }
+                & $popSession -Token $sessionToken
             }.GetNewClosure())
         }
 
@@ -867,28 +964,20 @@ function New-UiDataGrid {
 
         if (!$NoAlternatingRowBrush) { Add-UiDataGridAlternatingBrush -DataGrid $dataGrid }
 
-        # Default: forward the wheel to the parent so the outer window scrolls with the cursor over the grid.
-        # -CaptureScrollWheel keeps it inside the grid for its own scroll.
-        if (!$CaptureScrollWheel) {
-            $dataGrid.Add_PreviewMouseWheel({
-                param($sender, $eventArgs)
-                if ($eventArgs.Handled) { return }
-                $eventArgs.Handled = $true
-                $newEvent = [System.Windows.Input.MouseWheelEventArgs]::new($eventArgs.MouseDevice, $eventArgs.Timestamp, $eventArgs.Delta)
-                $newEvent.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
-                $newEvent.Source = $sender
-                $parentEl = $sender.Parent -as [System.Windows.UIElement]
-                if ($parentEl) { $parentEl.RaiseEvent($newEvent) }
-            })
+        # -CaptureScrollWheel predates -ScrollWheel and only ever meant Capture.
+        $wheelMode = if ($CaptureScrollWheel) { 'Capture' } else { $ScrollWheel }
+
+        # -Fill leaves the page almost no scroll of its own for Page mode to hand the wheel to.
+        if ($Fill -and $wheelMode -eq 'Page' -and !$PSBoundParameters.ContainsKey('ScrollWheel')) {
+            $wheelMode = 'Edge'
         }
+        Set-UiWheelRouting -Control $dataGrid -Mode $wheelMode
 
         $useToolbar = !$NoToolbar -and !($NoFilter -and $NoExport -and $NoCopy -and $NoColumnPicker)
 
         # Overlay wraps the DataGrid, not the dock panel. Otherwise the icon floats over the toolbar instead of the column header band.
         $gridArea = $dataGrid
-        if (![string]::IsNullOrEmpty($EmptyMessage)) {
-            $gridArea = Add-UiDataGridEmptyOverlay -HostControl $dataGrid -DataGrid $dataGrid -Message $EmptyMessage
-        }
+        if (![string]::IsNullOrEmpty($EmptyMessage)) { $gridArea = Add-UiDataGridEmptyOverlay -HostControl $dataGrid -DataGrid $dataGrid -Message $EmptyMessage }
 
         $hostControl = $gridArea
 
@@ -932,7 +1021,7 @@ function New-UiDataGrid {
 
         Set-FullWidthConstraint -Control $hostControl -Parent $parent -FullWidth:$FullWidth
 
-        # -WPFProperties hits whichever container is onscreen (toolbar host or bare grid).
+        # -WPFProperties hits whichever container is onscreen (toolbar host or the grid on its own).
         if ($WPFProperties) { Set-UiProperties -Control $hostControl -Properties $WPFProperties }
 
         [void]$parent.Children.Add($hostControl)

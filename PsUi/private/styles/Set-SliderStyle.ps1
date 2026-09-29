@@ -12,18 +12,17 @@ function Set-SliderStyle {
     # Try to apply XAML style from resources
     $styleApplied = $false
     try {
-        if ([System.Windows.Application]::Current -and [System.Windows.Application]::Current.Resources) {
-            if ([System.Windows.Application]::Current.Resources.Contains("ModernSliderStyle")) {
-                $Slider.Style = [System.Windows.Application]::Current.Resources["ModernSliderStyle"]
-                
-                # Clear local values so style setters (with DynamicResource) take effect
-                $Slider.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
-                $Slider.ClearValue([System.Windows.Controls.Control]::BackgroundProperty)
-                $Slider.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
-                
-                $styleApplied = $true
-                Write-Verbose "Applied ModernSliderStyle from XAML resources"
-            }
+        $sliderStyle = [PsUi.ThemeEngine]::FindStyleResource('ModernSliderStyle')
+        if ($null -ne $sliderStyle) {
+            $Slider.Style = $sliderStyle
+
+            # Clear local values so style setters (with DynamicResource) take effect
+            $Slider.ClearValue([System.Windows.Controls.Control]::ForegroundProperty)
+            $Slider.ClearValue([System.Windows.Controls.Control]::BackgroundProperty)
+            $Slider.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
+
+            $styleApplied = $true
+            Write-Verbose "Applied ModernSliderStyle from XAML resources"
         }
     }
     catch {

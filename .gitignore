@@ -55,3 +55,6 @@ temp/
 scratch/
 
 PSScriptAnalyzerSettings.psd1
+
+# Redirect logs from running a script through a launcher
+*.log.err

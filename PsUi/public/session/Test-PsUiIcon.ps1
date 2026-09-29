@@ -6,13 +6,14 @@ function Test-PsUiIcon {
         Returns $true if the named glyph is present in the requested font. Use this in scripts
         to skip rendering an icon you can't trust, or to lint a list against a target font.
 
-        -Font Active  (default) - checks the live active font (strict: a cache-build failure
-                                  returns $false, unlike IsGlyphAvailable's optimistic path used
-                                  by the glyph browser). Honors the fallback chain unless
-                                  Set-PsUiIconFont was called with -NoIconFontFallback.
-        -Font Fluent           - checks Segoe Fluent Icons explicitly.
-        -Font MDL2             - checks Segoe MDL2 Assets explicitly.
-        -Font Either           - returns true if either icon font has the glyph.
+        -Font picks the check:
+        - Active (default): checks the live active font. Strict: a failed glyph cache build
+          returns $false instead of guessing (the glyph browser guesses on purpose so its
+          tiles don't all dim). Honors the fallback chain unless Set-PsUiIconFont was called
+          with -NoIconFontFallback.
+        - Fluent: checks Segoe Fluent Icons explicitly.
+        - MDL2: checks Segoe MDL2 Assets explicitly.
+        - Either: returns true if either icon font has the glyph.
     .PARAMETER Name
         The icon name to test (key from CharList.json).
     .PARAMETER Font

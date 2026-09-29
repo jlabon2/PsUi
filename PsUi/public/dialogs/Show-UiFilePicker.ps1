@@ -2,6 +2,9 @@ function Show-UiFilePicker {
     <#
     .SYNOPSIS
         Shows a file open dialog.
+    .DESCRIPTION
+        Standard file open dialog, parented to the active PsUi window when one exists.
+        Returns the chosen path (paths with -MultiSelect), $null on cancel.
     .PARAMETER Title
         Dialog title.
     .PARAMETER Filter

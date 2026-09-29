@@ -15,7 +15,7 @@ function Show-WindowsObjectPicker {
         Optional WPF window to use as the dialog parent.
     .EXAMPLE
         Show-WindowsObjectPicker -ObjectType User
-        # Opens the user picker, returns selected username
+        # Opens the user picker, returns an object with Name, Domain, Type, UPN
     .EXAMPLE
         Show-WindowsObjectPicker -ObjectType User, Group -MultiSelect
         # Opens picker for users and groups with multi-select

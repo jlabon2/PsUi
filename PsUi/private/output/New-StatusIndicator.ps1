@@ -5,10 +5,7 @@ function New-StatusIndicator {
         Creates animated status indicator (spinner/checkmark/warning).
     #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [hashtable]$Colors
-    )
+    param()
 
     # Status indicator - small spinner that shows running/complete/warning states
     $statusIndicator = [System.Windows.Controls.Grid]@{
@@ -19,40 +16,8 @@ function New-StatusIndicator {
         ToolTip           = "Running..."
     }
 
-    # Spinning arc for running state (using Path with ArcSegment)
-    $statusSpinner = [System.Windows.Shapes.Path]@{
-        Stroke          = ConvertTo-UiBrush $Colors.Accent
-        StrokeThickness = 2
-        Width           = 16
-        Height          = 16
-    }
-
-    # Create arc geometry for spinner (3/4 circle)
-    $geometry          = [System.Windows.Media.PathGeometry]::new()
-    $figure            = [System.Windows.Media.PathFigure]::new()
-    $figure.StartPoint = [System.Windows.Point]::new(8, 0)
-    $arc               = [System.Windows.Media.ArcSegment]::new()
-    $arc.Point         = [System.Windows.Point]::new(8, 16)
-    $arc.Size          = [System.Windows.Size]::new(8, 8)
-    $arc.SweepDirection = [System.Windows.Media.SweepDirection]::Clockwise
-    $arc.IsLargeArc    = $true
-    [void]$figure.Segments.Add($arc)
-    [void]$geometry.Figures.Add($figure)
-    $statusSpinner.Data = $geometry
-
-    # Spinning animation (continuous rotation)
-    $rotateTransform           = [System.Windows.Media.RotateTransform]::new()
-    $rotateTransform.CenterX   = 8
-    $rotateTransform.CenterY   = 8
-    $statusSpinner.RenderTransform = $rotateTransform
-    $rotateAnimation           = [System.Windows.Media.Animation.DoubleAnimation]@{
-        From           = 0
-        To             = 360
-        Duration       = [System.Windows.Duration]::new([System.TimeSpan]::FromSeconds(1))
-        RepeatBehavior = [System.Windows.Media.Animation.RepeatBehavior]::Forever
-    }
-    $rotateTransform.BeginAnimation([System.Windows.Media.RotateTransform]::AngleProperty, $rotateAnimation)
-
+    # Keyed rather than colored, since this one is built once with the window and outlives theme switches.
+    $statusSpinner = New-UiLoadingSpinner -Size 16 -BrushKey 'AccentBrush'
     [void]$statusIndicator.Children.Add($statusSpinner)
 
     # Success checkmark icon (hidden initially)

@@ -4,9 +4,12 @@
 #>
 function Update-UiToolRunButtonState {
     [CmdletBinding()]
-    param()
+    param(
+        # From a field's change handler, where Get-UiSession finds whichever form opened last
+        [Nullable[Guid]]$SessionId
+    )
 
-    $session = Get-UiSession
+    $session = if ($null -ne $SessionId) { [PsUi.SessionManager]::GetSession($SessionId) } else { Get-UiSession }
     if (!$session) { return }
 
     $runBtn = $session.Variables['_uiTool_runButton']

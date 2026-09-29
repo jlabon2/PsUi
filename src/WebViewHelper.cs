@@ -58,26 +58,47 @@ namespace PsUi
             }
 
             var webView = new WebView2();
-            
+
             var dataFolder = userDataFolder;
             if (string.IsNullOrEmpty(dataFolder))
             {
                 // PID + random suffix prevents predictable path attacks
                 dataFolder = System.IO.Path.Combine(
-                    System.IO.Path.GetTempPath(), 
+                    System.IO.Path.GetTempPath(),
                     "PsUi_WebView2_" + System.Diagnostics.Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             }
-            
+
+            // Loaded fires again every time a tab shows the view, and handing a control a second environment throws, so a pass that got through stays latched.
+            bool initStarted = false;
+
+            // Kept across retries. Passing the same instance twice does nothing. Passing a fresh one to a control that already latched an environment throws.
+            CoreWebView2Environment env = null;
+
             webView.Loaded += async (s, e) =>
             {
+                if (initStarted)
+                {
+                    return;
+                }
+                initStarted = true;
+
                 // async void - must catch everything or unhandled exceptions crash the process
                 try
                 {
-                    var env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+                    if (env == null)
+                    {
+                        env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+                    }
                     await webView.EnsureCoreWebView2Async(env);
                 }
                 catch (Exception ex)
                 {
+                    // Retry only when the browser never came up. Once a CoreWebView2 exists a fault is something later, and WebView2 answers a second Ensure on a faulted init by building another one and abandoning the first, so every tab return would leave an orphaned browser behind.
+                    if (webView.CoreWebView2 == null)
+                    {
+                        initStarted = false;
+                    }
+
                     DebugHelper.LogException("WEBVIEW", "EnsureCoreWebView2Async", ex);
                     System.Console.Error.WriteLine("[PsUi] WebView2 init failed: " + ex.Message);
                 }
@@ -101,12 +122,12 @@ namespace PsUi
             settings.IsPasswordAutosaveEnabled = false;
             settings.IsStatusBarEnabled = false;
             settings.AreDefaultContextMenusEnabled = true;
-            
+
             if (!enableDownloads)
             {
                 webView.CoreWebView2.DownloadStarting += (s, e) => { e.Cancel = true; };
             }
-            
+
             // Block popup windows - scripts with window.open() shouldn't escape the sandbox
             webView.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; };
         }
@@ -140,19 +161,61 @@ namespace PsUi
                     var tempPath = System.IO.Path.GetTempPath();
                     var currentPid = System.Diagnostics.Process.GetCurrentProcess().Id.ToString();
                     var dirs = System.IO.Directory.GetDirectories(tempPath, "PsUi_WebView2_*");
-                    
+
                     foreach (var dir in dirs)
                     {
                         // Skip folders belonging to the current process (PsUi_WebView2_PID_RANDOM format)
                         var folderName = System.IO.Path.GetFileName(dir);
                         if (folderName.StartsWith("PsUi_WebView2_" + currentPid + "_")) continue;
-                        
+
+                        // Another PS running at the same time is the normal case, since every import runs this sweep.
+                        // Deleting a live owner's folder takes a running browser's profile apart, and stops at the first file it holds open anyway.
+                        if (IsOwnerStillRunning(folderName, dir)) continue;
+
                         try { System.IO.Directory.Delete(dir, true); }
                         catch (Exception ex) { DebugHelper.Log("WEBVIEW", "Cleanup skipped " + dir + ": " + ex.Message); }
                     }
                 }
                 catch (Exception ex) { DebugHelper.Log("WEBVIEW", "Cleanup sweep failed: " + ex.Message); }
             });
+        }
+
+        // Anything unreadable counts as still running (a stale folder costs disk, a wrong delete costs a session).
+        private static bool IsOwnerStillRunning(string folderName, string dir)
+        {
+            var parts = folderName.Split('_');
+            if (parts.Length < 4) { return true; }
+
+            int ownerPid;
+            if (!int.TryParse(parts[2], out ownerPid)) { return true; }
+
+            System.Diagnostics.Process owner = null;
+            try
+            {
+                owner = System.Diagnostics.Process.GetProcessById(ownerPid);
+                if (owner == null || owner.HasExited) { return false; }
+
+                // Windows reuses the id once a process ends (a live match is no proof, and an owner younger than the folder has a recycled number).
+                // Where the stamp cannot be read it comes back as the file time epoch, 1600 or 1601 once local, so every owner looks younger than its folder.
+                DateTime folderMade = System.IO.Directory.GetCreationTime(dir);
+                if (folderMade.Year > 1601 && owner.StartTime > folderMade) { return false; }
+
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                // No process is running under that id.
+                return false;
+            }
+            catch (Exception ex)
+            {
+                DebugHelper.Log("WEBVIEW", "Owner check failed for " + folderName + ": " + ex.Message);
+                return true;
+            }
+            finally
+            {
+                if (owner != null) { owner.Dispose(); }
+            }
         }
     }
 #else

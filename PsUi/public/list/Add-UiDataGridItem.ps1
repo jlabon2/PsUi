@@ -19,10 +19,10 @@ function Add-UiDataGridItem {
         refresh the cell by itself, PSCustomObject rows raise no change notifications, 
         so rerun Set-UiDataGridItems (or remove and add it again) to show the new value.
     .EXAMPLE
-        Add-UiDataGridItem -Variable queue -Item @{ User='john'; Status='Pending' }
+        Add-UiDataGridItem -Variable queue -Item @{ User='carl'; Status='Pending' }
     .EXAMPLE
         $row = Add-UiDataGridItem -Variable queue -Item $entry -PassThru
-        $row.Status = 'Done'   # updates the object - set the grid again to redraw it
+        $row.Status = 'Done'   # updates the object - set the grid again to show the change
     #>
     [CmdletBinding()]
     param(

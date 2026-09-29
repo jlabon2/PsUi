@@ -10,6 +10,7 @@ function ConvertTo-UiDataGridLength {
     )
 
     if ($Width -is [string]) {
+        if ($Width -eq 'Auto') { return [System.Windows.Controls.DataGridLength]::Auto }
         if ($Width -eq 'Star' -or $Width -eq '*') {
             return [System.Windows.Controls.DataGridLength]::new(1, [System.Windows.Controls.DataGridLengthUnitType]::Star)
         }

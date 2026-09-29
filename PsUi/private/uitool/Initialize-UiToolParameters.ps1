@@ -1,8 +1,8 @@
-<#
-.SYNOPSIS
-    Initializes parameter controls for New-UiTool dynamically.
-#>
 function Initialize-UiToolParameters {
+    <#
+    .SYNOPSIS
+        Builds one control per parameter for the New-UiTool form.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -35,6 +35,12 @@ function Initialize-UiToolParameters {
             OUPicker     = @()
         }
     }
+
+    $toolSessionId    = (Get-UiSession).SessionId
+    $pushSession      = ${function:Push-UiSession}
+    $popSession       = ${function:Pop-UiSession}
+    $updateRunState   = ${function:Update-UiToolRunButtonState}
+    $onRequiredChange = { & $updateRunState -SessionId $toolSessionId }.GetNewClosure()
 
     $isFirstParam = $true
 
@@ -132,7 +138,7 @@ function Initialize-UiToolParameters {
         $session = Get-UiSession
         $control = $null
 
-        # ValidateSet → ComboBox
+        # ValidateSet becomes a ComboBox
         if ($param.ValidateSet -and $param.ValidateSet.Count -gt 0) {
             $control = [System.Windows.Controls.ComboBox]::new()
             if (!$param.IsMandatory) {
@@ -142,21 +148,14 @@ function Initialize-UiToolParameters {
                 $control.Items.Add($item) | Out-Null
             }
 
-            if ($null -ne $param.DefaultValue) {
-                $defaultIndex = $control.Items.IndexOf([string]$param.DefaultValue)
-                if ($defaultIndex -ge 0) {
-                    $control.SelectedIndex = $defaultIndex
-                }
-                else {
-                    $control.SelectedIndex = 0
-                }
-            }
-            else {
-                $control.SelectedIndex = 0
+            # Items.IndexOf is case sensitive but ValidateSet isn't so a default of 'error' would miss 'Error'
+            $control.SelectedIndex = 0
+            for ($i = 0; $null -ne $param.DefaultValue -and $i -lt $control.Items.Count; $i++) {
+                if ($control.Items[$i] -eq [string]$param.DefaultValue) { $control.SelectedIndex = $i; break }
             }
             Set-ComboBoxStyle -ComboBox $control
         }
-        # Enum type → ComboBox with enum values
+        # Enum becomes a ComboBox holding its values
         elseif ($param.Type -and $param.Type.IsEnum) {
             $control = [System.Windows.Controls.ComboBox]::new()
             if (!$param.IsMandatory) {
@@ -166,21 +165,13 @@ function Initialize-UiToolParameters {
                 $control.Items.Add($enumVal) | Out-Null
             }
 
-            if ($null -ne $param.DefaultValue) {
-                $defaultIndex = $control.Items.IndexOf([string]$param.DefaultValue)
-                if ($defaultIndex -ge 0) {
-                    $control.SelectedIndex = $defaultIndex
-                }
-                else {
-                    $control.SelectedIndex = 0
-                }
-            }
-            else {
-                $control.SelectedIndex = 0
+            $control.SelectedIndex = 0
+            for ($i = 0; $null -ne $param.DefaultValue -and $i -lt $control.Items.Count; $i++) {
+                if ($control.Items[$i] -eq [string]$param.DefaultValue) { $control.SelectedIndex = $i; break }
             }
             Set-ComboBoxStyle -ComboBox $control
         }
-        # Switch → CheckBox
+        # Switch becomes a CheckBox
         elseif ($param.IsSwitch) {
             $control = [System.Windows.Controls.CheckBox]::new()
             $control.Content = $labelText
@@ -191,12 +182,10 @@ function Initialize-UiToolParameters {
                 $control.IsEnabled = $false
                 $control.ToolTip = "This switch is required and cannot be disabled"
             }
-            else {
-                $control.IsChecked = $false
-            }
+            else { $control.IsChecked = $param.DefaultValue -is [bool] -and $param.DefaultValue }
             Set-CheckBoxStyle -CheckBox $control
         }
-        # Bool → CheckBox
+        # Bool becomes a CheckBox
         elseif ($param.Type -eq [bool]) {
             $control = [System.Windows.Controls.CheckBox]::new()
             $control.Content = $labelText
@@ -207,9 +196,8 @@ function Initialize-UiToolParameters {
                 $control.IsEnabled = $false
                 $control.ToolTip = "This option is required and cannot be disabled"
             }
-            else {
-                $control.IsChecked = $false
-            }
+            # The run always passes a bool. An unchecked box would quietly override a $true default
+            else { $control.IsChecked = $param.DefaultValue -is [bool] -and $param.DefaultValue }
             Set-CheckBoxStyle -CheckBox $control
         }
         # Int/Double with ValidateRange → Slider (if ≤10 values) or TextBox with validation
@@ -226,7 +214,7 @@ function Initialize-UiToolParameters {
                 $slider = [System.Windows.Controls.Slider]::new()
                 $slider.Minimum = $param.ValidateRange.MinRange
                 $slider.Maximum = $param.ValidateRange.MaxRange
-                $slider.Value = $param.ValidateRange.MinRange
+                $slider.Value = if ($param.DefaultValue -is [ValueType]) { $param.DefaultValue } else { $param.ValidateRange.MinRange }
                 $slider.TickFrequency = 1
                 $slider.IsSnapToTickEnabled = $true
                 $slider.VerticalAlignment = 'Center'
@@ -282,15 +270,22 @@ function Initialize-UiToolParameters {
 
                 # Add placeholder/tooltip showing valid range
                 $control.ToolTip = "Enter a number between $($param.ValidateRange.MinRange) and $($param.ValidateRange.MaxRange)"
+
+                if ($param.DefaultValue -is [ValueType]) { $control.Text = [string]$param.DefaultValue }
             }
         }
-        # DateTime → DatePicker
+        # DateTime becomes a DatePicker.
         elseif ($param.Type -eq [datetime]) {
             $control = [System.Windows.Controls.DatePicker]::new()
-            $control.SelectedDate = if ($param.DefaultValue) { $param.DefaultValue } else { [datetime]::Today }
+
+            # Blank when the default needs code and so the command's own applies
+            $defaultDate = if ($null -ne $param.DefaultValue) { $param.DefaultValue -as [datetime] }
+            $control.SelectedDate = if ($defaultDate) { $defaultDate }
+                                    elseif (!$param.HasDefault) { [datetime]::Today }
+                                    else { $null }
             Set-DatePickerStyle -DatePicker $control
         }
-        # Default → TextBox
+        # Everything else becomes a TextBox
         else {
             $control = [System.Windows.Controls.TextBox]::new()
             Set-TextBoxStyle -TextBox $control
@@ -305,13 +300,17 @@ function Initialize-UiToolParameters {
                 Set-TextBoxInputFilter -TextBox $control -InputType 'Double'
             }
 
-            # Set default value if specified
-            if ($null -ne $param.DefaultValue -and $param.DefaultValue -ne '') {
-                $control.Text = [string]$param.DefaultValue
+            # One item a line for [string[]] and commas for other arrays, which has to stay in step with the split in Invoke-UiToolValidation
+            # Hashtables are ignored since they would hand one over as a string.
+            $default   = $param.DefaultValue
+            $separator = if ($param.Type -eq [string[]]) { "`r`n" } else { ', ' }
+            if ($default -is [array]) { $control.Text = $default -join $separator }
+            elseif ($null -ne $default -and $default -isnot [System.Collections.IDictionary]) {
+                $control.Text = [string]$default
             }
 
             if ($param.Type -eq [System.Management.Automation.PSCredential]) {
-                # PSCredential → Use New-UiCredential helper
+                # PSCredential goes through New-UiCredential
                 # Create the credential control directly in the target panel
                 $credContainer = [System.Windows.Controls.StackPanel]::new()
                 $credContainer.Orientation = 'Vertical'
@@ -358,17 +357,16 @@ function Initialize-UiToolParameters {
                 $controlAlreadyRegistered = $true
                 $control = $credContainer
 
-                # Wire up change events for mandatory credential validation
                 if ($param.IsMandatory) {
-                    $userBox.Add_TextChanged({ Update-UiToolRunButtonState })
-                    $passBox.Add_PasswordChanged({ Update-UiToolRunButtonState })
+                    $userBox.Add_TextChanged($onRequiredChange)
+                    $passBox.Add_PasswordChanged($onRequiredChange)
                 }
             }
             elseif ($param.Type -eq [System.Security.SecureString]) {
                 # Use password input with peek button
                 $peekResult = New-PasswordInputWithPeek
                 $control    = $peekResult.Container
-                
+
                 # Register the PasswordBox for value extraction, not the wrapper grid
                 $session.AddControlSafe($varName, $peekResult.PasswordBox)
                 $controlAlreadyRegistered = $true
@@ -379,6 +377,9 @@ function Initialize-UiToolParameters {
                 $control.MinHeight = 60
                 $control.VerticalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Auto
                 $control.VerticalContentAlignment = 'Top'
+
+                # The style call above ran while this was still a single line and handed the wheel to the page, so take it back now that it scrolls itself.
+                Set-UiWheelRouting -Control $control -Mode Capture
             }
         }
 
@@ -397,7 +398,7 @@ function Initialize-UiToolParameters {
             $needsGroupPicker  = $InputHelpers.GroupPicker -contains $param.Name
             $needsMemberPicker = $InputHelpers.MemberPicker -contains $param.Name
 
-            # Computer picker requires domain membership; OU picker prompts for server if needed
+            # The computer picker needs domain membership, and the OU picker prompts for a server when it needs one.
             $needsComputerPicker = $false
             $needsOUPicker       = $InputHelpers.OUPicker -contains $param.Name
             if ($InputHelpers.ComputerPicker -contains $param.Name) {
@@ -410,7 +411,7 @@ function Initialize-UiToolParameters {
 
             # Only add helper to TextBox controls
             if (($needsFilePicker -or $needsFolderPicker -or $needsComputerPicker -or $needsUserPicker -or $needsGroupPicker -or $needsMemberPicker -or $needsOUPicker -or $needsFilterBuilder) -and $control -is [System.Windows.Controls.TextBox]) {
-                # Create a wrapper grid: [TextBox][Button]
+                # Grid holding the TextBox and the Button side by side
                 $wrapperGrid = [System.Windows.Controls.Grid]::new()
                 $wrapperGrid.Margin = $control.Margin
                 $control.Margin = [System.Windows.Thickness]::new(0)
@@ -496,7 +497,10 @@ function Initialize-UiToolParameters {
                 # Filter has its own shape (needs current text + theme colors). Everything else goes through the dispatcher.
                 $helperBtn.Add_Click({
                     param($sender, $eventArgs)
-                    $info = $sender.Tag
+                    trap { Write-Debug "Tool form helper button: $_"; continue }
+
+                    $info         = $sender.Tag
+                    $sessionToken = & $pushSession -SessionId $toolSessionId
                     try {
                         $result = if ($info.Mode -eq 'Filter') {
                             $fMode = if ($info.FilterMode) { $info.FilterMode } else { 'Generic' }
@@ -511,9 +515,8 @@ function Initialize-UiToolParameters {
 
                         if ($result) { $info.TextBox.Text = $result }
                     }
-                    catch {
-                        Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode
-                    }
+                    catch { Show-UiHelperError -ErrorRecord $_ -Mode $info.Mode }
+                    & $popSession -Token $sessionToken
                 }.GetNewClosure())
 
                 [System.Windows.Controls.Grid]::SetColumn($helperBtn, 1)
@@ -537,10 +540,9 @@ function Initialize-UiToolParameters {
                 $addTarget.Children.Add($control) | Out-Null
             }
 
-            # Wire up change events for mandatory validation
             if ($param.IsMandatory) {
                 $actualControl = $control
-                
+
                 # For wrapper grids (SecureString peek), find the actual input control
                 if ($control -is [System.Windows.Controls.Grid]) {
                     foreach ($child in $control.Children) {
@@ -552,15 +554,9 @@ function Initialize-UiToolParameters {
                 }
 
                 # Add change handlers based on control type
-                if ($actualControl -is [System.Windows.Controls.TextBox]) {
-                    $actualControl.Add_TextChanged({ Update-UiToolRunButtonState })
-                }
-                elseif ($actualControl -is [System.Windows.Controls.PasswordBox]) {
-                    $actualControl.Add_PasswordChanged({ Update-UiToolRunButtonState })
-                }
-                elseif ($actualControl -is [System.Windows.Controls.ComboBox]) {
-                    $actualControl.Add_SelectionChanged({ Update-UiToolRunButtonState })
-                }
+                if ($actualControl -is [System.Windows.Controls.TextBox]) { $actualControl.Add_TextChanged($onRequiredChange) }
+                elseif ($actualControl -is [System.Windows.Controls.PasswordBox]) { $actualControl.Add_PasswordChanged($onRequiredChange) }
+                elseif ($actualControl -is [System.Windows.Controls.ComboBox]) { $actualControl.Add_SelectionChanged($onRequiredChange) }
             }
         }
 
@@ -582,16 +578,12 @@ function Initialize-UiToolParameters {
             $descLabel.TextWrapping = [System.Windows.TextWrapping]::Wrap
             $descLabel.Opacity = 0.7
             $descLabel.Margin = [System.Windows.Thickness]::new(0,0,0,4)
-            if ($ThemeColors.Foreground) {
-                $descLabel.Foreground = $ThemeColors.Foreground
-            }
+            if ($ThemeColors.Foreground) { $descLabel.Foreground = $ThemeColors.Foreground }
             $addTarget.Children.Add($descLabel) | Out-Null
         }
 
         # If using wrap layout, add the container to the target panel
-        if ($UseWrapLayout -and $paramContainer) {
-            $TargetPanel.Children.Add($paramContainer) | Out-Null
-        }
+        if ($UseWrapLayout -and $paramContainer) {  $TargetPanel.Children.Add($paramContainer) | Out-Null  }
     }
 
     # No parameters to configure

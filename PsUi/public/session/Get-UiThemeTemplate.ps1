@@ -3,8 +3,8 @@ function Get-UiThemeTemplate {
     .SYNOPSIS
         Returns a template hashtable showing all available theme color keys.
     .DESCRIPTION
-        Outputs a hashtable with all theme keys and their descriptions. Copy and modify
-        this template to create custom themes with Register-UiTheme.
+        Outputs a hashtable with every theme key filled from the base Light or Dark palette.
+        Copy and modify this template to create custom themes with Register-UiTheme.
     .PARAMETER Type
         Generate template for 'Light' or 'Dark' base theme. Defaults to 'Dark'.
     .PARAMETER AsHashtable
